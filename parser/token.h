@@ -6,16 +6,35 @@
 #include <string>
 
 enum class token_t{
+	END_OF_FILE,
+	NEWLINE,
+	COMMA,
+	LEFT_BRACKET,
+	RIGHT_BRACKET,
+	LEFT_PAREN,
+	RIGHT_PAREN,
+	INTEGER,
+	FLOAT,
+	STRING,
+	RANGE,
+	LABELED_RANGE,
+	IDENTIFIER,
+	SEMICOLON,
+	COLON,
+	PLUS,
+	MINUS,
+	MULTIPLY,
+	DIVIDE,"divide (/)"}
 };
 
 const std::map <token_t,std::string> = {
-	{token_t::end_of_file,"END OF FILE **"},
-	{token_t::newline,"newline"},
-	{token_t::comma,"comma"},
-	{token_t::left_bracket,"left bracket"},
-	{token_t::right_bracket,"right bracket"},
-	{token_t::left_paren,"left parentheses"},
-	{token_t::right_paren,"right parentheses"},
+	{token_t::END_OF_FILE,"END OF FILE **"},
+	{token_t::NEWLINE,"newline"},
+	{token_t::COMMA,"comma"},
+	{token_t::LEFT_BRACKET,"left bracket"},
+	{token_t::RIGHT_BRACKET,"right bracket"},
+	{token_t::LEFT_PAREN,"left parentheses"},
+	{token_t::RIGHT_PAREN,"right parentheses"},
 	{token_t::INTEGER,"integer"},
 	{token_t::FLOAT,"float"},
 	{token_t::STRING,"string"},
