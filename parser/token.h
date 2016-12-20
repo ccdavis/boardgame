@@ -24,10 +24,16 @@ enum class token_t{
 	PLUS,
 	MINUS,
 	MULTIPLY,
-	DIVIDE,"divide (/)"}
+	DIVIDE
+	LESSTHAN,
+	GREATERTHAN,
+	EQUAL,
+	AND,
+	OR,
+	NOT
 };
 
-const std::map <token_t,std::string> = {
+const std::map <token_t,std::string> token_name = {
 	{token_t::END_OF_FILE,"END OF FILE **"},
 	{token_t::NEWLINE,"newline"},
 	{token_t::COMMA,"comma"},
@@ -47,133 +53,58 @@ const std::map <token_t,std::string> = {
 	{token_t::MINUS,"minus sign"},
 	{token_t::MULTIPLY,"multiply (*)"},
 	{token_t::DIVIDE,"divide (/)"}
-};
-
-const static  char * name[topcode] = {
-
-    "<INPUTCOLUMNS>",
-    "<INPUTCOLUMS>",
-    "FLAG",
-    "<description>",
-    "CODE",
-    "NOCODE",
-    "LABEL",
-    "FREQ",
-    "<begin>",
-    "<end>",
-    "<RAWOUTPUT>",
-    "VARIABLES",
-    "OUTPUT",
-    "FORMATNAME",
-    "NONTABULATED",
-    "FORMATFILE",
-    "FILENAME",
-    "CONVERT",
-    "DOCUMENTATION",
-    "TESTEDIT",
-    "TESTALLOCATION",
-    "SERIALNUMBER",
-    "ALLOCATED",
-    "WHEN",
-    "spss",
-    "yaml",
-    "stata"
-    "PROJECT",
-    "CONFIG",
-    "<dataset>",
-    "COLUMN DELIMITER", // TAB for now
-    "NEW LINE",  // probably look for the CR/LF pair
-    "End of File ***", // look for EOF char
-    "Float",
-    "Integer",
-    "_ALL_TYPES_",
-    "IDENTIFIER",
-    "RANGE",
-    "SPECIAL",
-    "LABELED RANGE",
-    "STRING",
-    "COMMA",
-    "SEMICOLON",
-    "EQUAL",
-    "LEFTPAREN",
-    "RIGHTPAREN",
-    "LEFTBRACKET",
-    "RIGHTBRACKET",
-
-    "LEFT ARROW",
-    "RIGHT ARROW"
+	{token_t::LESSTHAN,"<"},
+	{token_t::GREATERTHAN,">"},
+	{token_t::EQUAL,"=="},
+	{token_t::AND,"and"},
+	{token_t::OR,"or"},
+	{token_t::NOT, "not"}
 };
 
 
 
-const int max_lexeme_len=250;
-#include "classic/common.h"
-
-
-#include <string.h>
-
-// Tokens may contain different types of data
+const int max_label_len = 256;
 
 // The special range type, declared like lo..hi, for example 23..25
 class Range {
-public:
+	public:
     long lo;
     long hi;
 };
 
-struct Labeled_Range {
-    long hi;
-    long lo;
-    char lbl[max_lexeme_len];
-};
 
 union Attrib {
-    Labeled_Range lrange_;
-    int integer_;
-    long long_;
+    int64_t integer_;
     Range range_;
-    char label_[max_lexeme_len];
-
-    float float_;
-    int opcode_;   // Specific operator such as <, > = (for relation_op, +,- for int_op, etc.
+    double float_;
+    bool bool_;
+    token_t opcode_;   // Specific operator such as <, > = (for relation_op, +,- for int_op, etc.
 };
 
 
 // The scanner will return new Token() using the appropriate constructor
 class Token
 {
-public:
-    int code;
+	private:
+
     Attrib attr;
-    char lexeme[max_lexeme_len]; // the original string
+    std::string content;
+
+    token_t code;
+
+    public:
 
     // anything which has a string label, including a string type itself
-    Token(int c, char * l);
-
-    // anything which has a string label, including a string type itself
-    Token(int c, const char * l);
+    Token(token_t code, const std::string & content);
 
     // a range of numbers written in code as 3..5 for example
-    Token(int c, Range r);
-
-    Token(int c, char * l, long low,long high);
-
-
-    Token(int c, double n);
-
-    Token(int c,double n,char * l);
-
+    Token(token_t code, Range r);
+    Token(token_t code, double n);
 
     // for reserved words needing no attribute
-    Token(int c);
+    Token(token_t code);
 
-
-
-
-    // Throw away the string memory if the token's a string, etc.
-    ~Token();
-    void print();
-
+    std::string print();
 };
 
 
