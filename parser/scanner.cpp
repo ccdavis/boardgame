@@ -1,11 +1,11 @@
 
 #include "scriptscan.h"
-#include "tconst.h"
-#include "token.h"
-#include "classic/common.h"
 
-#include <string.h>
-int ScriptScanner::whitespace(char c) {
+#include "token.h"
+
+
+
+bool ScriptScanner::whitespace(char c) {
     char ws[4];
     ws[0]=(char) 32;
     ws[1]=(char) 13;
@@ -13,55 +13,54 @@ int ScriptScanner::whitespace(char c) {
     ws[3]='\t';
 
     for (unsigned int i=0; i<sizeof(ws); i++)
-        if (c==ws[i]) return 1;
-    return 0;
+        if (c==ws[i]) return true;
+    return false;
 }
 
-int ScriptScanner::digit(char c) {
-    int r=0;
+bool ScriptScanner::digit(char c) {
+    int r=false;
     char d[]= "0123456789";
 
-    for (unsigned int i=0; i<sizeof(d)-1; i++) if (d[i]==c) r=1;
+    for (unsigned int i=0; i<sizeof(d)-1; i++) if (d[i]==c) r=true;
     return r;
 }
 
 void ScriptScanner::skipline() {
-    while (lastchar[0]!='\n') nextChar();
+    while (lastchar!='\n') nextChar();
 }
 
 char ScriptScanner::nextChar() {
+	lastchar = char(infile.get());
 
-    lastchar[0]=(char) fgetc(f);
-    if (lastchar[0]=='\n') {
+    if (lastchar=='\n') {
         line++;
     }
-    return lastchar[0];
 
+    return lastchar;
 }
 
 std::shared_ptr<Token> ScriptScanner::nextToken() {
-    char cstr[max_token_length];
-    strcpy(cstr,"");
+	string cstr="";
 
-    while (whitespace(lastchar[0])) nextChar();
-    if (lastchar[0]==EOF) return make_shared<Token>(EOFtoken);
+    while (whitespace(lastchar)) nextChar();
+    if (lastchar==EOF) return make_shared<Token>(EOFtoken);
 
 
     // return number type tokens such as INTEGER, FLOAT, and RANGE
-    if (digit(lastchar[0]) ||
-            lastchar[0]=='-')
+    if (digit(lastchar) ||
+            lastchar=='-')
     {
         int flt=0;  // flag if number turns out to be floating point
         int rng=0;
 
         do
         {
-            strcat(cstr,lastchar);
+            cstr += string(1,lastchar);
             nextChar();
-        } while (digit(lastchar[0]));
-        long r1 =atol(cstr);
+        } while (digit(lastchar));
+        long r1 =stol(cstr);
 
-        if (lastchar[0]=='.') {
+        if (lastchar=='.') {
             strcat(cstr,lastchar);
             flt=1;
             nextChar();

@@ -31,7 +31,7 @@ Token::Token(token_t code){
     this->code = code;
 }
 
-string  Token::print(){
+string Token::print(){
 	string name =  token_name[code]; + ": ";
 	string value = "";
 	switch(code){
@@ -44,7 +44,6 @@ string  Token::print(){
 	};
 
 	return name + value;
-
 }
 
 
