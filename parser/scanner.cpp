@@ -55,16 +55,16 @@ std::shared_ptr<Token> ScriptScanner::nextToken() {
 
         do
         {
-            cstr += string(1,lastchar);
+            cstr.push_back(lastchar);
             nextChar();
         } while (digit(lastchar));
         long r1 =stol(cstr);
 
         if (lastchar=='.') {
-            strcat(cstr,lastchar);
+            cstr.push_back(lastchar);
             flt=1;
             nextChar();
-            if (lastchar[0]=='.') {
+            if (lastchar=='.') {
                 rng=1;
                 flt=0;
                 nextChar();
@@ -72,20 +72,18 @@ std::shared_ptr<Token> ScriptScanner::nextToken() {
 
         }
 
-        char cstr2[25];
-        strcpy(cstr2,"");
-        while (digit(lastchar[0])) {
-
-            strcat(cstr,lastchar);
-            strcat(cstr2,lastchar);
+        string cstr2 = "";
+        while (digit(lastchar)) {
+            cstr.push_back(lastchar);
+            cstr2.push_back(lastchar);
             nextChar();
 
         }
-        long r2=atol(cstr2);
+        long r2=stol(cstr2);
 
         // there was at least one digit so return the number token type
         if (flt)
-            return make_shared<Token>(FLOAT,atof(cstr),cstr);
+            return make_shared<Token>(FLOAT,stof(cstr),cstr);
 
         if (rng) {
             Range r;
@@ -95,93 +93,40 @@ std::shared_ptr<Token> ScriptScanner::nextToken() {
         }
 
 
-        return make_shared<Token>(INTEGER,atol(cstr),cstr);
+        return make_shared<Token>(INTEGER,stol(cstr),cstr);
 
     } // if number
 
-    if (lastchar[0]=='"') {
+    if (lastchar=='"') {
         nextChar();
-        while (lastchar[0]!='"') {
-            strcat(cstr,lastchar);
+        while (lastchar!='"') {
+            cstr.push_back(lastchar);
             nextChar();
-            if ((lastchar[0]=='\t') || (lastchar[0]=='\n'))
+            if ((lastchar=='\t') || (lastchar[0]=='\n'))
                 cerr << "Scann error:  Unterminated string on line " << line << "\n";
         }
         nextChar();
-        return make_shared<Token>(STRING,cstr);
+        return make_shared<Token>(token_t::STRING,cstr);
     }
 
 
     // now let's look for reserved words
-    if (letter(lastchar[0])) {
-        strcat(cstr,lastchar);
+    if (letter(lastchar)) {
+        cstr.push_back(lastchar);
         nextChar();
 
-        while (letter(lastchar[0]) || digit(lastchar[0])) {
-            strcat(cstr,lastchar);
+        while (letter(lastchar) || digit(lastchar)) {
+			cstr.push_back(lastchar);
             nextChar();
         }  // at the end of a reserved word or identifier token, now which is it?
 
-        int thisCode=_unknown;
+        token_t thisCode=token_t::_unknown;
 
-        for (int i=0; i<top_word; i++) if (strcasecmp(cstr,name[i])==0) thisCode=i;
 
-        // Check for a labeled range  (like P25..28)
-        if (lastchar[0]=='.') {
-            strcat(cstr,lastchar);
-            nextChar();
-            if (lastchar[0]=='.') {
-                strcat(cstr,lastchar);
-                nextChar();
-                if (digit(lastchar[0])) {
-                    while (digit(lastchar[0])) {
-                        strcat(cstr,lastchar);
-                        nextChar();
-                    }
-                    // return a new "Labeled range" token
-                    char savedlastchar=lastchar[0];
+        //  search all the token names for matches
+        if (symbols.count(downcase(cstr)) > 0)
+        	thisCode = symbols.at(downcase(cstr));
 
-                    // get label
-                    char lbl[25];
-                    strcpy(lbl,"");
-                    int i=0;
-                    while (letter(cstr[i])) {
-                        lastchar[0]=cstr[i];
-                        strcat(lbl,lastchar);
-                        i++;
-                    }
-                    // get first number
-                    char r1str[25];
-                    strcpy(r1str,"");
-                    while (digit(cstr[i])) {
-                        lastchar[0]=cstr[i];
-                        strcat(r1str,lastchar);
-                        i++;
-                    }
-                    long r1 = atol(r1str);
-
-                    // move past the ".."
-                    i++;
-                    i++;
-
-                    char r2str[25];
-                    strcpy(r2str,"");
-                    while (digit(cstr[i])) {
-                        lastchar[0]=cstr[i];
-                        strcat(r2str,lastchar);
-                        i++;
-
-                    }
-                    long r2=atol(r2str);
-                    Range r;
-                    r.lo=r1;
-                    r.hi=r2;
-                    lastchar[0]=savedlastchar;
-
-                    return make_shared<Token>(LABELED_RANGE,lbl,r.lo,r.hi);
-                } // if
-            }
-        }
 
 
         if (thisCode==_unknown) return make_shared<Token>(IDENTIFIER,cstr);
@@ -190,7 +135,7 @@ std::shared_ptr<Token> ScriptScanner::nextToken() {
 
     // skip the rest of a line (for comments)
 
-    char ch = lastchar[0];
+    char ch = lastchar;
     nextChar();
 
     switch (ch) {
@@ -264,7 +209,7 @@ std::shared_ptr<Token> ScriptScanner::nextToken() {
 
 }
 
-int ScriptScanner::letter(char c) {
+bool ScriptScanner::letter(char c) {
     int r=0;
     char l[]="+:$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-./";
     for (unsigned int i=0; i<sizeof(l); i++) if (l[i]==c) r=1;

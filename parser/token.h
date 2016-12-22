@@ -33,6 +33,18 @@ enum class token_t{
 	NOT
 };
 
+
+// When the token is a word
+map<string,token_t> symbols{
+
+ {"and", token_t::AND},
+ {"or", token_t::OR},
+ {"not", token_t::NOT},
+ {"map",token_t::MAP}
+
+
+};
+
 const std::map <token_t,std::string> token_name = {
 	{token_t::END_OF_FILE,"END OF FILE **"},
 	{token_t::NEWLINE,"newline"},
