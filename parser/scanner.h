@@ -1,15 +1,33 @@
 
 #ifndef ScriptScanner_class
 #define ScriptScanner_class
+
 #include<memory>
 #include <iostream>
 #include <fstream>
+#include <set>
 
 class Token;
 
+namespace character{
+
+	const std::set<char> whitespace = {
+		(char) 32,
+		(char) 13,
+		\n,
+		\t
+	};
+
+	 const std::string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
+
+	 const std::string digits = "0123456789";
+
+};
 
 class ScriptScanner {
 	private:
+
+
 	std::ifstream infile;
 
 	public:

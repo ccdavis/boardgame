@@ -6,6 +6,7 @@
 #include <string>
 
 enum class token_t{
+	UNKNOWN,
 	END_OF_FILE,
 	NEWLINE,
 	COMMA,
@@ -17,7 +18,6 @@ enum class token_t{
 	FLOAT,
 	STRING,
 	RANGE,
-	LABELED_RANGE,
 	IDENTIFIER,
 	SEMICOLON,
 	COLON,
@@ -28,24 +28,70 @@ enum class token_t{
 	LESSTHAN,
 	GREATERTHAN,
 	EQUAL,
+	ASSIGN,
 	AND,
 	OR,
-	NOT
+	NOT,
+	IF,
+	THEN,
+	ELSE,
+	WHILE,
+	RETURN,
+	FUNC,
+	LIST,
+	RECORD,
+	READ,
+	WRITE,
+	MAP,
+	FILTER,
+
+	PLAYERS,
+	TURN,
+	TERRITORIES,
+	UNITS,
+	CONTAINERS,
+	PLACEMENT
+
+
+
+
 };
 
 
 // When the token is a word
-map<string,token_t> symbols{
+const map<string,token_t> reserved_words={
 
  {"and", token_t::AND},
  {"or", token_t::OR},
  {"not", token_t::NOT},
- {"map",token_t::MAP}
+ {"range",token_t::RANGE},
+ {"string",token_t::STRING},
+ {"float",token_t::FLOAT},
+ {"integer",token_t::INTEGER},
+ {"if",token_t::IF},
+ {"then",token_t::THEN},
+ {"else",token_t::ELSE},
+ {"while",token_t::WHILE},
+ {"return",token_t::RETURN},
+ {"func",token_t::FUNC},
+ {"list",token_t::LIST},
+ {"record",token_t::RECORD},
+ {"read",token_t::READ},
+ {"write",token_t::WRITE},
+ {"map",token_t::MAP},
+ {"filter",token_t::FILTER},
 
-
+ // Game tokens
+ {"players",token_t::PLAYERS},
+ {"turn",token_t::TURN},
+ {"units",token_t::UNITS},
+ {"containers",token_t::CONTAINERS},
+ {"territories",token_t::TERRITORIES},
+ {"placement",token_t::PLACEMENT}
 };
 
 const std::map <token_t,std::string> token_name = {
+	{token_t::UNKNOWN,{"unknown"},
 	{token_t::END_OF_FILE,"END OF FILE **"},
 	{token_t::NEWLINE,"newline"},
 	{token_t::COMMA,"comma"},
@@ -57,7 +103,6 @@ const std::map <token_t,std::string> token_name = {
 	{token_t::FLOAT,"float"},
 	{token_t::STRING,"string"},
 	{token_t::RANGE,{"range"},
-	{token_t::LABELED_RANGE,"labeled_range"},
 	{token_t::IDENTIFIER,"identifier"},
 	{token_t::SEMICOLON,"semicolon"},
 	{token_t::COLON,"colon"},
@@ -68,9 +113,28 @@ const std::map <token_t,std::string> token_name = {
 	{token_t::LESSTHAN,"<"},
 	{token_t::GREATERTHAN,">"},
 	{token_t::EQUAL,"=="},
+	{token_t::ASSIGN,"assignment"},
 	{token_t::AND,"and"},
 	{token_t::OR,"or"},
-	{token_t::NOT, "not"}
+	{token_t::NOT, "not"},
+	{token_t::IF,"if"},
+	{token_t::THEN,"then"},
+	{token_t::ELSE,"else"},
+	{token_t::WHILE,"while"},
+	{token_t::FUNC,"function"},
+	{token_t::RETURN,"return"},
+	{token_t::LIST,"list"},
+	{token_t::RECORD,"record"},
+	{token_t::READ,"read"},
+	{token_t::WRITE,"write"},
+	{token_t::MAP,"map"},
+	{token_t::FILTER,"filter"},
+	{token_t::PLAYERS,"players"},
+	{token_t::TURN,"turn"},
+	{token_t::TERRITORIES,"territories"},
+	{token_t::UNITS,"units"},
+	{token_t::CONTAINERS,"containers"},
+	{token_t::PLACEMENT,"placement"}
 };
 
 
