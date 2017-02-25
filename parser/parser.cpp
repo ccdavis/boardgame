@@ -1,74 +1,54 @@
-
+#include "token.h"
 #include "parser.h"
-#include<string.h>
+
+#include<string>
 #include <errno.h>
-#include "classic/common.h"
 #include <exception>
 #include <stdexcept>
 #include <stdio.h>
-#include<cstring>
+#include <iostream>
 
-#include "tconst.h"
-#include "token.h"
-#include "scriptscan.h"
-#include "libs/Logging.h"
+using namespace std;
 
-
-
-
-
-ScriptParser::~ScriptParser()
-{
-
-
-
-
+ScriptParser::~ScriptParser(){
 }
 
 
-ScriptParser::ScriptParser()
-{
+ScriptParser::ScriptParser(){
     //
 
 
 }
 
-ScriptParser::ScriptParser(const string &file_name)
-{
-
+ScriptParser::ScriptParser(const string &file_name){
     f=fopen(file_name.c_str(),"r");
 
     if (f==NULL || file_name.length()==0) {
         if (file_name.length() > 0) {
             ostringstream msg;
-            msg << "Problem opening allocation script file named " <<  file_name << endl;
-
-            msg << "Problem opening configuration or allocation script file named " << file_name << "." << endl;
-            msg << "The file does not exist. DCP expects the final argument on the command line after the dataset and project name to be nothing or a script file name." << endl;
+            msg << "Problem opening script file named " <<  file_name << endl;
             msg << "The error was " << errno << ": " << strerror(errno) << endl;
-            Logging::log_and_throw_runtime(msg.str());
-
-        }
+            cerr << msg << endl;
+            exit(1);
+        }else{
+			cerr << "File name not valid" << endl;
+			exit(1);
+		}
     } else {
+		currentfile = file_name;
 
-
-
-        strcpy(currentfile,file_name.c_str());
         s.start(f);
         lookahead = s.nextToken();
-        last=NULL;
+        last=nullptr;
     }
 }
 
-void ScriptParser::stop()
-{
+void ScriptParser::stop(){
     if (f!=NULL) fclose(f);
     f=NULL;
-
-
 }
 
-void ScriptParser::match(int c) {
+void ScriptParser::match(token_t c) {
     if (lookahead->code==c) {
 
         last = lookahead;
@@ -79,12 +59,11 @@ void ScriptParser::match(int c) {
 
 // Skip ahead one token without matching
 void ScriptParser::skip() {
-
     last = lookahead;
     lookahead=s.nextToken();
 }
 
-int ScriptParser::nextToken() {
+token_t ScriptParser::nextToken() {
     return lookahead->code;
 }
 
@@ -93,7 +72,7 @@ long ScriptParser::nextTokenAsInteger() {
 }
 
 const string ScriptParser::nextTokenAsString() {
-    return string(lookahead->attr.label_);
+    return lookahead->content;
 }
 
 Range ScriptParser::nextTokenAsRange() {
@@ -101,24 +80,13 @@ Range ScriptParser::nextTokenAsRange() {
 }
 
 
-void ScriptParser::error(int expect,int found)
-{
-
+void ScriptParser::error(token_t expect, token_t found){
     cerr << ": PARSE ERROR:  Expecting " << name[expect] << " but found " << name[found] << endl;
     cerr << "On line " <<  s.line << " in file " << currentfile << endl;
     exit(1);
 }
 
-void ScriptParser::error(const char * errstr)
-{
-
-    cerr << "Parse error: " << errstr << endl;
-    cerr << "On line " << s.line << " in file " << currentfile << endl;
-    exit(1);
-}
-
-void ScriptParser::error(const string &errstr)
-{
+void ScriptParser::error(const string &errstr){
     cerr << "Parse error: " << errstr << endl;
     cerr << "On line " <<  s.line << " in file " << currentfile << endl;
     exit(1);

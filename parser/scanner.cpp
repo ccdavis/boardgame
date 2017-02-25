@@ -12,7 +12,6 @@ bool ScriptScanner::whitespace(char c) {
 	return character::count(c) > 0;
 }
 
-
 bool ScriptScanner::digit(char c) {
 	return character::digits.find(c) != string::npos;
 }
@@ -21,7 +20,6 @@ bool ScriptScanner::digit(char c) {
 bool ScriptScanner::letter(char c){
 	return character::letters.find(c) != string::npos;
 }
-
 
 
 void ScriptScanner::skipline() {
@@ -67,7 +65,6 @@ shared_ptr<Token> ScriptScanner::nextToken() {
                 flt=false;
                 nextChar();
             }
-
         }
 
         string cstr2 = "";
@@ -88,7 +85,6 @@ shared_ptr<Token> ScriptScanner::nextToken() {
             r.hi=r2;
             return make_shared<Token>(token_t::RANGE,r);
         }
-
 
         return make_shared<Token>(token_t::INTEGER,stol(cstr),cstr);
     } // if number
@@ -118,12 +114,9 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 
         token_t thisCode=token_t::UNKNOWN;
 
-
         //  search all the token names for matches
         if (reserved_words.count(downcase(cstr)) > 0)
         	thisCode = reserved_words.at(downcase(cstr));
-
-
 
         if (thisCode==token_t::UNKNOWN)
         	return make_shared<Token>(token_t::IDENTIFIER,cstr);
@@ -132,7 +125,6 @@ shared_ptr<Token> ScriptScanner::nextToken() {
     } // if letter
 
     // skip the rest of a line (for comments)
-
     char ch = lastchar;
     nextChar();
 

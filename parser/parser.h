@@ -13,15 +13,16 @@ class Range;
 #include<string>
 
 
-class ScriptParser
-{
+class ScriptParser{
 public:
 
     std::shared_ptr<Token> lookahead;
     ScriptScanner s;
 
     std::shared_ptr<Token>  last;
-    char currentfile[100];
+
+    std::string currentfile;
+
     FILE *f;
     ScriptParser(const std::string &file_name);
     ScriptParser();
@@ -29,21 +30,15 @@ public:
 
     ~ScriptParser();
 
-    void match(int c);
+    void match(token_t c);
     void skip();
-    int nextToken();
+    token_t nextToken();
     const std::string nextTokenAsString();
     long nextTokenAsInteger();
     Range nextTokenAsRange();
 
-    void error(int expect,int found);
-    void error(const char * errstr);
+    void error(token_t expect, token_t found);
     void error(const std::string &errstr);
 };
 
-
-
 #endif
-
-
-

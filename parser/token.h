@@ -52,15 +52,10 @@ enum class token_t{
 	CONTAINERS,
 	PLACEMENT
 
-
-
-
 };
-
 
 // When the token is a word
 const map<string,token_t> reserved_words={
-
  {"and", token_t::AND},
  {"or", token_t::OR},
  {"not", token_t::NOT},
@@ -159,8 +154,7 @@ union Attrib {
 
 
 // The scanner will return new Token() using the appropriate constructor
-class Token
-{
+class Token{
 	private:
 
     Attrib attr;
