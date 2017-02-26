@@ -4,12 +4,12 @@
 
 #include "token.h"
 #include "scanner.h"
-
+#include<stdio.h>
 
 using namespace std;
 
 bool ScriptScanner::whitespace(char c) {
-	return character::count(c) > 0;
+	return character::whitespace.count(c) > 0;
 }
 
 bool ScriptScanner::digit(char c) {
@@ -40,7 +40,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 	string cstr="";
 
     while (whitespace(lastchar)) nextChar();
-    if (lastchar==EOF) return make_shared<Token>(token_t::EOFtoken);
+    if (lastchar==EOF) return make_shared<Token>(token_t::END_OF_FILE);
 
 
     // return number type tokens such as INTEGER, FLOAT, and RANGE
@@ -77,7 +77,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 
         // there was at least one digit so return the number token type
         if (flt)
-            return make_shared<Token>(token_t::FLOAT,stof(cstr),cstr);
+            return make_shared<Token>(token_t::FLOAT,stof(cstr));
 
         if (rng) {
             Range r;
@@ -86,7 +86,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
             return make_shared<Token>(token_t::RANGE,r);
         }
 
-        return make_shared<Token>(token_t::INTEGER,stol(cstr),cstr);
+        return make_shared<Token>(token_t::INTEGER,stol(cstr));
     } // if number
 
     if (lastchar=='"') {
@@ -94,7 +94,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
         while (lastchar!='"') {
             cstr.push_back(lastchar);
             nextChar();
-            if ((lastchar=='\t') || (lastchar[0]=='\n'))
+            if ((lastchar=='\t') || (lastchar=='\n'))
                 cerr << "Scann error:  Unterminated string on line " << line << "\n";
         }
         nextChar();
@@ -133,16 +133,16 @@ shared_ptr<Token> ScriptScanner::nextToken() {
         return make_shared<Token>(token_t::COMMA);
         break;
     case '(':
-        return make_shared<Token>(token_t::LEFTPAREN);
+        return make_shared<Token>(token_t::LEFT_PAREN);
         break;
     case ')':
-        return make_shared<Token>(token_t::RIGHTPAREN);
+        return make_shared<Token>(token_t::RIGHT_PAREN);
         break;
     case '[':
-        return make_shared<Token>(token_t::LEFTBRACKET);
+        return make_shared<Token>(token_t::LEFT_BRACKET);
         break;
     case ']':
-        return make_shared<Token>(token_t::RIGHTBRACKET);
+        return make_shared<Token>(token_t::RIGHT_BRACKET);
         break;
     case ';':
         return make_shared<Token>(token_t::SEMICOLON);
@@ -174,10 +174,10 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 		return make_shared<Token>(token_t::DIVIDE);
 		break;
 	case '{':
-		return make_shared<Token>(token_t::LEFTBRACE);
+		return make_shared<Token>(token_t::LEFT_BRACE);
 		break;
 	case '}':
-		return make_shared<Token>(token_t::RIGHTBRACE);
+		return make_shared<Token>(token_t::RIGHT_BRACE);
 		break;
     case '*':
         return make_shared<Token>(token_t::MULTIPLY);
@@ -188,7 +188,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
     }
     break;
 
-    default{
+    default:{
 
 
     // if we reached here,the character wasn't part of any token so report that
@@ -204,8 +204,8 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 
 }
 
-void ScriptScanner::start(FILE * infile) {
-    f = infile;
+void ScriptScanner::start(const std::string & filename) {
+	infile.open(filename);
     nextChar();
 }
 
