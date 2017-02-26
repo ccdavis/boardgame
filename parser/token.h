@@ -24,7 +24,7 @@ enum class token_t{
 	PLUS,
 	MINUS,
 	MULTIPLY,
-	DIVIDE
+	DIVIDE,
 	LESSTHAN,
 	GREATERTHAN,
 	EQUAL,
@@ -55,7 +55,7 @@ enum class token_t{
 };
 
 // When the token is a word
-const map<string,token_t> reserved_words={
+const std::map<std::string,token_t> reserved_words={
  {"and", token_t::AND},
  {"or", token_t::OR},
  {"not", token_t::NOT},
@@ -86,7 +86,7 @@ const map<string,token_t> reserved_words={
 };
 
 const std::map <token_t,std::string> token_name = {
-	{token_t::UNKNOWN,{"unknown"},
+	{token_t::UNKNOWN,"unknown"},
 	{token_t::END_OF_FILE,"END OF FILE **"},
 	{token_t::NEWLINE,"newline"},
 	{token_t::COMMA,"comma"},
@@ -97,14 +97,14 @@ const std::map <token_t,std::string> token_name = {
 	{token_t::INTEGER,"integer"},
 	{token_t::FLOAT,"float"},
 	{token_t::STRING,"string"},
-	{token_t::RANGE,{"range"},
+	{token_t::RANGE,"range"},
 	{token_t::IDENTIFIER,"identifier"},
 	{token_t::SEMICOLON,"semicolon"},
 	{token_t::COLON,"colon"},
 	{token_t::PLUS,"plus sign"},
 	{token_t::MINUS,"minus sign"},
 	{token_t::MULTIPLY,"multiply (*)"},
-	{token_t::DIVIDE,"divide (/)"}
+	{token_t::DIVIDE,"divide (/)"},
 	{token_t::LESSTHAN,"<"},
 	{token_t::GREATERTHAN,">"},
 	{token_t::EQUAL,"=="},
