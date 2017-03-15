@@ -4,12 +4,14 @@
 #ifndef parser_classes
 #define parser_classes
 
+#include "scanner.h"
 #include<memory>
+
+
 class Token;
 class Range;
 
-#include "scriptscan.h"
-#include<stdio.h>
+
 #include<string>
 
 
@@ -25,10 +27,9 @@ public:
 
     FILE *f;
     ScriptParser(const std::string &file_name);
-    ScriptParser();
+    ScriptParser(){}
     void stop();
 
-    ~ScriptParser();
 
     void match(token_t c);
     void skip();

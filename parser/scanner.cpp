@@ -6,6 +6,7 @@
 #include "scanner.h"
 #include<stdio.h>
 
+
 using namespace std;
 
 bool ScriptScanner::whitespace(char c) {

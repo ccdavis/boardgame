@@ -1,51 +1,30 @@
 #include "token.h"
 #include "parser.h"
 
-#include<string>
+
 #include <errno.h>
 #include <exception>
 #include <stdexcept>
 #include <stdio.h>
 #include <iostream>
+#include <sstream>
+#include <cstring>
 
 using namespace std;
 
-ScriptParser::~ScriptParser(){
-}
 
-
-ScriptParser::ScriptParser(){
-    //
-
-
-}
 
 ScriptParser::ScriptParser(const string &file_name){
-    f=fopen(file_name.c_str(),"r");
 
-    if (f==NULL || file_name.length()==0) {
-        if (file_name.length() > 0) {
-            ostringstream msg;
-            msg << "Problem opening script file named " <<  file_name << endl;
-            msg << "The error was " << errno << ": " << strerror(errno) << endl;
-            cerr << msg << endl;
-            exit(1);
-        }else{
-			cerr << "File name not valid" << endl;
-			exit(1);
-		}
-    } else {
 		currentfile = file_name;
 
-        s.start(f);
+        s.start(currentfile);
         lookahead = s.nextToken();
         last=nullptr;
-    }
+
 }
 
 void ScriptParser::stop(){
-    if (f!=NULL) fclose(f);
-    f=NULL;
 }
 
 void ScriptParser::match(token_t c) {

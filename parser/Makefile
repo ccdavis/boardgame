@@ -6,7 +6,7 @@ scanner:
 	$(CXX) $(CXXFLAGS) scanner.cpp -c 
 
 token:
-	$(CXX) $(CXXFLAGS) token.cpp -o parse_game
+	$(CXX) $(CXXFLAGS) token.cpp -c
 
 parser: scanner token
 	$(CXX) $(CXXFLAGS) parser.cpp -o parse_game scanner.o token.o

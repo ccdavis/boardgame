@@ -3,6 +3,7 @@
 #define ScriptScanner_class
 
 #include<memory>
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -40,8 +41,6 @@ class ScriptScanner {
 	    std::transform(s2.begin(), s2.end(), s2.begin(),   (int(*)(int)) tolower);
 	    return s2;
 	}
-
-
 
 	std::ifstream infile;
 
