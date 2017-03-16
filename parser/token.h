@@ -143,8 +143,8 @@ const int max_label_len = 256;
 // The special range type, declared like lo..hi, for example 23..25
 class Range {
 	public:
-    long lo;
-    long hi;
+    int64_t lo;
+    int64_t hi;
 };
 
 
@@ -159,24 +159,41 @@ union Attrib {
 
 // The scanner will return new Token() using the appropriate constructor
 class Token{
-	private:
+private:
 
     Attrib attr;
-    std::string content;
+public:
+    const std::string content;
 
-    token_t code;
-
-    public:
+    const token_t code;
 
     // anything which has a string label, including a string type itself
-    Token(token_t code, const std::string & content);
+    Token(token_t code, const std::string & content):
+    	code(code),content(content){}
 
     // a range of numbers written in code as 3..5 for example
-    Token(token_t code, Range r);
-    Token(token_t code, double n);
+    Token(token_t code, Range r):code(code){
+		attr.range_.hi = r.hi;
+		attr.range_.lo = r.lo;
+	}
+
+    Token(token_t code, double n):code(code){
+		attr.float_ = n;
+	}
+
+	Token(token_t code, int64_t n):code(code){
+		attr.integer_ = n;
+	}
 
     // for reserved words needing no attribute
-    Token(token_t code);
+    Token(token_t code):code(code){}
+
+    int64_t intValue(){ return attr.integer_;}
+    std::string stringValue() { return content; }
+    Range rangeValue() { return attr.range_; }
+    double floatValue() { return attr.float_; }
+    bool boolValue() { return attr.bool_; }
+    token_t opcodeValue() { return attr.opcode_; }
 
     std::string print();
 };

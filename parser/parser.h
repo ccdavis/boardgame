@@ -34,9 +34,14 @@ public:
     void match(token_t c);
     void skip();
     token_t nextToken();
-    const std::string nextTokenAsString();
-    long nextTokenAsInteger();
+
+// Get values out of tokens
+    std::string nextTokenAsString();
+    int64_t nextTokenAsInteger();
     Range nextTokenAsRange();
+    double nextTokenAsFloat();
+    bool nextTokenAsBool();
+    token_t nextTokenAsOpcode();
 
     void error(token_t expect, token_t found);
     void error(const std::string &errstr);

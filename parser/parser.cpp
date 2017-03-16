@@ -21,7 +21,6 @@ ScriptParser::ScriptParser(const string &file_name){
         s.start(currentfile);
         lookahead = s.nextToken();
         last=nullptr;
-
 }
 
 void ScriptParser::stop(){
@@ -46,21 +45,25 @@ token_t ScriptParser::nextToken() {
     return lookahead->code;
 }
 
-long ScriptParser::nextTokenAsInteger() {
-    return lookahead->attr.long_;
+int64_t ScriptParser::nextTokenAsInteger() {
+    return lookahead->intValue();
 }
 
-const string ScriptParser::nextTokenAsString() {
-    return lookahead->content;
+string ScriptParser::nextTokenAsString() {
+    return lookahead->stringValue();
+}
+
+double ScriptParser::nextTokenAsFloat(){
+	return lookahead->floatValue();
 }
 
 Range ScriptParser::nextTokenAsRange() {
-    return  lookahead->attr.range_;
+    return  lookahead->rangeValue();
 }
 
 
 void ScriptParser::error(token_t expect, token_t found){
-    cerr << ": PARSE ERROR:  Expecting " << name[expect] << " but found " << name[found] << endl;
+    cerr << ": PARSE ERROR:  Expecting " << token_name.at(expect) << " but found " << token_name.at(found) << endl;
     cerr << "On line " <<  s.line << " in file " << currentfile << endl;
     exit(1);
 }

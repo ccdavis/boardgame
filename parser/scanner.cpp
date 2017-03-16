@@ -87,7 +87,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
             return make_shared<Token>(token_t::RANGE,r);
         }
 
-        return make_shared<Token>(token_t::INTEGER,stol(cstr));
+        return make_shared<Token>(token_t::INTEGER,int64_t(stoll(cstr)));
     } // if number
 
     if (lastchar=='"') {
