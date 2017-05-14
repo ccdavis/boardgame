@@ -16,7 +16,7 @@ class Range;
 
 
 class ScriptParser{
-public:
+private:
 
     std::shared_ptr<Token> lookahead;
     ScriptScanner s;
@@ -25,7 +25,8 @@ public:
 
     std::string currentfile;
 
-    FILE *f;
+    public:
+
     ScriptParser(const std::string &file_name);
     ScriptParser(){}
     void stop();

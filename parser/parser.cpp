@@ -15,9 +15,7 @@ using namespace std;
 
 
 ScriptParser::ScriptParser(const string &file_name){
-
 		currentfile = file_name;
-
         s.start(currentfile);
         lookahead = s.nextToken();
         last=nullptr;
