@@ -3,7 +3,7 @@
 
 #ifndef parser_classes
 #define parser_classes
-
+#include "token.h"
 #include "scanner.h"
 #include<memory>
 
