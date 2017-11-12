@@ -74,6 +74,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
             cstr2.push_back(lastchar);
             nextChar();
         }
+
         long r2=0;
         if (rng){
 			if (cstr2.length() ==0){
