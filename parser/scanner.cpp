@@ -74,7 +74,15 @@ shared_ptr<Token> ScriptScanner::nextToken() {
             cstr2.push_back(lastchar);
             nextChar();
         }
-        long r2=stol(cstr2);
+        long r2=0;
+        if (rng){
+			if (cstr2.length() ==0){
+				cerr << "Scan error on line " << line << " No digits following '..' ." << endl;
+				exit(1);
+			}
+
+        	stol(cstr2);
+		}
 
         // there was at least one digit so return the number token type
         if (flt)
