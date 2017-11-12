@@ -64,4 +64,6 @@ private:
 	void units();
 	void containers();
 	void placement();
+
+	std::string parse_territory_name();
 };

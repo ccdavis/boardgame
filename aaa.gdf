@@ -1,4 +1,5 @@
-Players  Germany, USA, USSR, UK, Japan, neutral;  # also defines turn order
+Players  
+Germany, USA, USSR, UK, Japan, neutral;  # also defines turn order
 
 Turn 1;
 
@@ -135,6 +136,7 @@ Territories
 	South East Pacific :water, USA, 0;
 
 Map
+
 Germany: Western Europe, Southern Europe, Eastern Europe, North Sea, Baltic Sea;
 Norway Finland: Karelia, North Sea, Baltic Sea;
 Karelia: Norway Finland, Russia, Eastern Europe, Ukraine, Caucases, Baltic Sea, Karelia Sea;
@@ -264,7 +266,7 @@ North West Pacific: Soviet Far East, Sea of Japan, Alaskan Pacific ;
 Midway Island sea: Midway Island, North Central Pacific, Western US Pacific, Canadian Pacific, Alaskan Pacific , Hawaian Sea;
 Carribean Sea: Central America, Venezuela, West Indies, North Central Atlantic, North Eastern Brazil Atlantic, Eastern USA Atlantic;
 North Eastern Brazil Atlantic: Brazil, North Central Atlantic, West African Atlantic, East Brazil Atlantic, Carribean Sea;
-Eastern USA Atlantic: Western US, Eastern US, Mexico, North Central Atlantic, Canadian Atlantic, Carribean Sea;
+	Eastern USA Atlantic: Western US, Eastern US, Mexico, North Central Atlantic, Canadian Atlantic, Carribean Sea;
 South Pacific: New Zealand Sea, Central Pacific, South East Pacific;
 Hawaian Sea: Hawaii, Solomon Island Sea, Wake Island Sea, Central Pacific, Western US Pacific, Midway Island sea, Mexican Pacific;
 Mexican Pacific: Mexico, Central America, Colombia, Central Pacific, Western US Pacific, Hawaian Sea, South East Pacific;

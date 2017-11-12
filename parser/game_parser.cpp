@@ -7,6 +7,29 @@ GameParser::GameParser(const string & game_script_file):
 		game = make_shared<GameState>();
 	}
 
+// Territory names are made of what the scanner returns as
+// "identifiers" separated by spaces and terminated with
+// something else, usually : or ,.
+string  GameParser::parse_territory_name(){
+		// The name of the territory is some words separated by spaces. I didn't want
+		// to force quotes to be around the name, so we just read the parts  until
+		// finding the  : symbol. Plus this way we can fix whitespace
+		// errors later in the file; we force one space between name parts.
+		vector<string> name_parts;
+		while (nextToken() == token_t::IDENTIFIER){
+			match(token_t::IDENTIFIER);
+			string part = lastTokenAsString();
+			name_parts.push_back(part);
+		}
+		string territory_name = "";
+		for(int p=0;p<name_parts.size();p++){
+			territory_name += name_parts.at(p);
+			if (p < name_parts.size() -1){
+				territory_name += " ";
+			}
+		}
+		return territory_name;
+}
 
 game_state_ptr GameParser::load(){
 	players();
@@ -42,23 +65,7 @@ void GameParser::turn(){
 void GameParser::territories(){
 	match(token_t::TERRITORIES);
 	do{
-		// The name of the territory is some words separated by spaces. I didn't want
-		// to force quotes to be around the name, so we just read the parts  until
-		// finding the  : symbol. Plus this way we can fix whitespace
-		// errors later in the file; we force one space between name parts.
-		vector<string> name_parts;
-		while (nextToken() != token_t::COLON){
-			match(token_t::IDENTIFIER);
-			string part = lastTokenAsString();
-			name_parts.push_back(part);
-		}
-		string territory_name = "";
-		for(int p=0;p<name_parts.size();p++){
-			territory_name += name_parts.at(p);
-			if (p < name_parts.size() -1){
-				territory_name += " ";
-			}
-		}
+		string territory_name = parse_territory_name();
 
 		match(token_t::COLON);
 		match(token_t::IDENTIFIER);
@@ -87,6 +94,23 @@ void GameParser::territories(){
 }
 
 void GameParser::game_map(){
+	match(token_t::MAP);
+	while(nextToken() != token_t::UNITS){
+		string territory = parse_territory_name();
+		match(token_t::COLON);
+
+		// Get all territories connected to this one
+		vector<string> connected_to;
+		while (nextToken() != token_t::SEMICOLON){
+			string adjacent_territory = parse_territory_name();
+			connected_to.push_back(adjacent_territory);
+
+			if (nextToken() != token_t::SEMICOLON)
+				match(token_t::COMMA);
+		}
+		match(token_t::SEMICOLON);
+		game->game_map[territory] = connected_to;
+	}
 }
 
 void GameParser::units(){
