@@ -25,6 +25,7 @@ void ScriptParser::stop(){
 }
 
 void ScriptParser::match(token_t c) {
+	cout << lookahead->print() << endl;
     if (lookahead->code==c) {
         last = lookahead;
         lookahead=s.nextToken();

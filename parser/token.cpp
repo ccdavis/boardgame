@@ -5,7 +5,7 @@
 using namespace std;
 
 string Token::print(){
-	string name =  token_name.at(code); + ": ";
+	string name =  token_name.at(code)  + ": ";
 	string value = "";
 	switch(code){
 		case token_t::IDENTIFIER:value = content;break;

@@ -58,9 +58,9 @@ enum class token_t{
 
 // When the token is a word
 const std::map<std::string,token_t> reserved_words={
- {"and", token_t::AND},
- {"or", token_t::OR},
- {"not", token_t::NOT},
+ //{"and", token_t::AND},
+// {"or", token_t::OR},
+ //{"not", token_t::NOT},
  {"range",token_t::RANGE},
  {"string",token_t::STRING},
  {"float",token_t::FLOAT},
