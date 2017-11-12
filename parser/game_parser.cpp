@@ -19,11 +19,24 @@ game_state_ptr GameParser::load(){
 	return game;
 }
 
-
 void GameParser::players(){
+	match(token_t::PLAYERS);
+	while (token_t::IDENTIFIER == nextToken()){
+		match(token_t::IDENTIFIER);
+		string name = lastTokenAsString();
+		if (nextToken() == token_t::COMMA)
+			match(token_t::COMMA);
+		game->players.push_back(name);
+	}
+
+	match(token_t::SEMICOLON);
 }
 
 void GameParser::turn(){
+	match(token_t::TURN);
+	match(token_t::INTEGER);
+	game->turn = lastTokenAsInteger();
+	match(token_t::SEMICOLON);
 }
 
 void GameParser::territories(){

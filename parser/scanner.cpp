@@ -86,8 +86,14 @@ shared_ptr<Token> ScriptScanner::nextToken() {
             r.hi=r2;
             return make_shared<Token>(token_t::RANGE,r);
         }
+        try{
+			auto int_val = int64_t(stol(cstr));
+        	return make_shared<Token>(token_t::INTEGER, int_val);
+		}catch(...){
+			cerr << "Scan error on line " << line << "  Cannot convert " << cstr << " to integer." << endl;
+			exit(1);
+		}
 
-        return make_shared<Token>(token_t::INTEGER,int64_t(stoll(cstr)));
     } // if number
 
     if (lastchar=='"') {
@@ -206,6 +212,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 }
 
 void ScriptScanner::start(const std::string & filename) {
+	line=0;
 	infile.open(filename);
     nextChar();
 }

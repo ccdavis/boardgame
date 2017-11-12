@@ -26,9 +26,7 @@ void ScriptParser::stop(){
 
 void ScriptParser::match(token_t c) {
     if (lookahead->code==c) {
-
         last = lookahead;
-
         lookahead=s.nextToken();
     } else error(c,lookahead->code);
 }
@@ -47,16 +45,34 @@ int64_t ScriptParser::nextTokenAsInteger() {
     return lookahead->intValue();
 }
 
+int64_t ScriptParser::lastTokenAsInteger() {
+    return last->intValue();
+}
+
 string ScriptParser::nextTokenAsString() {
     return lookahead->stringValue();
 }
+
+string ScriptParser::lastTokenAsString() {
+    return last->stringValue();
+}
+
 
 double ScriptParser::nextTokenAsFloat(){
 	return lookahead->floatValue();
 }
 
+double ScriptParser::lastTokenAsFloat(){
+	return last->floatValue();
+}
+
+
 Range ScriptParser::nextTokenAsRange() {
     return  lookahead->rangeValue();
+}
+
+Range ScriptParser::lastTokenAsRange() {
+    return  last->rangeValue();
 }
 
 

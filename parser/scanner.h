@@ -29,7 +29,6 @@ namespace character{
 class ScriptScanner {
 	private:
 
-
 	static inline std::string upcase(const std::string &s) {
 	    std::string s2 = s;
 	    std::transform(s2.begin(), s2.end(), s2.begin(),   (int(*)(int)) toupper);
@@ -64,11 +63,13 @@ class ScriptScanner {
 
 
     ScriptScanner() {
+		line=0;
 		lastchar = '\0';
     }
 
 
     ScriptScanner(const std::string & filename){
+		line=0;
 		lastchar = '\0';
         start(filename);
     }

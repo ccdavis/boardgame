@@ -38,12 +38,17 @@ private:
 
 // Get values out of tokens
     std::string nextTokenAsString();
+    std::string lastTokenAsString();
     int64_t nextTokenAsInteger();
+	int64_t lastTokenAsInteger();
     Range nextTokenAsRange();
+    Range lastTokenAsRange();
     double nextTokenAsFloat();
+    double lastTokenAsFloat();
     bool nextTokenAsBool();
+    bool lastTokenAsBool();
     token_t nextTokenAsOpcode();
-
+	token_t lastTokenAsOpcode();
     void error(token_t expect, token_t found);
     void error(const std::string &errstr);
 };
