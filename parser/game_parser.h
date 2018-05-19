@@ -47,7 +47,6 @@ class GameParser:public ScriptParser{
 
 	private:
 
-	game_state_ptr game;
 
 	// The plan is to have the parser return fairly generic data types which the
 	// actual game engine will ingest and use to
@@ -57,13 +56,13 @@ public:
 	game_state_ptr load();
 
 private:
-	void players();
-	void turn();
-	void territories();
-	void game_map();
-	void units();
-	void containers();
-	void placement();
+	void players(GameState &game);
+	void turn(GameState &game);
+	void territories(GameState &game);
+	void game_map(GameState &game);
+	void units(GameState &game);
+	void containers(GameState &game);
+	void placement(GameState &game);
 
 	std::string parse_territory_name();
 };

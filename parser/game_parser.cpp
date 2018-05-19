@@ -4,7 +4,7 @@ using namespace std;
 
 GameParser::GameParser(const string & game_script_file):
 	ScriptParser(game_script_file){
-		game = make_shared<GameState>();
+
 	}
 
 // Territory names are made of what the scanner returns as
@@ -32,22 +32,24 @@ string  GameParser::parse_territory_name(){
 }
 
 game_state_ptr GameParser::load(){
-	players();
-	turn();
-	territories();
-	game_map();
-	units();
-	containers();
-	placement();
+	// Keeping this a shared_ptr for now, not sure where it willend up being used
+	auto game = make_shared<GameState>();
+	players(*game);
+	turn(*game);
+	territories(*game);
+	game_map(*game);
+	units(*game);
+	containers(*game);
+	placement(*game);
 	return game;
 }
 
-void GameParser::players(){
+void GameParser::players(GameState &game){
 	match(token_t::PLAYERS);
 	while (token_t::IDENTIFIER == nextToken()){
 		match(token_t::IDENTIFIER);
 		string name = lastTokenAsString();
-		game->players.push_back(name);
+		game.players.push_back(name);
 		if (nextToken() == token_t::COMMA)
 			match(token_t::COMMA);
 	}
@@ -55,14 +57,14 @@ void GameParser::players(){
 	match(token_t::SEMICOLON);
 }
 
-void GameParser::turn(){
+void GameParser::turn(GameState &game){
 	match(token_t::TURN);
 	match(token_t::INTEGER);
-	game->turn = lastTokenAsInteger();
+	game.turn = lastTokenAsInteger();
 	match(token_t::SEMICOLON);
 }
 
-void GameParser::territories(){
+void GameParser::territories(GameState &game){
 	match(token_t::TERRITORIES);
 	do{
 		string territory_name = parse_territory_name();
@@ -84,16 +86,16 @@ void GameParser::territories(){
 			{"production", to_string(production_points)}
 		};
 
-		if (game->territories.count(territory_name) > 0){
+		if (game.territories.count(territory_name) > 0){
 			error("Duplicate territory name: " + territory_name);
 		}else{
-			game->territories[territory_name] = this_territory;
+			game.territories[territory_name] = this_territory;
 		}
 
 	}while(nextToken() != token_t::MAP);
 }
 
-void GameParser::game_map(){
+void GameParser::game_map(GameState &game){
 	match(token_t::MAP);
 	while(nextToken() != token_t::UNITS){
 		string territory = parse_territory_name();
@@ -109,15 +111,15 @@ void GameParser::game_map(){
 				match(token_t::COMMA);
 		}
 		match(token_t::SEMICOLON);
-		game->game_map[territory] = connected_to;
+		game.game_map[territory] = connected_to;
 	}
 }
 
-void GameParser::units(){
+void GameParser::units(GameState &game){
 }
 
-void GameParser::containers(){
+void GameParser::containers(GameState &game){
 }
 
-void GameParser::placement(){
+void GameParser::placement(GameState &game){
 }
