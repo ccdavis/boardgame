@@ -156,7 +156,7 @@ void GameParser::containers(GameState &game){
 		int capacity = lastTokenAsInteger();
 		match(token_t::COMMA);
 
-map<string,int> can_carry;
+		map<string,int> can_carry;
 		while(nextToken()!=token_t::SEMICOLON){
 
 
@@ -176,4 +176,24 @@ map<string,int> can_carry;
 }
 
 void GameParser::placement(GameState &game){
+	match(token_t::PLACEMENT);
+	while (nextToken()!=token_t::END_OF_FILE){
+		string placed_at =parse_territory_name();
+		match(token_t::COLON);
+
+		map<string, int> unit_quantities;
+		while(nextToken()!=token_t::SEMICOLON){
+			match(token_t::INTEGER);
+			int quantity = lastTokenAsInteger();
+			match(token_t::IDENTIFIER);
+			string unit_type = lastTokenAsString();
+			unit_quantities[unit_type] = quantity;
+			if (nextToken()==token_t::COMMA) match(token_t::COMMA);
+		}
+		match(token_t::SEMICOLON);
+
+		game.placement[placed_at] = unit_quantities;
+	}
+
+
 }
