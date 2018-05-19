@@ -4,7 +4,6 @@ using namespace std;
 
 GameParser::GameParser(const string & game_script_file):
 	ScriptParser(game_script_file){
-
 	}
 
 // Territory names are made of what the scanner returns as
@@ -53,7 +52,6 @@ void GameParser::players(GameState &game){
 		if (nextToken() == token_t::COMMA)
 			match(token_t::COMMA);
 	}
-
 	match(token_t::SEMICOLON);
 }
 
@@ -116,9 +114,65 @@ void GameParser::game_map(GameState &game){
 }
 
 void GameParser::units(GameState &game){
+	match(token_t::UNITS);
+	while(nextToken() != token_t::CONTAINERS){
+		match(token_t::IDENTIFIER);
+		string name = lastTokenAsString();
+		match(token_t::COLON);
+		match(token_t::IDENTIFIER);
+		string terrain = lastTokenAsString();
+		match(token_t::COMMA);
+
+		// List of attributes
+		map<string,int> unit_attributes;
+		unit_attributes[terrain]=1;
+
+		while (nextToken() != token_t::SEMICOLON){
+			match(token_t::INTEGER);
+			int points = lastTokenAsInteger();
+			match(token_t::IDENTIFIER);
+			string attribute_name = lastTokenAsString();
+			if (nextToken()==token_t::COMMA) match(token_t::COMMA);
+			unit_attributes[attribute_name]=points;
+		}
+		game.units[name] = unit_attributes;
+		match(token_t::SEMICOLON);
+
+	} // While not at containers
+
 }
 
 void GameParser::containers(GameState &game){
+	match(token_t::CONTAINERS);
+	while(nextToken()!=token_t::PLACEMENT){
+		match(token_t::IDENTIFIER);
+		string container =lastTokenAsString();
+		if (game.units.count(container) ==0){
+			error("Cannot define " + container + " as a container type becuuse it is not defined in the units section.");
+		}
+
+		match(token_t::COLON);
+		match(token_t::INTEGER);
+		int capacity = lastTokenAsInteger();
+		match(token_t::COMMA);
+
+map<string,int> can_carry;
+		while(nextToken()!=token_t::SEMICOLON){
+
+
+			match(token_t::IDENTIFIER);
+			string carries =lastTokenAsString();
+			if (game.units.count(carries) == 0){
+				error("The container named " + container + " cannot carry " + carries + " because " + carries + " is not defined in the units section.");
+			}
+
+			can_carry[carries] = capacity;
+			if (nextToken()==token_t::COMMA) match(token_t::COMMA);
+		}
+
+		match(token_t::SEMICOLON);
+		game.containers[container] = can_carry;
+	} // while not at placement section
 }
 
 void GameParser::placement(GameState &game){
