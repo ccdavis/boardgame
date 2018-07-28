@@ -1,7 +1,7 @@
 
 
 #include "components.hpp"
-#include "parser/game_parser.h"
+#include "parsing/game_parser.h"
 
 
 /*
