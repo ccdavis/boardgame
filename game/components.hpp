@@ -16,42 +16,36 @@ enum class terrain_t{
 	
 	
 
-
+class GameState;
 struct Territory;
+typedef int piece_id;
+typedef int territory_id;
+typedef int player_id;
 
-struct PieceTemplate{
-	std::map<std::string, int> capacity;
-	std::map<std::string, std::vector<std::string>> can_carry;
-	std::map<std::string,int> cost;	
+struct Piece{
+	int capacity;
+	int cost;	
+	int attack;
+	int defend;
+	int movement;		
+	terrain_t terrain;
+	std::string name;
+	std::vector<std::string> can_carry;
 };
 
-
-
-struct Piece{	
-	std::unordered_map<int,Territory*> location;	
-	std::unordered_map<int, int> movement;
-	std::unordered_map<int, int> attack;
-	std::unordered_map<int, int> defend;
-	std::unordered_map<int, terrain_t> terrain;
-	std::unordered_map<int, std::string> name;	
-};
-
-
-
-struct Player{
+struct Player{	
 	std::string name;	
 	bool npc;
 	bool active;
 	std::vector<Territory*> territories;	
-	
-	PieceTemplate piece_templates;
+	std::map<std::string, Piece> piece_templates;	
 };
 
 
-struct Territory{
+struct Territory{	
 	std::string name;
 	Player * owner;
-	std::vector<int> pieces;
+	std::vector<piece_id> pieces;
 	terrain_t terrain;
 	int production;
 	std::vector<Territory*> connected_to;
@@ -60,10 +54,18 @@ struct Territory{
 
 
 struct Game{		
-	std::vector<Territory*> board;
-	std::vector<Player*> players;		
-	Piece pieces;
-	PieceTemplate global_piece_templates;
+	// Players and territories are unchanging
+	std::unordered_map<territory_id, Territory> board;
+	std::unordered_map<player_id, Player> players;		
+	
+	// piece_id is needed since pieces get added and removed
+	// throughout the course of the game.
+	std::unordered_map<piece_id,Piece> pieces;
+	
+	// One template per piece name
+	std::map<std::string,Piece> global_piece_templates;
+	
+	Game(const GameState & loaded_game);
 };
 	
 
