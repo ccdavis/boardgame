@@ -1,7 +1,7 @@
 
 
 CXX=c++
-CXXFLAGS=-I. -std=c++11 -pthread -Og -g --static
+CXXFLAGS=-I. -std=c++1y -pthread -Og -g --static
 LINKFLAGS=-I . -std=c++11 -pthread -Og -g 
 
 BUILD=./build
