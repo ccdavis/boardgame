@@ -1,5 +1,5 @@
 Players  
-Germany, USA, USSR, UK, Japan, neutral;  # also defines turn order
+Germany, USA, USSR, UK, Japan, Neutral;  # also defines turn order
 
 Turn 1;
 
@@ -19,8 +19,8 @@ Territories
 	Yakutsk SSR :land, USSR, 2;
 	Evenki :land, USSR, 2;
 	Novosibirsk :land, USSR, 2;
-	Mongolia :land, neutral, 1;
-	Afghanistan :land, neutral, 1;
+	Mongolia :land, Neutral, 1;
+	Afghanistan :land, Neutral, 1;
 	Manchuria :land, Japan, 3;
 	Sinkiang Western China :land, USA, 2;
 	Kwantung Eastern China :land, Japan, 3;
@@ -47,23 +47,23 @@ Territories
 	Eastern US :land, USA, 12;
 	Mexico :land, USA, 2;
 	Central America :land, USA, 1;
-	Colombia :land, neutral, 1;
-	Venezuela :land, neutral, 1;
+	Colombia :land, Neutral, 1;
+	Venezuela :land, Neutral, 1;
 	Brazil :land, USA, 3;
-	Peru :land, neutral, 1;
-	Chile :land, neutral, 1;
-	Argentina :land, neutral, 1;
+	Peru :land, Neutral, 1;
+	Chile :land, Neutral, 1;
+	Argentina :land, Neutral, 1;
 	West Indies :land, USA, 1;
 	Algeria :land, Germany, 1;
 	Libya :land, Germany, 1;
 	Egypt :land, UK, 2;
 	Borneo :land, Japan, 2;
-	Turkey :land, neutral, 4;
+	Turkey :land, Neutral, 4;
 	Palestine :land, UK, 1;
-	Syria	 :land, neutral, 1;
+	Syria	 :land, Neutral, 1;
 	Iran :land, UK, 1;
-	Arabia :land, neutral, 1;
-	Iraq :land, neutral, 2;
+	Arabia :land, Neutral, 1;
+	Iraq :land, Neutral, 2;
 	French West Africa :land, UK, 1;
 	French East Africa :land, UK, 1;
 	Ethiopia :land, Germany, 1;
@@ -71,7 +71,7 @@ Territories
 	Congo :land, UK, 1;
 	South Africa :land, UK, 2;
 	Madagascar :land, UK, 1;
-	Madagascar Sea	 :water, neutral, 0;
+	Madagascar Sea	 :water, Neutral, 0;
 	North Sea :water, UK, 0;
 	Baltic Sea :water, Germany, 0;
 	Eastern Atlantic :water, Germany, 0;
@@ -93,7 +93,7 @@ Territories
 	Central Indian Ocean :water, UK, 0;
 	Canadian Atlantic :water, UK, 0;
 	Karelia Sea :water, USSR, 0;
-  #	 :water, neutral, 0;
+  #	 :water, Neutral, 0;
 	Mozambique :land, Neutral,1;
 	Angola :land, Neutral,1;
 	Southern Indian Ocean :water, UK, 0;
@@ -108,12 +108,12 @@ Territories
 	East Indies Ocean :water, Japan, 0;
 	South China Sea :water, Japan, 0;
 	Borneo Sea :water, Japan, 0;
-#	 :water, neutral, 0;
+#	 :water, Neutral, 0;
 	East Australia Sea :water, UK, 0;
 	New Guinea Sea :water, Japan, 0;
 	Solomon Island Sea :water, Japan, 0;
 	Wake Island Sea :water, Japan, 0;
-#	 :water, neutral, 0;
+#	 :water, Neutral, 0;
 	Caroline Islands Sea :water, Japan, 0;
 	Okinawa Sea :water, Japan, 0;
 	Philipines Sea :water, Japan, 0;
@@ -191,11 +191,13 @@ Algeria: Libya, French West Africa, French East Africa, Eastern Atlantic, Wester
 Libya: Algeria, Egypt, French East Africa, Eastern Mediteranian;
 Egypt: Libya, Palestine, French East Africa, Ethiopia, Kenya, Congo, Eastern Mediteranian, Red Sea;
 Borneo: Borneo Sea;
-Turkey: Southern Europe, Caucases, Palestine, Eastern Mediteranian, Black Sea;
-Palestine: Egypt, Turkey, Iran, Arabia, Eastern Mediteranian, Red Sea;
 
-Iran: Caucases, Kazakstan, Afghanistan, India, Palestine, Arabia, Indian Ocean;
-Arabia: Palestine, Iran, Red Sea, Indian Ocean;
+Turkey: Southern Europe, Caucases, Syria, Iraq, Eastern Mediteranian, Black Sea;
+Palestine: Egypt, Syria, Iraq,  Arabia, Eastern Mediteranian, Red Sea;
+Syria : Palestine, Turkey, Iraq,Eastern Mediteranian; 
+Iraq : Palestine, Turkey, Syria, Arabia,Iran,Indian Ocean;
+Iran: Caucases, Kazakstan, Afghanistan, India, Iraq, Arabia, Indian Ocean;
+Arabia: Palestine, Iraq, Iran, Red Sea, Indian Ocean;
 
 French West Africa: Algeria, French East Africa, West African Atlantic;
 French East Africa: Algeria, Libya, Egypt, French West Africa, Congo, Southern West African Atlantic;
@@ -203,7 +205,8 @@ Ethiopia: Egypt, Kenya, Red Sea;
 Kenya: Egypt, Ethiopia, Congo, South Africa, Western Indian Ocean, Mozambique, Angola;
 Congo: Egypt, French East Africa, Kenya, Southern West African Atlantic, Angola;
 South Africa: Kenya, South West African Atlantic, South West Indian Ocean, Mozambique, Angola;
-Madagascar: South West Indian Ocean, Western Indian Ocean, Central Indian Ocean, Southern Indian Ocean;
+Madagascar: Madagascar Sea;
+Madagascar Sea : South West Indian Ocean, Western Indian Ocean, Central Indian Ocean, Southern Indian Ocean;
 
 North Sea: Germany, Norway Finland, Britain, Western Europe, Baltic Sea, Eastern Atlantic, Canadian Atlantic, Karelia Sea;
 Baltic Sea: Germany, Norway Finland, Karelia, Eastern Europe, North Sea;

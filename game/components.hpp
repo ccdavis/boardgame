@@ -3,7 +3,8 @@
 	
 #pragma once
 
-
+#include<stdexcept>
+#include <exception>
 #include<string>
 #include<vector>
 #include<unordered_map>
@@ -15,6 +16,10 @@ enum class terrain_t{
 };
 	
 	
+terrain_t  to_terrain_t(std::string type);
+
+
+
 
 class GameState;
 struct Territory;
@@ -55,8 +60,8 @@ struct Territory{
 
 struct Game{		
 	// Players and territories are unchanging
-	std::unordered_map<territory_id, Territory> board;
-	std::unordered_map<player_id, Player> players;		
+	std::vector<Territory> board;
+	std::vector<Player> players;
 	
 	// piece_id is needed since pieces get added and removed
 	// throughout the course of the game.

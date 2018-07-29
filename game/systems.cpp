@@ -13,13 +13,19 @@ void testing::game_loader(){
 	
 	Game game(*game_state);
 	
-	for(auto p:game.players){
-		
-		auto id = p.first;
-		Player player = p.second;
-		
-		cout << "ID: " << id << " player name: " << player.name << endl;
+	for(auto &p:game.players){
+		cout << "player: " << p.name << endl;
+
 	}
+	
+	for (int t=0;t<game.board.size();t++){
+		Territory & ter =  game.board[t];
+		cout << "Territory " << ter.name << endl;
+		
+	}
+		
+	
+	
 	
 	
 	
