@@ -2,11 +2,11 @@
 
 using namespace std;
 
-int main(){
+int main() {
 
-	GameParser game("../aaa.gdf");
-	auto game_state = game.load();
+    GameParser game("../aaa.gdf");
+    auto game_state = game.load();
 
-	return 0;
+    return 0;
 }
 

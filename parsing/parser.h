@@ -15,7 +15,7 @@ class Range;
 #include<string>
 
 
-class ScriptParser{
+class ScriptParser {
 private:
 
     std::shared_ptr<Token> lookahead;
@@ -25,10 +25,10 @@ private:
 
     std::string currentfile;
 
-    public:
+public:
 
     ScriptParser(const std::string &file_name);
-    ScriptParser(){}
+    ScriptParser() {}
     void stop();
 
 
@@ -40,7 +40,7 @@ private:
     std::string nextTokenAsString();
     std::string lastTokenAsString();
     int64_t nextTokenAsInteger();
-	int64_t lastTokenAsInteger();
+    int64_t lastTokenAsInteger();
     Range nextTokenAsRange();
     Range lastTokenAsRange();
     double nextTokenAsFloat();
@@ -48,7 +48,7 @@ private:
     bool nextTokenAsBool();
     bool lastTokenAsBool();
     token_t nextTokenAsOpcode();
-	token_t lastTokenAsOpcode();
+    token_t lastTokenAsOpcode();
     void error(token_t expect, token_t found);
     void error(const std::string &errstr);
 };

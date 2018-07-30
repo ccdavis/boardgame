@@ -11,41 +11,41 @@
 
 class Token;
 
-namespace character{
+namespace character {
 
-	const std::set<char> whitespace = {
-		(char) 32,
-		(char) 13,
-		'\n',
-		'\t'
-	};
+const std::set<char> whitespace = {
+    (char) 32,
+    (char) 13,
+    '\n',
+    '\t'
+};
 
-	 const std::string letters= "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
+const std::string letters= "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
 
-	 const std::string digits = "0123456789";
+const std::string digits = "0123456789";
 
 };
 
 class ScriptScanner {
-	private:
+private:
 
-	static inline std::string upcase(const std::string &s) {
-	    std::string s2 = s;
-	    std::transform(s2.begin(), s2.end(), s2.begin(),   (int(*)(int)) toupper);
-	    return s2;
-	}
+    static inline std::string upcase(const std::string &s) {
+        std::string s2 = s;
+        std::transform(s2.begin(), s2.end(), s2.begin(),   (int(*)(int)) toupper);
+        return s2;
+    }
 
-	static inline std::string downcase(const std::string &s) {
-	    std::string s2 = s;
-	    std::transform(s2.begin(), s2.end(), s2.begin(),   (int(*)(int)) tolower);
-	    return s2;
-	}
+    static inline std::string downcase(const std::string &s) {
+        std::string s2 = s;
+        std::transform(s2.begin(), s2.end(), s2.begin(),   (int(*)(int)) tolower);
+        return s2;
+    }
 
-	std::ifstream infile;
+    std::ifstream infile;
 
-	public:
+public:
 
-	char lastchar;
+    char lastchar;
 
     long line;
 
@@ -63,14 +63,14 @@ class ScriptScanner {
 
 
     ScriptScanner() {
-		line=0;
-		lastchar = '\0';
+        line=0;
+        lastchar = '\0';
     }
 
 
-    ScriptScanner(const std::string & filename){
-		line=0;
-		lastchar = '\0';
+    ScriptScanner(const std::string & filename) {
+        line=0;
+        lastchar = '\0';
         start(filename);
     }
 };

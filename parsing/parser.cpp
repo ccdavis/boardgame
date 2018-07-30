@@ -14,18 +14,18 @@ using namespace std;
 
 
 
-ScriptParser::ScriptParser(const string &file_name){
-		currentfile = file_name;
-        s.start(currentfile);
-        lookahead = s.nextToken();
-        last=nullptr;
+ScriptParser::ScriptParser(const string &file_name) {
+    currentfile = file_name;
+    s.start(currentfile);
+    lookahead = s.nextToken();
+    last=nullptr;
 }
 
-void ScriptParser::stop(){
+void ScriptParser::stop() {
 }
 
 void ScriptParser::match(token_t c) {
-	//cout << lookahead->print() << endl;
+    //cout << lookahead->print() << endl;
     if (lookahead->code==c) {
         last = lookahead;
         lookahead=s.nextToken();
@@ -59,12 +59,12 @@ string ScriptParser::lastTokenAsString() {
 }
 
 
-double ScriptParser::nextTokenAsFloat(){
-	return lookahead->floatValue();
+double ScriptParser::nextTokenAsFloat() {
+    return lookahead->floatValue();
 }
 
-double ScriptParser::lastTokenAsFloat(){
-	return last->floatValue();
+double ScriptParser::lastTokenAsFloat() {
+    return last->floatValue();
 }
 
 
@@ -77,13 +77,13 @@ Range ScriptParser::lastTokenAsRange() {
 }
 
 
-void ScriptParser::error(token_t expect, token_t found){
+void ScriptParser::error(token_t expect, token_t found) {
     cerr << ": PARSE ERROR:  Expecting " << token_name.at(expect) << " but found " << token_name.at(found) << endl;
     cerr << "On line " <<  s.line << " in file " << currentfile << endl;
     exit(1);
 }
 
-void ScriptParser::error(const string &errstr){
+void ScriptParser::error(const string &errstr) {
     cerr << "Parse error: " << errstr << endl;
     cerr << "On line " <<  s.line << " in file " << currentfile << endl;
     exit(1);

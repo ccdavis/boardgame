@@ -10,16 +10,16 @@
 using namespace std;
 
 bool ScriptScanner::whitespace(char c) {
-	return character::whitespace.count(c) > 0;
+    return character::whitespace.count(c) > 0;
 }
 
 bool ScriptScanner::digit(char c) {
-	return character::digits.find(c) != string::npos;
+    return character::digits.find(c) != string::npos;
 }
 
 
-bool ScriptScanner::letter(char c){
-	return character::letters.find(c) != string::npos;
+bool ScriptScanner::letter(char c) {
+    return character::letters.find(c) != string::npos;
 }
 
 
@@ -28,7 +28,7 @@ void ScriptScanner::skipline() {
 }
 
 char ScriptScanner::nextChar() {
-	lastchar = char(infile.get());
+    lastchar = char(infile.get());
 
     if (lastchar=='\n') {
         line++;
@@ -38,7 +38,7 @@ char ScriptScanner::nextChar() {
 }
 
 shared_ptr<Token> ScriptScanner::nextToken() {
-	string cstr="";
+    string cstr="";
 
     while (whitespace(lastchar)) nextChar();
     if (lastchar==EOF) return make_shared<Token>(token_t::END_OF_FILE);
@@ -46,12 +46,12 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 
     // return number type tokens such as INTEGER, FLOAT, and RANGE
     if (digit(lastchar) ||
-            lastchar=='-'){
+            lastchar=='-') {
         bool flt=false;  // flag if number turns out to be floating point
         bool rng = false;
 
 
-        do{
+        do {
             cstr.push_back(lastchar);
             nextChar();
         } while (digit(lastchar));
@@ -76,14 +76,14 @@ shared_ptr<Token> ScriptScanner::nextToken() {
         }
 
         long r2=0;
-        if (rng){
-			if (cstr2.length() ==0){
-				cerr << "Scan error on line " << line << " No digits following '..' ." << endl;
-				exit(1);
-			}
+        if (rng) {
+            if (cstr2.length() ==0) {
+                cerr << "Scan error on line " << line << " No digits following '..' ." << endl;
+                exit(1);
+            }
 
-        	stol(cstr2);
-		}
+            stol(cstr2);
+        }
 
         // there was at least one digit so return the number token type
         if (flt)
@@ -95,13 +95,13 @@ shared_ptr<Token> ScriptScanner::nextToken() {
             r.hi=r2;
             return make_shared<Token>(token_t::RANGE,r);
         }
-        try{
-			auto int_val = int64_t(stol(cstr));
-        	return make_shared<Token>(token_t::INTEGER, int_val);
-		}catch(...){
-			cerr << "Scan error on line " << line << "  Cannot convert " << cstr << " to integer." << endl;
-			exit(1);
-		}
+        try {
+            auto int_val = int64_t(stol(cstr));
+            return make_shared<Token>(token_t::INTEGER, int_val);
+        } catch(...) {
+            cerr << "Scan error on line " << line << "  Cannot convert " << cstr << " to integer." << endl;
+            exit(1);
+        }
 
     } // if number
 
@@ -124,7 +124,7 @@ shared_ptr<Token> ScriptScanner::nextToken() {
         nextChar();
 
         while (letter(lastchar) || digit(lastchar)) {
-			cstr.push_back(lastchar);
+            cstr.push_back(lastchar);
             nextChar();
         }  // at the end of a reserved word or identifier token, now which is it?
 
@@ -132,12 +132,12 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 
         //  search all the token names for matches
         if (reserved_words.count(downcase(cstr)) > 0)
-        	thisCode = reserved_words.at(downcase(cstr));
+            thisCode = reserved_words.at(downcase(cstr));
 
         if (thisCode==token_t::UNKNOWN)
-        	return make_shared<Token>(token_t::IDENTIFIER,cstr);
+            return make_shared<Token>(token_t::IDENTIFIER,cstr);
         else
-        	return make_shared<Token>(thisCode);
+            return make_shared<Token>(thisCode);
     } // if letter
 
     // skip the rest of a line (for comments)
@@ -164,37 +164,37 @@ shared_ptr<Token> ScriptScanner::nextToken() {
         return make_shared<Token>(token_t::SEMICOLON);
         break;
     case ':':
-    	if(lastchar == '='){
-			nextChar();
-			return make_shared<Token>(token_t::ASSIGN);
-		}else{
-			return make_shared<Token>(token_t::COLON);
-		}
-    	break;
+        if(lastchar == '=') {
+            nextChar();
+            return make_shared<Token>(token_t::ASSIGN);
+        } else {
+            return make_shared<Token>(token_t::COLON);
+        }
+        break;
     case '=':
         return make_shared<Token>(token_t::EQUAL);
         break;
-   case '<':
-    	return make_shared<Token>(token_t::LESSTHAN);
+    case '<':
+        return make_shared<Token>(token_t::LESSTHAN);
         break;
-   case '>':
-   		return make_shared<Token>(token_t::GREATERTHAN);
-   		break;
-   case '-':
-   		return make_shared<Token>(token_t::MINUS);
+    case '>':
+        return make_shared<Token>(token_t::GREATERTHAN);
+        break;
+    case '-':
+        return make_shared<Token>(token_t::MINUS);
         break;
     case '+':
-    	return make_shared<Token>(token_t::PLUS);
-    	break;
-	case '/':
-		return make_shared<Token>(token_t::DIVIDE);
-		break;
-	case '{':
-		return make_shared<Token>(token_t::LEFT_BRACE);
-		break;
-	case '}':
-		return make_shared<Token>(token_t::RIGHT_BRACE);
-		break;
+        return make_shared<Token>(token_t::PLUS);
+        break;
+    case '/':
+        return make_shared<Token>(token_t::DIVIDE);
+        break;
+    case '{':
+        return make_shared<Token>(token_t::LEFT_BRACE);
+        break;
+    case '}':
+        return make_shared<Token>(token_t::RIGHT_BRACE);
+        break;
     case '*':
         return make_shared<Token>(token_t::MULTIPLY);
         break;
@@ -204,14 +204,14 @@ shared_ptr<Token> ScriptScanner::nextToken() {
     }
     break;
 
-    default:{
+    default: {
 
 
-    // if we reached here,the character wasn't part of any token so report that
-    // just to stdout for now
-    	cerr << "Unhandled  character " << ch << " " << (int) ch << "-- skipping" << "\n";
-		}
-	}
+        // if we reached here,the character wasn't part of any token so report that
+        // just to stdout for now
+        cerr << "Unhandled  character " << ch << " " << (int) ch << "-- skipping" << "\n";
+    }
+    }
 
 
     return nextToken(); // recurse and grab the next character
@@ -221,8 +221,8 @@ shared_ptr<Token> ScriptScanner::nextToken() {
 }
 
 void ScriptScanner::start(const std::string & filename) {
-	line=0;
-	infile.open(filename);
+    line=0;
+    infile.open(filename);
     nextChar();
 }
 
