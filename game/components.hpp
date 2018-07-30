@@ -53,8 +53,8 @@ struct Piece{
 	Piece(){}
 };
 
-class Player{	
-public:
+struct Player{	
+
 	std::string name;	
 	bool npc;
 	bool active;

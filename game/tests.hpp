@@ -1,7 +1,8 @@
 
 
-#pragma once
 
+#ifndef GAME_TESTS
+#define GAME_TESTS
 
 namespace testing{
 	
@@ -11,3 +12,5 @@ namespace testing{
 	
 	
 };
+
+#endif

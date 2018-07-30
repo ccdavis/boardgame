@@ -1,18 +1,13 @@
 
 
 #pragma once
+class Territory;
+class Player;
 
-
-namespace testing{
+namespace game_board{
 	
-	void game_loader();
-		
-		
-		
-		
-		
-		
-	
-	
+void change_ownership(Territory * territory, Player *from, Player*to);
 	
 };
+	
+	

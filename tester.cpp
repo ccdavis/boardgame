@@ -6,7 +6,8 @@ and the loading / saving code as well as the systems themselves.
 */
 
 
-#include "game/systems.hpp"
+
+#include "game/tests.hpp"
 
 
 using namespace std;

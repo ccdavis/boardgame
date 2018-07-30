@@ -4,10 +4,6 @@
 #include "parsing/game_parser.h"
 
 #include<memory>
-/*
-Maybe we'll want to move this logic for building a game object elsewhere later.
-
-*/
 
 using namespace std;
 
@@ -25,6 +21,10 @@ terrain_t  to_terrain_t(std::string type){
 }
 
 
+/*
+Maybe we'll want to move this logic for building a game object elsewhere later.
+
+*/
 
 Game::Game(const  GameState & loaded_game){
 	
@@ -58,8 +58,8 @@ Game::Game(const  GameState & loaded_game){
 						
 		
 		territory->owner =  players_by_name.at(	owner);
-		territory_by_name[territory->name] = territory.get();
-		cout << "Added " << territory->name << endl;
+		territory->owner->territories.push_back(territory.get());		
+		territory_by_name[territory->name] = territory.get();			
 		board.push_back(move(territory));		
 			
 	}

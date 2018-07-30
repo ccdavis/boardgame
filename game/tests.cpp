@@ -1,13 +1,15 @@
 
 #include"tests.hpp"
 #include "components.hpp"
+#include "systems.hpp"
 #include "parsing/game_parser.h"
 
 #include<iostream>
 
 using namespace std;
 
-void testing::game_loader(){
+namespace testing{
+void game_loader(){
 	
 	// Parses the *.gdf format
 	GameParser parser("aaa.gdf");
@@ -38,10 +40,7 @@ void testing::game_loader(){
 		cout << "Territory " << ter.name << endl;
 		
 	}
-		
-	
-	
-	
-	
+			
 	
 }
+};

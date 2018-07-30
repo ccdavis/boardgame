@@ -1,7 +1,7 @@
 
 
 CXX=c++
-CXXFLAGS=-I. -std=c++1y -pthread -Og -g --static
+CXXFLAGS=-I . -std=c++1y -pthread -Og -g --static
 LINKFLAGS=-I . -std=c++11 -pthread -Og -g 
 
 BUILD=./build
@@ -25,9 +25,13 @@ systems:
 components:
 	$(CXX) $(CXXFLAGS) ./game/components.cpp -c -o $(BUILD)/components.o
 
-tests: components game_parser systems token scanner parser
-	$(CXX) $(CXXFLAGS)  tester.cpp -o tests $(BUILD)/systems.o $(BUILD)/components.o $(BUILD)/game_parser.o \
-	$(BUILD)/token.o $(BUILD)/scanner.o $(BUILD)/parser.o
+tests:
+	$(CXX) $(CXXFLAGS) game/tests.cpp -c -o  $(BUILD)/tests.o
+	
+
+test_runner: components game_parser systems token scanner parser 	 tests
+	$(CXX) $(CXXFLAGS)  tester.cpp -o tester $(BUILD)/systems.o $(BUILD)/components.o $(BUILD)/game_parser.o \
+	$(BUILD)/token.o $(BUILD)/scanner.o $(BUILD)/parser.o $(BUILD)/tests.o
 	
 game:  game_parser systems components
 	c++ -std=c++1y -o ./build/boardgame $(BUILD)/*.o
