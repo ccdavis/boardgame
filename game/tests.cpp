@@ -26,18 +26,22 @@ void game_loader() {
     // deserialization code easier to write.
     Game game(*game_state);
 
-    // Grabs references to unique_ptr in the players
-    // vector, does not transfer ownership, each item
-    // is treated as a pointer with ->
-    for(const auto &p:game.players) {
-        cout << "player: " << p->name << endl;
+    
+    for(const Player &p:game.players) {
+        cout << "player: " << p.name << endl;
     }
 
-    // You can also dereference on unique_ptr to get
-    // away from the -> pointer syntax
-    for (int t=0; t<game.board.size(); t++) {
-        const Territory & ter =  *game.board[t];
-        cout << "Territory " << ter.name << endl;
+
+    
+    for (const Territory & t:game.board){
+        
+        cout << "Territory " << t.name << endl;
+		cout << "\t" << t.owner->name << endl;
+		cout << "\t\t ";
+		for(Territory  *adjacent:t.connected_to){			
+			cout << adjacent->name << ", ";
+		}
+		cout << endl;
 
     }
 
