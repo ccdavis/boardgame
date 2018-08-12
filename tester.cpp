@@ -15,6 +15,7 @@ using namespace std;
 int main(){
 	
 	testing::game_loader();
+	testing::change_ownership();
 	
 	return 0;
 	

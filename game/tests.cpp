@@ -42,9 +42,43 @@ void game_loader() {
 			cout << adjacent->name << ", ";
 		}
 		cout << endl;
-
     }
-
-
 }
+
+void  change_ownership(){
+	GameParser parser("aaa.gdf");
+	auto game_state = parser.load();
+	Game game(*game_state);
+	
+	// Everything on the 'game' instance is on the stack; we can make_heap
+	// pointers to the items in the vectors when necessary:
+	Player * player0 =&(game.players[0]);
+	Player * player2 = &(game.players[2]);
+	
+	//  Everything not on 'game' pointing back into
+	// game members is a pointer:	
+	Territory *  t1 = player0->territories[0];
+	Territory *  t2 = player2->territories[0];
+	
+	
+	// Most of the time we could use references into the various game
+	// members (e.g. Player & p1 = game.players[1] ) but the ownership
+	// change code requires exchanging pointers.
+	cout << "t1 owned by " << t1->owner->name << " t2 owned by " << t2->owner->name << endl;	
+	game_board::change_ownership(t1, player2);
+	cout << "t1 owned by " << t1->owner->name << " t2 owned by " << t2->owner->name << endl;
+	game_board::change_ownership(t2, &(game.players[0]));
+	cout << "t1 owned by " << t1->owner->name << " t2 owned by " << t2->owner->name << endl;
+	
+	
+	// The reference version of above, not sure if it's a better approach
+	Player & p3 = game.players[3];
+	Player & p4 = game.players[4];
+	Territory &  t3 = *p3.territories[0];
+	
+	cout << " t3 owned by " <<  t3.owner->name << endl;
+	game_board::change_ownership(t3, p4);
+	cout << " t3 owned by " <<  t3.owner->name << endl;	
+}
+
 };
