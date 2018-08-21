@@ -78,12 +78,14 @@ Game::Game(const  GameState & loaded_game) {
 	
 	for(size_t spot=0;spot<board.size();spot++){		
 		Territory * t_ptr = &board[spot];
+		Territory & t_ref = board[spot];
+		
 		Player * owned_by = t_ptr->owner;
 		
 		//cout << "Adding territory " << t_ptr->name << " to player: " << owned_by->name << endl;
 		
 		territory_by_name[t_ptr->name] =  t_ptr;				
-		owned_by->territories.push_back(t_ptr);
+		owned_by->territories.push_back(t_ref);
     }
 
     // Now connect territories to each other

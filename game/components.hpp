@@ -10,6 +10,7 @@
 #include<unordered_map>
 #include<map>
 #include<memory>
+#include<functional>
 
 enum class terrain_t {
     land, water, both
@@ -45,7 +46,7 @@ struct  Player {
     std::string name;
     bool npc;
     bool active;
-    std::vector<Territory*> territories;
+    std::vector<std::reference_wrapper<Territory>> territories;
     std::map<std::string, Piece> piece_templates;
 };
 		
