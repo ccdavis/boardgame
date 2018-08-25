@@ -37,17 +37,15 @@ Game::Game(const  GameState & loaded_game) {
         Player player;
         player.name = p;        
         players.push_back(player);
+		players_by_name[p]= &players.back();
 	}
 		
-	for(size_t p=0;p<players.size();p++){				
-		players_by_name[players[p].name]= &players[p];
-    }
 	
 	for(int p=0;p<players.size();p++){
 		//cout << "Player: " << players[p].name << endl;
 		string  n = players[p].name;
 	
-		//cout << " Storing player_by_name: " << players_by_name.at(n)->name << endl;
+		cout << " Storing player_by_name: " << players_by_name.at(n)->name << endl;
 	}
 	
 
@@ -58,24 +56,28 @@ Game::Game(const  GameState & loaded_game) {
         auto name =  location_attr.first;
         auto attributes = location_attr.second;
         auto owner = attributes["owner"];
-
-        Territory territory;
+		Player & player=  *players_by_name.at(owner);
+		Territory territory(player);
+        
         territory.name = attributes["name"];
         territory.terrain = to_terrain_t(attributes["type"]);
         territory.production = stoi(attributes["production"]);
 
         if (players_by_name.count(owner)==0) {
             cerr << "Could not find a player named " << owner << " to assign to territory: " << territory.name << endl;
+			exit(1);
         }
 
-
-        territory.owner =  players_by_name.at(	owner);
 		
-//		cout << "Created territory " << territory.name << " owned by " <<  territory.owner->name << endl;
-                
+        
         board.push_back(territory);
+		Territory & this_territory = board.back();
+		territory_by_name[name] = &this_territory;
+		territory.owner.territories.push_back(this_territory);
+		
 	}
-	
+
+/*	
 	for(size_t spot=0;spot<board.size();spot++){		
 		Territory * t_ptr = &board[spot];
 		Territory & t_ref = board[spot];
@@ -87,7 +89,7 @@ Game::Game(const  GameState & loaded_game) {
 		territory_by_name[t_ptr->name] =  t_ptr;				
 		owned_by->territories.push_back(t_ref);
     }
-
+*/
     // Now connect territories to each other
     for (Territory &t:board) {
         auto name = t.name;
@@ -103,7 +105,7 @@ Game::Game(const  GameState & loaded_game) {
                 cerr << "Cannot connect " << t.name << " to " << connected_to << " because no territory of exactly this name exists on the board." << endl;
             }
 
-            t.connected_to.push_back(territory_by_name.at(connected_to));
+            t.connected_to.push_back(*territory_by_name.at(connected_to));
         }
     }
 
@@ -166,7 +168,7 @@ Game::Game(const  GameState & loaded_game) {
             cerr << "ERROR: Cannot place a piece on territory named " << territory_name << " because no such territory was defined on the map." << endl;
         }
 
-        Territory * territory = territory_by_name.at(territory_name);
+        Territory & territory = *territory_by_name.at(territory_name);
 
         for (auto this_piece:pieces_placed) {
             string piece_name = this_piece.first;
@@ -175,7 +177,7 @@ Game::Game(const  GameState & loaded_game) {
             // Now use the previously set up global_piece_templates to initialize this piece
             for (int q=0; q<quantity; q++) {							
                 pieces[p_id] = global_piece_templates.at(piece_name);
-                territory->pieces.push_back(p_id);
+                territory.pieces.push_back(p_id);
                 p_id++;
             }
 

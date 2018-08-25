@@ -36,10 +36,10 @@ void game_loader() {
     for (const Territory & t:game.board){
         
         cout << "Territory " << t.name << endl;
-		cout << "\t" << t.owner->name << endl;
+		cout << "\t" << t.owner.name << endl;
 		cout << "\t\t ";
-		for(Territory  *adjacent:t.connected_to){			
-			cout << adjacent->name << ", ";
+		for(const Territory  &adjacent:t.connected_to){			
+			cout << adjacent.name << ", ";
 		}
 		cout << endl;
     }
@@ -52,13 +52,13 @@ void  change_ownership(){
 	
 	// Everything on the 'game' instance is on the stack; we can make_heap
 	// pointers to the items in the vectors when necessary:
-	Player * player0 =&(game.players[0]);
-	Player * player2 = &(game.players[2]);
+	Player & player0 =game.players[0];
+	Player & player2 = game.players[2];
 	
 	//  Everything not on 'game' pointing back into
 	// game members is a pointer:	
-	Territory &  t1 = player0->territories[0];
-	Territory &  t2 = player2->territories[0];
+	Territory &  t1 = player0.territories[0];
+	Territory &  t2 = player2.territories[0];
 	
 	
 	// Most of the time we could use references into the various game
@@ -79,9 +79,9 @@ void  change_ownership(){
 	
 	Territory &  t3 = p3.territories[0];
 	
-	cout << " t3 owned by " <<  t3.owner->name << endl;
+	cout << " t3 owned by " <<  t3.owner.name << endl;
 	game_board::change_ownership(t3, p4);
-	cout << " t3 owned by " <<  t3.owner->name << endl;	
+	cout << " t3 owned by " <<  t3.owner.name << endl;	
 }
 
 };
