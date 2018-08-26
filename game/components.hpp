@@ -55,12 +55,12 @@ struct  Player {
 struct Territory {
 	public:
     std::string name;
-    Player & owner;
+    Player *owner;
     std::vector<piece_id> pieces;
     terrain_t terrain;
     int production;
     std::vector<std::reference_wrapper<Territory>> connected_to;	
-	Territory(Player & p):owner(p){}
+	Territory(Player &p):owner(&p){}
 };
 
 

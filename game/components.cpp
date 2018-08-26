@@ -73,7 +73,7 @@ Game::Game(const  GameState & loaded_game) {
         board.push_back(territory);
 		Territory & this_territory = board.back();
 		territory_by_name[name] = &this_territory;
-		territory.owner.territories.push_back(this_territory);
+		territory.owner->territories.push_back(this_territory);
 		
 	}
 

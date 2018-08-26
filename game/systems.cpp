@@ -28,8 +28,8 @@ void game_board::change_ownership(Territory *territory, Player*to) {
 
 // Same as above but with pass-by-reference
 void game_board::change_ownership(Territory &territory, Player &to) {
-	Player & from = territory.owner;	
-    territory.owner = to;
+	Player &	from = *territory.owner;	
+    territory.owner = &to;
     to.territories.push_back(territory);
 
     from.territories.erase(
