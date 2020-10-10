@@ -1,5 +1,19 @@
 # boardgame
 
+This is a little project I use to explore various programming styles and concepts.
+
+The latest work explored using a ECS (Entity Component System) design.
+
+I want to explore using C++bindings in Python. It would be nice to be able to script the AI for the game in Python and change some aspects of the rules without rebuilding.
+
+Next steps:
+1. Use "pybind11" to produce a module importable by Python that exports the GameStorate struct type.
+2. Make bindings for the Game and Piece  classes in addition to the basic GameStorage struct type, so that basic game types don't need to be redefined in Python.
+3. Make an executible that embeds the Python interpreter and uses the bindings from 1,2 so that we have a program that loads games scripted in Python.
+
+-------------------------------------------------
+
+
 The "aaa.gdf" file has a complete description for the starting state of a strategy board game similar to "Axis and Allies."
 
 The "parser" directory has a complete modern C++ parser for this file along with a stand-alone test program and Makefile.
@@ -16,8 +30,9 @@ The game setup found in "aaa.gdf" was all in a BP unit  declared with Pascal typ
 
 Later when I decided to port the game to Java I extracted the game setup from the BP unit and wrote it out in a generically  parsible format.  Using the parser really helped to detect my many mistakes. I never got much beyond the parser with the Java version.
 
-This C++ version pretty much  mirrors the Java approach to parsing. For the rest of the game I'll try out entity component-system architecture which is rather opposite of the original design which was very object-oriented with a strict class hierarchy.
+This C++ version pretty much  mirrors the Java approach to parsing. 
 
+I built a game class based around storing the game entities as components. There's a toy "system" to move pieces around the board.
 
 
 
