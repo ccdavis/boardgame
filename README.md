@@ -10,6 +10,7 @@ Next steps:
 1. Use "pybind11" to produce a module importable by Python that exports the GameStorate struct type.
 2. Make bindings for the Game and Piece  classes in addition to the basic GameStorage struct type, so that basic game types don't need to be redefined in Python.
 3. Make an executible that embeds the Python interpreter and uses the bindings from 1,2 so that we have a program that loads games scripted in Python.
+4. Make a separate GDF to JSON converter so the game definition could be read into Ruby or Crystal or whatever language and used as the basis for an implementation of the game, without needing to rewrite the parser from scratch.
 
 -------------------------------------------------
 
