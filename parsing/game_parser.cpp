@@ -1,7 +1,30 @@
 #include "game_parser.h"
+#include "json.hpp"
 
+using json = nlohmann::json;
 using namespace std;
 
+
+string GameState::as_json(){
+    json gs;
+    gs["players"] = players;
+    gs["turn"] = turn;
+    gs["territories"] = territories;
+    gs["game_map"] = game_map;
+    gs["units"] = units;
+    gs["containers"] = containers;
+    gs["placement"] = placement;
+        
+    return gs.dump(4);    
+}
+
+
+// Emit a game  definition file formatted string from the GameState
+string GameState::as_gdf(){
+    return "not implemented!";
+}
+// The GameParser reads from a game definition file and produces a GameState
+// For completeness should include a from_json() method as well.
 GameParser::GameParser(const string & game_script_file):
     ScriptParser(game_script_file) {
 }

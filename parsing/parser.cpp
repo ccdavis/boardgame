@@ -1,7 +1,6 @@
 #include "token.h"
 #include "parser.h"
 
-
 #include <errno.h>
 #include <exception>
 #include <stdexcept>
@@ -11,7 +10,6 @@
 #include <cstring>
 
 using namespace std;
-
 
 
 ScriptParser::ScriptParser(const string &file_name) {

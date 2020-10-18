@@ -37,6 +37,9 @@ struct GameState {
 
     // Key is a territory name, value is a map<unit type, number>
     std::map<std::string, std::map<std::string, int>> placement;
+    
+    std::string as_json();
+    std::string as_gdf();
 
 };
 
