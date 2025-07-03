@@ -27,6 +27,22 @@ A complete Go implementation is available in the `Go/` directory with the follow
 
 See `Go/README.md` for detailed usage instructions.
 
+### Building Go Programs
+
+To build the Go programs (including the mapserver):
+
+```bash
+cd Go/
+go build -o mapserver ./cmd/mapserver
+go build -o parser ./cmd/parser
+go build -o tester ./cmd/tester
+```
+
+The main executables include:
+- `mapserver` - Web server for interactive map visualization
+- `parser` - GDF file parser
+- `tester` - Test runner for the game engine
+
 -------------------------------------------------
 
 
