@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Axis & Allies Scrollable World Map</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a1a;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #viewport {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #map-container {
+            position: absolute;
+            cursor: grab;
+            transform-origin: 0 0;
+        }
+        
+        #map-container.dragging {
+            cursor: grabbing;
+        }
+        
+        #map-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        
+        #map-image {
+            display: block;
+            max-width: none;
+            height: auto;
+        }
+        
+        #overlay-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        
+        /* Territory overlay styles */
+        .territory-overlay {
+            fill: transparent;
+            stroke: transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .territory-overlay:hover {
+            fill: rgba(255, 255, 255, 0.2);
+            stroke: #fff;
+            stroke-width: 2;
+        }
+        
+        .territory-overlay.selected {
+            fill: rgba(255, 255, 0, 0.3);
+            stroke: #ff0;
+            stroke-width: 3;
+        }
+        
+        /* Unit marker styles */
+        .unit-marker {
+            pointer-events: none;
+        }
+        
+        .unit-background {
+            fill: rgba(0, 0, 0, 0.7);
+            stroke: #fff;
+            stroke-width: 2;
+            rx: 5;
+        }
+        
+        .unit-count {
+            font-size: 18px;
+            font-weight: bold;
+            text-anchor: middle;
+            fill: white;
+            pointer-events: none;
+        }
+        
+        /* Territory ownership indicator */
+        .ownership-marker {
+            pointer-events: none;
+            opacity: 0.8;
+        }
+        
+        .ownership-circle {
+            stroke: #000;
+            stroke-width: 2;
+        }
+        
+        /* Fixed UI Panels */
+        #info-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 280px;
+            background: rgba(255,255,255,0.95);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-size: 14px;
+            z-index: 100;
+        }
+        
+        #info-panel h2 {
+            margin: 0 0 15px 0;
+            font-size: 22px;
+            color: #333;
+        }
+        
+        .player-info {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            padding: 5px;
+            border-radius: 5px;
+            background: rgba(0,0,0,0.05);
+        }
+        
+        .player-color {
+            width: 24px;
+            height: 24px;
+            margin-right: 12px;
+            border: 2px solid #000;
+            border-radius: 3px;
+        }
+        
+        .germany-color { background: #666666; }
+        .usa-color { background: #2d5016; }
+        .ussr-color { background: #8b4513; }
+        .uk-color { background: #d2691e; }
+        .japan-color { background: #ff8c00; }
+        .neutral-color { background: #c0c0c0; }
+        
+        #territory-details {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #ddd;
+        }
+        
+        #territory-details h3 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+            color: #333;
+        }
+        
+        .unit-list {
+            margin: 10px 0;
+        }
+        
+        .unit-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            padding: 3px 0;
+        }
+        
+        /* Controls */
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255,255,255,0.9);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 100;
+        }
+        
+        #controls button {
+            padding: 8px 16px;
+            margin: 0 5px;
+            border: none;
+            border-radius: 4px;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        #controls button:hover {
+            background: #45a049;
+        }
+        
+        #zoom-display {
+            display: inline-block;
+            margin: 0 10px;
+            font-weight: bold;
+        }
+        
+        /* Loading indicator */
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            z-index: 200;
+        }
+        
+        /* Legend */
+        #legend {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255,255,255,0.9);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 100;
+        }
+        
+        #legend h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border: 1px solid #000;
+        }
+        
+        /* Territory value markers */
+        .value-marker-group {
+            pointer-events: none;
+        }
+        
+        .value-circle {
+            fill: white;
+            stroke: #000;
+            stroke-width: 2;
+        }
+        
+        .value-text {
+            font-size: 14px;
+            font-weight: bold;
+            text-anchor: middle;
+            fill: #000;
+        }
+        
+        /* Mini-map */
+        #minimap {
+            position: fixed;
+            bottom: 100px;
+            left: 20px;
+            width: 240px;
+            height: 120px;
+            background: rgba(0,0,0,0.8);
+            border: 2px solid #fff;
+            border-radius: 4px;
+            overflow: hidden;
+            z-index: 100;
+        }
+        
+        #minimap-image {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        #minimap-viewport {
+            position: absolute;
+            border: 2px solid #ff0;
+            background: rgba(255,255,0,0.2);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="viewport">
+        <div id="loading">Loading map...</div>
+        <div id="map-container" style="display: none;">
+            <div id="map-wrapper">
+                <img id="map-image" src="hires_aaa_map.jpg" alt="Axis & Allies World Map">
+                <svg id="overlay-svg" viewBox="0 0 2400 1200" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Territory overlays will be dynamically added here -->
+                    <g id="territory-overlays"></g>
+                    
+                    <!-- Ownership markers -->
+                    <g id="ownership-markers"></g>
+                    
+                    <!-- Unit markers -->
+                    <g id="unit-markers"></g>
+                    
+                    <!-- Value markers -->
+                    <g id="value-markers"></g>
+                </svg>
+            </div>
+        </div>
+    </div>
+    
+    <div id="controls">
+        <button onclick="zoomIn()">Zoom In</button>
+        <button onclick="zoomOut()">Zoom Out</button>
+        <button onclick="resetView()">Reset View</button>
+        <span id="zoom-display">100%</span>
+    </div>
+    
+    <div id="minimap">
+        <img id="minimap-image" src="hires_aaa_map.jpg" alt="Minimap">
+        <div id="minimap-viewport"></div>
+    </div>
+    
+    <div id="info-panel">
+        <h2>Game Status</h2>
+        <div class="player-info">
+            <div class="player-color germany-color"></div>
+            <span>Germany</span>
+        </div>
+        <div class="player-info">
+            <div class="player-color japan-color"></div>
+            <span>Japan</span>
+        </div>
+        <div class="player-info">
+            <div class="player-color usa-color"></div>
+            <span>United States</span>
+        </div>
+        <div class="player-info">
+            <div class="player-color uk-color"></div>
+            <span>United Kingdom</span>
+        </div>
+        <div class="player-info">
+            <div class="player-color ussr-color"></div>
+            <span>Soviet Union</span>
+        </div>
+        
+        <div id="territory-details" style="display: none;">
+            <h3 id="territory-name"></h3>
+            <div id="territory-owner"></div>
+            <div id="territory-value"></div>
+            <div class="unit-list" id="territory-units"></div>
+        </div>
+    </div>
+    
+    <div id="legend">
+        <h3>Map Legend</h3>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #666;"></div>
+            <span>Axis Powers</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #2d5016;"></div>
+            <span>Allied Powers</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #c0c0c0;"></div>
+            <span>Neutral</span>
+        </div>
+    </div>
+    
+    <script>
+        let gameData = null;
+        let territoryCoordinates = null;
+        let selectedTerritory = null;
+        
+        // View state
+        let scale = 1;
+        let translateX = 0;
+        let translateY = 0;
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let dragStartTranslateX = 0;
+        let dragStartTranslateY = 0;
+        
+        // Player colors
+        const playerColors = {
+            'Germany': '#666666',
+            'USA': '#2d5016',
+            'USSR': '#8b4513',
+            'UK': '#d2691e',
+            'Japan': '#ff8c00',
+            'Neutral': '#c0c0c0'
+        };
+        
+        // Territory values (IPC values)
+        const territoryValues = {
+            'Eastern US': 12,
+            'Western US': 10,
+            'Eastern Canada': 3,
+            'Western Canada': 1,
+            'Mexico': 1,
+            'Brazil': 3,
+            'Argentina': 1,
+            'Britain': 8,
+            'Germany': 10,
+            'Western Europe': 6,
+            'Southern Europe': 6,
+            'Eastern Europe': 3,
+            'Norway Finland': 3,
+            'Ukraine': 3,
+            'Caucases': 4,
+            'Russia': 8,
+            'Karelia': 2,
+            'Kazakstan': 2,
+            'Novosibirsk': 2,
+            'Evenki': 2,
+            'Yakutsk SSR': 1,
+            'Soviet Far East': 1,
+            'Egypt': 2,
+            'Libya': 1,
+            'Algeria': 1,
+            'French West Africa': 1,
+            'French East Africa': 1,
+            'Congo': 1,
+            'South Africa': 2,
+            'India': 3,
+            'Burma and South East Asia': 1,
+            'Central China': 2,
+            'Sinkiang Western China': 1,
+            'Manchuria': 3,
+            'Kwantung Eastern China': 3,
+            'Japan': 8,
+            'Philipines': 3,
+            'East Indies': 4,
+            'Borneo': 4,
+            'Australia': 2,
+            'Hawaii': 1,
+            'Midway Island': 1
+        };
+        
+        const mapContainer = document.getElementById('map-container');
+        const viewport = document.getElementById('viewport');
+        
+        // Initialize drag handling
+        function initDragHandling() {
+            mapContainer.addEventListener('mousedown', startDrag);
+            document.addEventListener('mousemove', drag);
+            document.addEventListener('mouseup', endDrag);
+            
+            // Prevent context menu on right click
+            mapContainer.addEventListener('contextmenu', e => e.preventDefault());
+            
+            // Mouse wheel zoom
+            viewport.addEventListener('wheel', handleWheel);
+        }
+        
+        function startDrag(e) {
+            if (e.target.classList.contains('territory-overlay')) return;
+            isDragging = true;
+            mapContainer.classList.add('dragging');
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            dragStartTranslateX = translateX;
+            dragStartTranslateY = translateY;
+        }
+        
+        function drag(e) {
+            if (!isDragging) return;
+            e.preventDefault();
+            
+            const dx = e.clientX - dragStartX;
+            const dy = e.clientY - dragStartY;
+            
+            translateX = dragStartTranslateX + dx;
+            translateY = dragStartTranslateY + dy;
+            
+            updateTransform();
+            updateMinimap();
+        }
+        
+        function endDrag() {
+            isDragging = false;
+            mapContainer.classList.remove('dragging');
+        }
+        
+        function handleWheel(e) {
+            e.preventDefault();
+            
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            const newScale = Math.max(0.5, Math.min(3, scale * delta));
+            
+            // Calculate mouse position relative to the map
+            const rect = mapContainer.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            // Adjust translation to zoom on mouse position
+            const scaleChange = newScale / scale;
+            translateX = e.clientX - (mouseX * scaleChange);
+            translateY = e.clientY - (mouseY * scaleChange);
+            
+            scale = newScale;
+            updateTransform();
+            updateMinimap();
+        }
+        
+        function updateTransform() {
+            mapContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+            document.getElementById('zoom-display').textContent = Math.round(scale * 100) + '%';
+        }
+        
+        function zoomIn() {
+            scale = Math.min(3, scale * 1.2);
+            centerView();
+            updateTransform();
+            updateMinimap();
+        }
+        
+        function zoomOut() {
+            scale = Math.max(0.5, scale / 1.2);
+            centerView();
+            updateTransform();
+            updateMinimap();
+        }
+        
+        function resetView() {
+            scale = 1;
+            centerView();
+            updateTransform();
+            updateMinimap();
+        }
+        
+        function centerView() {
+            const mapWidth = document.getElementById('map-image').naturalWidth * scale;
+            const mapHeight = document.getElementById('map-image').naturalHeight * scale;
+            
+            translateX = (viewport.offsetWidth - mapWidth) / 2;
+            translateY = (viewport.offsetHeight - mapHeight) / 2;
+        }
+        
+        function updateMinimap() {
+            const minimapViewport = document.getElementById('minimap-viewport');
+            const mapImage = document.getElementById('map-image');
+            const minimap = document.getElementById('minimap');
+            
+            const mapWidth = mapImage.naturalWidth;
+            const mapHeight = mapImage.naturalHeight;
+            
+            const viewportWidth = viewport.offsetWidth / scale;
+            const viewportHeight = viewport.offsetHeight / scale;
+            
+            const minimapScale = minimap.offsetWidth / mapWidth;
+            
+            const viewportLeft = -translateX / scale;
+            const viewportTop = -translateY / scale;
+            
+            minimapViewport.style.left = (viewportLeft * minimapScale) + 'px';
+            minimapViewport.style.top = (viewportTop * minimapScale) + 'px';
+            minimapViewport.style.width = (viewportWidth * minimapScale) + 'px';
+            minimapViewport.style.height = (viewportHeight * minimapScale) + 'px';
+        }
+        
+        async function loadGameData() {
+            try {
+                // Wait for image to load
+                const img = document.getElementById('map-image');
+                await new Promise((resolve) => {
+                    if (img.complete) {
+                        resolve();
+                    } else {
+                        img.onload = resolve;
+                    }
+                });
+                
+                // Adjust SVG viewBox to match image
+                const svg = document.getElementById('overlay-svg');
+                svg.setAttribute('viewBox', `0 0 ${img.naturalWidth} ${img.naturalHeight}`);
+                
+                // Load game state
+                const gameResponse = await fetch('/api/game');
+                gameData = await gameResponse.json();
+                
+                // Load territory coordinates
+                const coordsResponse = await fetch('/api/image-coordinates');
+                territoryCoordinates = await coordsResponse.json();
+                
+                // Show map and hide loading
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('map-container').style.display = 'block';
+                
+                // Center the view
+                centerView();
+                updateTransform();
+                updateMinimap();
+                
+                // Initialize drag handling
+                initDragHandling();
+                
+                renderOverlays();
+            } catch (error) {
+                console.error('Error loading game data:', error);
+                document.getElementById('loading').textContent = 'Error loading map';
+            }
+        }
+        
+        function renderOverlays() {
+            const overlaysGroup = document.getElementById('territory-overlays');
+            const ownersGroup = document.getElementById('ownership-markers');
+            const unitsGroup = document.getElementById('unit-markers');
+            const valuesGroup = document.getElementById('value-markers');
+            
+            // Clear existing content
+            overlaysGroup.innerHTML = '';
+            ownersGroup.innerHTML = '';
+            unitsGroup.innerHTML = '';
+            valuesGroup.innerHTML = '';
+            
+            // Scale factor for coordinates (if needed)
+            const img = document.getElementById('map-image');
+            const scaleFactorX = img.naturalWidth / 2400;
+            const scaleFactorY = img.naturalHeight / 1200;
+            
+            // Create territory overlays
+            gameData.territories.forEach(territory => {
+                const coords = territoryCoordinates ? territoryCoordinates[territory.name] : null;
+                if (!coords) return;
+                
+                const isSeaZone = territory.name.includes('Sea') || territory.name.includes('Ocean') || 
+                                 territory.name.includes('Atlantic') || territory.name.includes('Pacific') ||
+                                 territory.name.includes('Indian') || territory.name.includes('Bay') ||
+                                 territory.name.includes('Mediteranian');
+                
+                if (!isSeaZone) {
+                    // Scale coordinates to match actual image size
+                    const centerX = (coords.x || coords.X) * scaleFactorX;
+                    const centerY = (coords.y || coords.Y) * scaleFactorY;
+                    
+                    // Create clickable overlay using a circle
+                    const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    overlay.setAttribute('cx', centerX);
+                    overlay.setAttribute('cy', centerY);
+                    overlay.setAttribute('r', 40 * scaleFactorX);
+                    overlay.setAttribute('class', 'territory-overlay');
+                    overlay.setAttribute('data-territory', territory.name);
+                    overlay.addEventListener('click', () => selectTerritory(territory));
+                    overlaysGroup.appendChild(overlay);
+                    
+                    // Add ownership marker
+                    if (territory.owner) {
+                        const ownerGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                        ownerGroup.setAttribute('class', 'ownership-marker');
+                        
+                        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                        circle.setAttribute('cx', centerX);
+                        circle.setAttribute('cy', centerY - 25 * scaleFactorY);
+                        circle.setAttribute('r', 8 * scaleFactorX);
+                        circle.setAttribute('class', 'ownership-circle');
+                        circle.setAttribute('fill', playerColors[territory.owner] || '#ccc');
+                        
+                        ownerGroup.appendChild(circle);
+                        ownersGroup.appendChild(ownerGroup);
+                    }
+                    
+                    // Add value marker
+                    if (territoryValues[territory.name]) {
+                        const valueGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                        valueGroup.setAttribute('class', 'value-marker-group');
+                        
+                        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                        circle.setAttribute('cx', centerX + 20 * scaleFactorX);
+                        circle.setAttribute('cy', centerY - 25 * scaleFactorY);
+                        circle.setAttribute('r', 12 * scaleFactorX);
+                        circle.setAttribute('class', 'value-circle');
+                        
+                        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        text.setAttribute('x', centerX + 20 * scaleFactorX);
+                        text.setAttribute('y', centerY - 20 * scaleFactorY);
+                        text.setAttribute('class', 'value-text');
+                        text.setAttribute('font-size', 14 * scaleFactorX);
+                        text.textContent = territoryValues[territory.name];
+                        
+                        valueGroup.appendChild(circle);
+                        valueGroup.appendChild(text);
+                        valuesGroup.appendChild(valueGroup);
+                    }
+                    
+                    // Add unit markers
+                    if (territory.pieces && Object.keys(territory.pieces).length > 0) {
+                        const unitGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                        unitGroup.setAttribute('class', 'unit-marker');
+                        
+                        const totalUnits = Object.values(territory.pieces).reduce((a, b) => a + b, 0);
+                        
+                        // Background rectangle
+                        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                        rect.setAttribute('x', centerX - 20 * scaleFactorX);
+                        rect.setAttribute('y', centerY - 10 * scaleFactorY);
+                        rect.setAttribute('width', 40 * scaleFactorX);
+                        rect.setAttribute('height', 25 * scaleFactorY);
+                        rect.setAttribute('class', 'unit-background');
+                        
+                        // Unit count text
+                        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        text.setAttribute('x', centerX);
+                        text.setAttribute('y', centerY + 5 * scaleFactorY);
+                        text.setAttribute('class', 'unit-count');
+                        text.setAttribute('font-size', 18 * scaleFactorX);
+                        text.textContent = totalUnits;
+                        
+                        unitGroup.appendChild(rect);
+                        unitGroup.appendChild(text);
+                        unitsGroup.appendChild(unitGroup);
+                    }
+                }
+            });
+        }
+        
+        function selectTerritory(territory) {
+            // Clear previous selection
+            document.querySelectorAll('.territory-overlay').forEach(el => {
+                el.classList.remove('selected');
+            });
+            
+            // Mark new selection
+            const overlay = document.querySelector(`[data-territory="${territory.name}"]`);
+            if (overlay) {
+                overlay.classList.add('selected');
+            }
+            
+            // Update info panel
+            const detailsDiv = document.getElementById('territory-details');
+            const nameEl = document.getElementById('territory-name');
+            const ownerEl = document.getElementById('territory-owner');
+            const valueEl = document.getElementById('territory-value');
+            const unitsEl = document.getElementById('territory-units');
+            
+            nameEl.textContent = territory.name;
+            ownerEl.textContent = `Owner: ${territory.owner || 'Neutral'}`;
+            valueEl.textContent = territoryValues[territory.name] ? `Value: ${territoryValues[territory.name]} IPC` : '';
+            
+            unitsEl.innerHTML = '';
+            if (territory.pieces && Object.keys(territory.pieces).length > 0) {
+                Object.entries(territory.pieces).forEach(([unit, count]) => {
+                    const unitDiv = document.createElement('div');
+                    unitDiv.className = 'unit-item';
+                    unitDiv.innerHTML = `<span>${unit}:</span><span>${count}</span>`;
+                    unitsEl.appendChild(unitDiv);
+                });
+            } else {
+                unitsEl.innerHTML = '<div>No units</div>';
+            }
+            
+            detailsDiv.style.display = 'block';
+            selectedTerritory = territory;
+        }
+        
+        // Load game data when page loads
+        loadGameData();
+        
+        // Refresh game data periodically
+        setInterval(() => {
+            fetch('/api/game')
+                .then(response => response.json())
+                .then(data => {
+                    gameData = data;
+                    renderOverlays();
+                });
+        }, 5000);
+    </script>
+</body>
+</html>

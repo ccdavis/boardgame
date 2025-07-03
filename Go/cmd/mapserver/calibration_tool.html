@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Map Calibration Tool</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: #222;
+            color: white;
+        }
+        
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+        
+        #map-area {
+            flex: 1;
+            position: relative;
+            overflow: auto;
+            background: #333;
+        }
+        
+        #map-image {
+            cursor: crosshair;
+            display: block;
+        }
+        
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        
+        .marker {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: red;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: auto;
+            cursor: pointer;
+        }
+        
+        .marker.selected {
+            background: yellow;
+            z-index: 10;
+        }
+        
+        .marker-label {
+            position: absolute;
+            left: 10px;
+            top: -5px;
+            background: rgba(0,0,0,0.8);
+            padding: 2px 5px;
+            font-size: 12px;
+            white-space: nowrap;
+            border-radius: 3px;
+        }
+        
+        #sidebar {
+            width: 400px;
+            background: #111;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        #coordinates {
+            background: #333;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+        
+        #territory-select {
+            width: 100%;
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+        
+        #territory-list {
+            max-height: 300px;
+            overflow-y: auto;
+            background: #333;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        
+        .territory-item {
+            padding: 5px;
+            margin: 2px 0;
+            background: #444;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .territory-item:hover {
+            background: #555;
+        }
+        
+        .territory-item.has-coords {
+            background: #245a24;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        
+        button:hover {
+            background: #45a049;
+        }
+        
+        #output {
+            background: #333;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre;
+            overflow-x: auto;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        #info {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #444;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="map-area">
+            <img id="map-image" src="hires_aaa_map.jpg" alt="Map">
+            <div id="overlay"></div>
+        </div>
+        
+        <div id="sidebar">
+            <h2>Map Calibration Tool</h2>
+            
+            <div id="info">
+                Click on the map to set coordinates for territories.
+                The map uses a 2400x1200 coordinate system.
+            </div>
+            
+            <div id="coordinates">
+                Mouse: <span id="mouse-coords">0, 0</span><br>
+                Scale Factor: <span id="scale-factor">1</span><br>
+                Image Size: <span id="image-size">0 x 0</span>
+            </div>
+            
+            <label>Select Territory:</label>
+            <select id="territory-select">
+                <option value="">-- Click on map to set coordinates --</option>
+            </select>
+            
+            <div id="territory-list"></div>
+            
+            <button onclick="exportCoordinates()">Export Coordinates</button>
+            <button onclick="clearCurrent()">Clear Current</button>
+            <button onclick="clearAll()">Clear All</button>
+            
+            <h3>Output:</h3>
+            <div id="output"></div>
+        </div>
+    </div>
+    
+    <script>
+        const territories = [
+            // North America
+            "Eastern US", "Western US", "Alaska", "Western Canada", "Eastern Canada",
+            "Mexico", "Central America",
+            
+            // South America
+            "Venezuela", "Colombia", "Peru", "Brazil", "Argentina", "Chile",
+            
+            // Europe
+            "Britain", "Western Europe", "Southern Europe", "Germany", "Eastern Europe",
+            "Norway Finland", "Spain",
+            
+            // USSR
+            "Karelia", "Russia", "Caucases", "Ukraine", "Kazakstan", "Novosibirsk",
+            "Evenki", "Yakutsk SSR", "Soviet Far East",
+            
+            // Africa
+            "Algeria", "Libya", "Egypt", "French West Africa", "French East Africa",
+            "Ethiopia", "Congo", "Kenya", "Angola", "Mozambique", "South Africa", "Madagascar",
+            
+            // Middle East
+            "Turkey", "Syria", "Palestine", "Iraq", "Iran", "Arabia", "Afghanistan",
+            
+            // Asia
+            "India", "Burma and South East Asia", "Sinkiang Western China", "Mongolia",
+            "Central China", "Kwantung Eastern China", "Manchuria", "Japan",
+            
+            // Pacific Islands
+            "Hawaii", "Midway Island", "Wake Island", "Philipines", "Caroline Islands",
+            "Solomon Islands", "New Guinea", "East Indies", "Borneo", "Okinawa",
+            
+            // Australia & New Zealand
+            "Australia", "New Zealand"
+        ].sort();
+        
+        let coordinates = {};
+        let currentTerritory = null;
+        let scaleFactor = 1;
+        let imageWidth = 0;
+        let imageHeight = 0;
+        
+        const mapImage = document.getElementById('map-image');
+        const overlay = document.getElementById('overlay');
+        const territorySelect = document.getElementById('territory-select');
+        const territoryList = document.getElementById('territory-list');
+        const output = document.getElementById('output');
+        
+        // Populate territory select
+        territories.forEach(t => {
+            const option = document.createElement('option');
+            option.value = t;
+            option.textContent = t;
+            territorySelect.appendChild(option);
+        });
+        
+        // Create territory list
+        function updateTerritoryList() {
+            territoryList.innerHTML = '';
+            territories.forEach(t => {
+                const div = document.createElement('div');
+                div.className = 'territory-item';
+                if (coordinates[t]) {
+                    div.className += ' has-coords';
+                }
+                div.textContent = t;
+                div.onclick = () => selectTerritory(t);
+                territoryList.appendChild(div);
+            });
+        }
+        
+        updateTerritoryList();
+        
+        // Map image loaded
+        mapImage.onload = function() {
+            imageWidth = mapImage.naturalWidth;
+            imageHeight = mapImage.naturalHeight;
+            scaleFactor = 2400 / imageWidth;
+            
+            document.getElementById('image-size').textContent = `${imageWidth} x ${imageHeight}`;
+            document.getElementById('scale-factor').textContent = scaleFactor.toFixed(3);
+            
+            overlay.style.width = mapImage.width + 'px';
+            overlay.style.height = mapImage.height + 'px';
+        };
+        
+        // Mouse move handler
+        mapImage.onmousemove = function(e) {
+            const rect = mapImage.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            const scaledX = Math.round(x * scaleFactor);
+            const scaledY = Math.round(y * scaleFactor);
+            
+            document.getElementById('mouse-coords').textContent = `${scaledX}, ${scaledY}`;
+        };
+        
+        // Click handler
+        mapImage.onclick = function(e) {
+            if (!currentTerritory) {
+                alert('Please select a territory first');
+                return;
+            }
+            
+            const rect = mapImage.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            const scaledX = Math.round(x * scaleFactor);
+            const scaledY = Math.round(y * scaleFactor);
+            
+            coordinates[currentTerritory] = {
+                x: scaledX,
+                y: scaledY,
+                displayX: x,
+                displayY: y
+            };
+            
+            updateMarkers();
+            updateTerritoryList();
+            updateOutput();
+        };
+        
+        // Territory selection
+        territorySelect.onchange = function() {
+            currentTerritory = territorySelect.value;
+            updateMarkers();
+        };
+        
+        function selectTerritory(name) {
+            currentTerritory = name;
+            territorySelect.value = name;
+            updateMarkers();
+        }
+        
+        // Update markers
+        function updateMarkers() {
+            overlay.innerHTML = '';
+            
+            for (const [name, coord] of Object.entries(coordinates)) {
+                const marker = document.createElement('div');
+                marker.className = 'marker';
+                if (name === currentTerritory) {
+                    marker.className += ' selected';
+                }
+                marker.style.left = coord.displayX + 'px';
+                marker.style.top = coord.displayY + 'px';
+                marker.onclick = () => selectTerritory(name);
+                
+                const label = document.createElement('div');
+                label.className = 'marker-label';
+                label.textContent = name;
+                marker.appendChild(label);
+                
+                overlay.appendChild(marker);
+            }
+        }
+        
+        // Export coordinates
+        function exportCoordinates() {
+            updateOutput();
+        }
+        
+        function updateOutput() {
+            let goCode = '// Territory center coordinates for image-based map\n';
+            goCode += 'var ImageMapTerritoryCoordinates = map[string]struct {\n';
+            goCode += '    X int\n';
+            goCode += '    Y int\n';
+            goCode += '}{\n';
+            
+            const sortedTerritories = Object.keys(coordinates).sort();
+            sortedTerritories.forEach(name => {
+                const coord = coordinates[name];
+                goCode += `    "${name}": {X: ${coord.x}, Y: ${coord.y}},\n`;
+            });
+            
+            goCode += '}\n';
+            
+            output.textContent = goCode;
+        }
+        
+        function clearCurrent() {
+            if (currentTerritory && coordinates[currentTerritory]) {
+                delete coordinates[currentTerritory];
+                updateMarkers();
+                updateTerritoryList();
+                updateOutput();
+            }
+        }
+        
+        function clearAll() {
+            if (confirm('Clear all coordinates?')) {
+                coordinates = {};
+                updateMarkers();
+                updateTerritoryList();
+                updateOutput();
+            }
+        }
+        
+        // Load any existing coordinates (you can paste them here)
+        const existingCoords = {};
+        
+        // Apply existing coordinates
+        for (const [name, coord] of Object.entries(existingCoords)) {
+            if (territories.includes(name)) {
+                coordinates[name] = {
+                    x: coord.x,
+                    y: coord.y,
+                    displayX: coord.x / scaleFactor,
+                    displayY: coord.y / scaleFactor
+                };
+            }
+        }
+        
+        updateMarkers();
+        updateTerritoryList();
+    </script>
+</body>
+</html>

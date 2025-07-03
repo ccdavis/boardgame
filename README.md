@@ -10,7 +10,22 @@ Next steps:
 1. Use "pybind11" to produce a module importable by Python that exports the GameStorate struct type.
 2. Make bindings for the Game and Piece  classes in addition to the basic GameStorage struct type, so that basic game types don't need to be redefined in Python.
 3. Make an executible that embeds the Python interpreter and uses the bindings from 1,2 so that we have a program that loads games scripted in Python.
-4. Make a separate GDF to JSON converter so the game definition could be read into Ruby or Crystal or whatever language and used as the basis for an implementation of the game, without needing to rewrite the parser from scratch.
+4. ~~Make a separate GDF to JSON converter so the game definition could be read into Ruby or Crystal or whatever language and used as the basis for an implementation of the game, without needing to rewrite the parser from scratch.~~ ✓ DONE - See Go implementation
+
+## Go Implementation
+
+A complete Go implementation is available in the `Go/` directory with the following features:
+
+- **GDF Parser**: Full recursive descent parser for the GDF format
+- **JSON Converter**: Converts GDF files to JSON (completing goal #4 above)
+- **Game Engine**: ECS-based game state management
+- **Persistence**: Save/load game states to/from JSON
+- **Web Visualization**: Interactive browser-based map display with multiple views:
+  - Basic map view with simple circles and rectangles
+  - Enhanced Axis & Allies style map with hexagonal territories
+  - Realistic world map view with actual continent shapes
+
+See `Go/README.md` for detailed usage instructions.
 
 -------------------------------------------------
 
