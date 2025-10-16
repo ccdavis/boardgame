@@ -329,10 +329,16 @@ func (t *Terminal) processCombatMoveCommand(parts []string) error {
 
 		err = t.Controller.PlanMove(pieceID, from, to)
 		if err != nil {
-			return err
+			// Provide helpful context with the error
+			piece, exists := t.Controller.Game.Pieces[pieceID]
+			if exists {
+				return fmt.Errorf("cannot move %s (ID:%d) from %s to %s: %v", piece.Name, pieceID, from, to, err)
+			}
+			return fmt.Errorf("move failed: %v", err)
 		}
 
-		fmt.Printf("Planned move: piece %d from %s to %s\n", pieceID, from, to)
+		piece := t.Controller.Game.Pieces[pieceID]
+		fmt.Printf("✓ Planned move: %s (ID:%d) from %s to %s\n", piece.Name, pieceID, from, to)
 		return nil
 
 	case "attack":
@@ -514,10 +520,16 @@ func (t *Terminal) processNoncombatMoveCommand(parts []string) error {
 
 		err = t.Controller.PlanMove(pieceID, from, to)
 		if err != nil {
-			return err
+			// Provide helpful context with the error
+			piece, exists := t.Controller.Game.Pieces[pieceID]
+			if exists {
+				return fmt.Errorf("cannot move %s (ID:%d) from %s to %s: %v\nHint: Noncombat moves cannot enter enemy territories", piece.Name, pieceID, from, to, err)
+			}
+			return fmt.Errorf("move failed: %v", err)
 		}
 
-		fmt.Printf("Planned noncombat move: piece %d from %s to %s\n", pieceID, from, to)
+		piece := t.Controller.Game.Pieces[pieceID]
+		fmt.Printf("✓ Planned noncombat move: %s (ID:%d) from %s to %s\n", piece.Name, pieceID, from, to)
 		return nil
 
 	case "load":
@@ -1083,6 +1095,78 @@ func (t *Terminal) displayTerritoryWithLetterIDs(territoryName string) (map[stri
 	return nil, nil
 }
 
+// displayReachableTerritoriesForPiece shows only territories a specific piece can reach
+func (t *Terminal) displayReachableTerritoriesForPiece(pieceID int, fromTerritory string) (map[string]string, error) {
+	piece, exists := t.Controller.Game.Pieces[pieceID]
+	if !exists {
+		return nil, fmt.Errorf("piece %d not found", pieceID)
+	}
+
+	// Get reachable territories using the game's pathfinding
+	reachable, err := game.GetReachableTerritories(t.Controller.Game, pieceID, fromTerritory)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(reachable) == 0 {
+		return make(map[string]string), nil
+	}
+
+	fmt.Printf("\n=== Destinations for %s (Movement: %d) ===\n", piece.Name, piece.Movement)
+
+	// Sort territories alphabetically
+	sort.Slice(reachable, func(i, j int) bool {
+		return reachable[i].Name < reachable[j].Name
+	})
+
+	// Create letter map
+	connectionMap := make(map[string]string)
+	letters := make([]string, 0, len(reachable))
+
+	for i, territory := range reachable {
+		letter := string(rune('A' + i))
+		connectionMap[letter] = territory.Name
+		letters = append(letters, letter)
+	}
+
+	// Get current player for context
+	player, _ := t.Controller.GetCurrentPlayer()
+	currentPhase := t.Controller.Game.CurrentPhase
+
+	// Display with helpful annotations
+	fmt.Println("\nReachable territories:")
+	for _, letter := range letters {
+		name := connectionMap[letter]
+		territory := t.Controller.Game.Board[name]
+		owner := territory.Owner.Name
+
+		// Add helpful context about the territory
+		annotation := ""
+		if owner != player.Name {
+			pieces := t.Controller.Game.GetPiecesInTerritory(name)
+			if len(pieces) > 0 {
+				if currentPhase == models.CombatMovePhase {
+					annotation = " [ATTACK]"
+				} else {
+					annotation = " [BLOCKED - has enemy units]"
+				}
+			} else {
+				if currentPhase == models.CombatMovePhase {
+					annotation = " [empty, can capture]"
+				} else {
+					annotation = " [empty neutral]"
+				}
+			}
+		} else {
+			annotation = " [friendly]"
+		}
+
+		fmt.Printf("  %s. %s (Owner: %s)%s\n", letter, name, owner, annotation)
+	}
+
+	return connectionMap, nil
+}
+
 // promptInteractiveMove guides the player through an interactive move selection
 func (t *Terminal) promptInteractiveMove() error {
 	player, err := t.Controller.GetCurrentPlayer()
@@ -1161,14 +1245,15 @@ func (t *Terminal) promptInteractiveMove() error {
 		return fmt.Errorf("piece %d not found", pieceID)
 	}
 
-	// Step 3: Show destination options with letter IDs
-	connectionMap, err := t.displayTerritoryWithLetterIDs(fromTerritory.Name)
+	// Step 3: Show reachable destination options for this piece
+	connectionMap, err := t.displayReachableTerritoriesForPiece(pieceID, fromTerritory.Name)
 	if err != nil {
 		return err
 	}
 
 	if len(connectionMap) == 0 {
-		fmt.Println("No connected territories")
+		fmt.Printf("No reachable territories for %s (movement: %d)\n", piece.Name, piece.Movement)
+		fmt.Println("Hint: Enemies may be blocking the path, or terrain may be incompatible")
 		return nil
 	}
 

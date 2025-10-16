@@ -3,6 +3,7 @@ package game
 import (
 	"boardgame/models"
 	"fmt"
+	"math"
 	"math/rand"
 	"time"
 )
@@ -671,8 +672,18 @@ func ResolveAmphibiousAssault(
 	return result, nil
 }
 
+// RetreatDecider is a callback function that determines if the attacker should retreat
+// It receives: initialAttackers, currentAttackers, initialDefenders, currentDefenders, currentRound
+// Returns true if the attacker should retreat
+type RetreatDecider func(int, int, int, int, int) bool
+
 // ResolveCombat executes a complete battle until one side wins or retreats
 func ResolveCombat(battle *Battle, diceRoller *DiceRoller, maxRounds int) (*BattleResult, error) {
+	return ResolveCombatWithRetreat(battle, diceRoller, maxRounds, nil)
+}
+
+// ResolveCombatWithRetreat executes a complete battle with optional retreat decision callback
+func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds int, retreatDecider RetreatDecider) (*BattleResult, error) {
 	if diceRoller == nil {
 		diceRoller = NewDiceRoller()
 	}
@@ -691,6 +702,9 @@ func ResolveCombat(battle *Battle, diceRoller *DiceRoller, maxRounds int) (*Batt
 	defenders := make([]*models.Piece, len(battle.Defenders))
 	copy(attackers, battle.Attackers)
 	copy(defenders, battle.Defenders)
+
+	initialAttackerCount := len(attackers)
+	initialDefenderCount := len(defenders)
 
 	// Store original attackers for cleanup
 	originalAttackers := make([]*models.Piece, len(battle.Attackers))
@@ -737,6 +751,14 @@ func ResolveCombat(battle *Battle, diceRoller *DiceRoller, maxRounds int) (*Batt
 		if len(defenders) == 0 {
 			result.AttackerWins = true
 			break
+		}
+
+		// Check if attacker wants to retreat (after first round)
+		if result.Rounds > 0 && retreatDecider != nil {
+			if retreatDecider(initialAttackerCount, len(attackers), initialDefenderCount, len(defenders), result.Rounds) {
+				result.AttackerRetreated = true
+				break
+			}
 		}
 
 		// Execute one combat round
@@ -820,4 +842,95 @@ func (b *Battle) String() string {
 		b.Type, b.Location,
 		b.AttackerID, len(b.Attackers), b.GetTotalAttackPower(),
 		b.DefenderID, len(b.Defenders), b.GetTotalDefensePower())
+}
+
+// EstimateAttackSuccess estimates the probability of attacker winning
+// Returns a value between 0.0 and 1.0
+func EstimateAttackSuccess(attackers []*models.Piece, defenders []*models.Piece) float64 {
+	attackPower := 0
+	defendPower := 0
+
+	// Calculate total attack power
+	for _, unit := range attackers {
+		attackPower += int(unit.Attack)
+	}
+
+	// Calculate total defense power
+	for _, unit := range defenders {
+		defendPower += int(unit.Defend)
+	}
+
+	// Simple heuristic: compare power ratios
+	// This is a rough estimate, actual combat involves dice rolls
+	if defendPower == 0 {
+		return 1.0 // Guaranteed win if no defenders
+	}
+
+	ratio := float64(attackPower) / float64(defendPower)
+
+	// Convert ratio to probability estimate
+	// ratio < 0.5: very unlikely to win
+	// ratio = 1.0: even match, ~50% chance
+	// ratio > 2.0: very likely to win
+	if ratio < 0.5 {
+		return 0.1 + (ratio * 0.3) // 10-25% chance
+	} else if ratio < 1.0 {
+		return 0.25 + (ratio-0.5)*0.5 // 25-50% chance
+	} else if ratio < 2.0 {
+		return 0.5 + (ratio-1.0)*0.35 // 50-85% chance
+	} else {
+		return 0.85 + math.Min((ratio-2.0)*0.05, 0.14) // 85-99% chance
+	}
+}
+
+// ShouldAttackerRetreat determines if the attacker should retreat based on casualties
+// Returns true if the attacker is taking disproportionate losses
+func ShouldAttackerRetreat(initialAttackers, currentAttackers, initialDefenders, currentDefenders int, round int) bool {
+	// Don't retreat in the first round
+	if round < 2 {
+		return false
+	}
+
+	attackerLosses := initialAttackers - currentAttackers
+	defenderLosses := initialDefenders - currentDefenders
+
+	// Retreat if we've lost everything
+	if currentAttackers == 0 {
+		return false // Can't retreat, we're dead
+	}
+
+	// Retreat if we've lost more than 70% of our forces and defenders still have >50%
+	attackerLossRatio := float64(attackerLosses) / float64(initialAttackers)
+	defenderLossRatio := float64(defenderLosses) / float64(initialDefenders)
+
+	if attackerLossRatio > 0.7 && defenderLossRatio < 0.5 {
+		return true
+	}
+
+	// Retreat if we're trading unfavorably (losing 2+ units for every 1 defender killed)
+	if defenderLosses > 0 {
+		lossRatio := float64(attackerLosses) / float64(defenderLosses)
+		if lossRatio >= 2.0 && currentAttackers < currentDefenders {
+			return true
+		}
+	}
+
+	// Retreat if we're outnumbered 3:1 or more after losses
+	if currentDefenders >= currentAttackers*3 {
+		return true
+	}
+
+	return false
+}
+
+// CalculateTerritoryValue estimates the strategic value of a territory for attack decision
+func CalculateTerritoryValue(territory *models.Territory, isVictoryCity bool) int {
+	value := territory.Production
+
+	// Victory cities are worth much more
+	if isVictoryCity {
+		value += 5
+	}
+
+	return value
 }

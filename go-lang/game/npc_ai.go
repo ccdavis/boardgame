@@ -89,10 +89,35 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	budget := player.IPCs * 8 / 10
 	spent := 0
 
+	purchases := make(map[string]int)
+
+	// Check if we should buy a factory first
+	// Only consider if we have enough IPCs and a good territory without a factory
+	factoryTemplate, hasFactory := game.GlobalPieceTemplates["factory"]
+	if !hasFactory {
+		// Try alternative name
+		factoryTemplate, hasFactory = game.GlobalPieceTemplates["industrial_complex"]
+	}
+
+	if hasFactory && player.IPCs >= int(factoryTemplate.Cost)+20 {
+		// Find high-value territories without factories
+		bestTerritory := npc.findBestTerritoryForFactory(game, player)
+		if bestTerritory != nil && bestTerritory.Production >= 3 {
+			// Buy one factory if we can afford it and still have money for units
+			factoryName := factoryTemplate.Name
+			if factoryName == "" {
+				factoryName = "factory" // default
+			}
+			err := controller.PurchaseUnit(factoryName, 1)
+			if err == nil {
+				spent += int(factoryTemplate.Cost)
+				purchases[factoryName]++
+			}
+		}
+	}
+
 	// Priority order: infantry (cheap), armor (strong), fighters (versatile)
 	unitPriorities := []string{"infantry", "armor", "fighter"}
-
-	purchases := make(map[string]int)
 
 	for spent < budget {
 		// Pick a unit type to buy
@@ -143,17 +168,96 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 	// Find enemy territories adjacent to our territories
 	targets := npc.findAttackTargets(game, player)
 
+	// Evaluate each potential attack
 	movesMade := 0
+	attacksPlanned := 0
 	for _, target := range targets {
 		// Find our adjacent territories that can attack this target
 		attackers := npc.findAttackersFor(game, player, target)
 
-		// Move some units to attack (don't leave territories completely empty)
+		// Collect all available attacking pieces
+		var allAttackers []*models.Piece
+		for _, pieces := range attackers {
+			allAttackers = append(allAttackers, pieces...)
+		}
+
+		if len(allAttackers) == 0 {
+			continue
+		}
+
+		// Get defenders
+		defenders := game.GetPiecesInTerritory(target.Name)
+
+		// Estimate success probability
+		successProb := EstimateAttackSuccess(allAttackers, defenders)
+
+		// Calculate territory value
+		territoryValue := CalculateTerritoryValue(target, target.IsVictoryCity)
+
+		// Decision logic based on difficulty and situation
+		shouldAttack := false
+		minProbability := 0.6 // Default: need 60% success chance
+
+		// Adjust threshold based on difficulty
+		if npc.Difficulty == "aggressive" {
+			minProbability = 0.4 // More willing to take risks
+		} else if npc.Difficulty == "simple" {
+			minProbability = 0.7 // More conservative
+		}
+
+		// High-value targets (victory cities, high production) are worth more risk
+		if territoryValue >= 5 {
+			minProbability -= 0.15
+		}
+
+		// If we're losing badly, be more desperate
+		playerTerritoryCount := len(player.Territories)
+		if playerTerritoryCount < 5 {
+			minProbability -= 0.2 // More desperate when losing
+		}
+
+		shouldAttack = successProb >= minProbability
+
+		if !shouldAttack {
+			continue // Skip this target
+		}
+
+		// Move units to attack (don't leave territories completely empty or vulnerable)
 		for territoryName, pieces := range attackers {
-			// Move up to half the pieces from this territory
-			numToMove := len(pieces) / 2
-			if numToMove == 0 && len(pieces) > 0 {
-				numToMove = 1 // Move at least one if we have any
+			sourceTerritory := game.Board[territoryName]
+
+			// Calculate how many to move based on success probability
+			percentToMove := 0.5 // Default: move half
+			if successProb < 0.7 {
+				percentToMove = 0.7 // Move more if uncertain
+			}
+			if successProb > 0.85 {
+				percentToMove = 0.4 // Move less if very confident
+			}
+
+			numToMove := int(float64(len(pieces)) * percentToMove)
+			if numToMove == 0 && len(pieces) > 0 && successProb >= 0.5 {
+				numToMove = 1 // Move at least one if viable
+			}
+
+			// IMPORTANT: Check if moving these units would leave the source territory vulnerable
+			if npc.wouldLeaveTerritoryVulnerable(game, sourceTerritory, numToMove, player) {
+				// Reduce the number of units to move
+				numToMove = numToMove / 2
+				if numToMove == 0 {
+					continue // Don't move any units from this vulnerable territory
+				}
+			}
+
+			// Extra caution for our own victory cities - never leave them undefended
+			if sourceTerritory.IsVictoryCity {
+				// Keep at least 3 units in victory cities
+				if len(pieces)-numToMove < 3 {
+					numToMove = len(pieces) - 3
+					if numToMove < 0 {
+						numToMove = 0
+					}
+				}
 			}
 
 			for i := 0; i < numToMove && i < len(pieces); i++ {
@@ -166,8 +270,10 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 			}
 		}
 
+		attacksPlanned++
+
 		// Limit number of attacks to keep things manageable
-		if movesMade >= 5 {
+		if attacksPlanned >= 5 {
 			break
 		}
 	}
@@ -194,17 +300,42 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 	roller := NewDiceRoller()
 	battlesResolved := 0
 
-	// Resolve all pending battles
+	// Resolve all pending battles with retreat logic
 	for territoryName := range controller.PendingBattles {
 		transcript.LogBattleStart(territoryName)
 
-		result, err := controller.ResolveBattle(territoryName, roller)
+		// Create retreat decider based on NPC difficulty
+		retreatDecider := func(initialAttackers, currentAttackers, initialDefenders, currentDefenders, round int) bool {
+			// Use the retreat evaluation logic
+			shouldRetreat := ShouldAttackerRetreat(initialAttackers, currentAttackers, initialDefenders, currentDefenders, round)
+
+			// Adjust based on difficulty
+			if npc.Difficulty == "aggressive" {
+				// Aggressive NPCs are less likely to retreat
+				// Only retreat if losses are extreme (>80% casualties and still losing)
+				attackerLossRatio := float64(initialAttackers-currentAttackers) / float64(initialAttackers)
+				return attackerLossRatio > 0.8 && currentDefenders > currentAttackers
+			} else if npc.Difficulty == "simple" {
+				// Simple NPCs retreat more readily
+				return shouldRetreat
+			}
+
+			// Normal difficulty
+			return shouldRetreat
+		}
+
+		result, err := controller.ResolveBattleWithRetreat(territoryName, roller, retreatDecider)
 		if err != nil {
 			transcript.LogAction(player.Name, fmt.Sprintf("Battle in %s failed: %v", territoryName, err))
 			continue
 		}
 
 		battlesResolved++
+
+		if result.AttackerRetreated {
+			transcript.LogAction(player.Name, fmt.Sprintf("Retreated from battle in %s", territoryName))
+		}
+
 		transcript.LogBattleResult(territoryName, result)
 	}
 
@@ -224,51 +355,169 @@ func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcrip
 
 	movesMade := 0
 
-	// Simple strategy: move units from safe territories to border territories
-	borderTerritories := npc.findBorderTerritories(game, player)
+	// Identify strategic targets (victory cities)
+	strategicTargets := npc.identifyStrategicTargets(game, player)
+
+	// Find territories that need reinforcement
+	threatenedTerritories := make([]*models.Territory, 0)
+	for _, territory := range player.Territories {
+		threat := npc.evaluateTerritoryThreat(game, territory, player)
+		if threat > 0 {
+			// High-value or threatened territories need reinforcement
+			if territory.IsVictoryCity || territory.Production >= 3 || threat > 5 {
+				threatenedTerritories = append(threatenedTerritories, territory)
+			}
+		}
+	}
+
+	// Strategy:
+	// 1. First priority: defend threatened high-value territories
+	// 2. Second priority: position units to attack victory cities
+	// 3. Third priority: general border consolidation
+
 	safeTerritories := npc.findSafeTerritories(game, player)
 
-	for _, safeTerritory := range safeTerritories {
-		pieces := game.GetPiecesInTerritory(safeTerritory.Name)
-
-		// Don't leave territories completely empty
-		if len(pieces) <= 2 {
-			continue
+	// PRIORITY 1: Reinforce threatened territories
+	for _, threatened := range threatenedTerritories {
+		if movesMade >= 8 {
+			break
 		}
 
-		// Move half the pieces to a nearby border territory
-		numToMove := len(pieces) / 3
-		if numToMove > 3 {
-			numToMove = 3 // Don't move too many at once
-		}
+		for _, safe := range safeTerritories {
+			pieces := game.GetPiecesInTerritory(safe.Name)
 
-		// Find nearest border territory
-		for _, borderTerritory := range borderTerritories {
-			// Check if connected
-			connected := false
-			for _, neighbor := range safeTerritory.ConnectedTo {
-				if neighbor == borderTerritory {
-					connected = true
-					break
+			if len(pieces) <= 2 {
+				continue // Don't leave empty
+			}
+
+			// Calculate safe number to move
+			numToMove := len(pieces) / 3
+			if numToMove > 2 {
+				numToMove = 2
+			}
+
+			// Check if we'd leave this territory vulnerable
+			if npc.wouldLeaveTerritoryVulnerable(game, safe, numToMove, player) {
+				continue // Don't weaken this territory
+			}
+
+			// Try to move units to threatened territory
+			moved := 0
+			for i := 0; i < numToMove && i < len(pieces); i++ {
+				pieceID := findPieceID(game, pieces[i])
+				err := controller.PlanMove(pieceID, safe.Name, threatened.Name)
+				if err == nil {
+					transcript.LogMove(player.Name, pieces[i].Name, safe.Name, threatened.Name, "noncombat")
+					movesMade++
+					moved++
 				}
 			}
 
-			if connected {
-				// Move some pieces
+			if moved > 0 {
+				break // Reinforced this threatened territory
+			}
+		}
+	}
+
+	// PRIORITY 2: Position units near victory cities for future attacks
+	if len(strategicTargets) > 0 && movesMade < 10 {
+		// For each strategic target, find staging territories (adjacent friendly territories)
+		for _, target := range strategicTargets {
+			if movesMade >= 10 {
+				break
+			}
+
+			// Find friendly territories adjacent to the target
+			stagingTerritories := make([]*models.Territory, 0)
+			for _, neighbor := range target.ConnectedTo {
+				if neighbor.Owner == player {
+					stagingTerritories = append(stagingTerritories, neighbor)
+				}
+			}
+
+			if len(stagingTerritories) == 0 {
+				continue // Can't stage near this target
+			}
+
+			// Move units toward staging territories
+			for _, safe := range safeTerritories {
+				if movesMade >= 10 {
+					break
+				}
+
+				pieces := game.GetPiecesInTerritory(safe.Name)
+
+				if len(pieces) <= 2 {
+					continue
+				}
+
+				// Find nearest staging territory
+				nearestStaging := stagingTerritories[0]
+				// Try to move units there
+				numToMove := len(pieces) / 4 // Move fewer when positioning
+				if numToMove < 1 && len(pieces) > 3 {
+					numToMove = 1
+				}
+
+				// Check defensive vulnerability
+				if npc.wouldLeaveTerritoryVulnerable(game, safe, numToMove, player) {
+					continue
+				}
+
+				for i := 0; i < numToMove && i < len(pieces); i++ {
+					pieceID := findPieceID(game, pieces[i])
+					err := controller.PlanMove(pieceID, safe.Name, nearestStaging.Name)
+					if err == nil {
+						transcript.LogMove(player.Name, pieces[i].Name, safe.Name, nearestStaging.Name, "noncombat")
+						movesMade++
+					}
+				}
+			}
+		}
+	}
+
+	// PRIORITY 3: General border consolidation (if we haven't moved many units yet)
+	if movesMade < 5 {
+		borderTerritories := npc.findBorderTerritories(game, player)
+
+		for _, safeTerritory := range safeTerritories {
+			if movesMade >= 8 {
+				break
+			}
+
+			pieces := game.GetPiecesInTerritory(safeTerritory.Name)
+
+			if len(pieces) <= 2 {
+				continue
+			}
+
+			numToMove := len(pieces) / 3
+			if numToMove > 2 {
+				numToMove = 2
+			}
+
+			// Check defensive vulnerability
+			if npc.wouldLeaveTerritoryVulnerable(game, safeTerritory, numToMove, player) {
+				continue
+			}
+
+			// Find nearest border territory
+			for _, borderTerritory := range borderTerritories {
+				moved := 0
 				for i := 0; i < numToMove && i < len(pieces); i++ {
 					pieceID := findPieceID(game, pieces[i])
 					err := controller.PlanMove(pieceID, safeTerritory.Name, borderTerritory.Name)
 					if err == nil {
 						transcript.LogMove(player.Name, pieces[i].Name, safeTerritory.Name, borderTerritory.Name, "noncombat")
 						movesMade++
+						moved++
 					}
 				}
-				break // Found a target for this safe territory
-			}
-		}
 
-		if movesMade >= 5 {
-			break
+				if moved > 0 {
+					break
+				}
+			}
 		}
 	}
 
@@ -292,7 +541,7 @@ func (npc *NPCAIPlayer) MobilizePhase(controller *GameController, transcript *Ga
 
 	transcript.LogPhaseStart(player.Name, models.MobilizePhase)
 
-	// Find all territories with industrial complexes
+	// Find all territories with industrial complexes (called "factory" in aaa.gdf)
 	icTerritories := make([]*models.Territory, 0)
 	for _, territory := range game.Board {
 		if territory.Owner != player {
@@ -301,7 +550,8 @@ func (npc *NPCAIPlayer) MobilizePhase(controller *GameController, transcript *Ga
 
 		for _, pieceID := range territory.Pieces {
 			piece := game.Pieces[pieceID]
-			if piece.Name == "industrial_complex" {
+			// Check for both "factory" (from aaa.gdf) and "industrial_complex" (alternative name)
+			if piece.Name == "factory" || piece.Name == "industrial_complex" {
 				icTerritories = append(icTerritories, territory)
 				break
 			}
@@ -369,24 +619,73 @@ func (npc *NPCAIPlayer) CollectIncomePhase(controller *GameController, transcrip
 }
 
 // findAttackTargets finds enemy territories that are adjacent to our territories
+// Prioritizes victory cities and high-value territories
 func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Player) []*models.Territory {
-	targets := make([]*models.Territory, 0)
+	type targetScore struct {
+		territory *models.Territory
+		score     int
+	}
+
+	targetScores := make([]targetScore, 0)
 	seen := make(map[string]bool)
 
 	for _, ourTerritory := range player.Territories {
 		for _, neighbor := range ourTerritory.ConnectedTo {
 			if neighbor.Owner != player && !seen[neighbor.Name] {
-				// Enemy or neutral territory
-				targets = append(targets, neighbor)
+				// Rulebook page 14: "At no time can an Allied power attack another Allied power,
+				// or an Axis power attack another Axis power"
+				// Skip allied territories - only target true enemies or neutrals
+				if areAllies(player, neighbor.Owner) {
+					continue // Skip allies
+				}
+
+				// Calculate strategic score
+				score := neighbor.Production
+
+				// Victory cities are MUCH more valuable
+				if neighbor.IsVictoryCity {
+					score += 15 // Massive bonus for victory cities
+				}
+
+				// Bonus for territories that connect to more of our territories (easier to attack/defend)
+				connectivityBonus := 0
+				for _, connectedTo := range neighbor.ConnectedTo {
+					if connectedTo.Owner == player {
+						connectivityBonus++
+					}
+				}
+				score += connectivityBonus
+
+				// Penalty for heavily defended territories (we'll still consider them but lower priority)
+				defenders := game.GetPiecesInTerritory(neighbor.Name)
+				defenseStrength := 0
+				for _, piece := range defenders {
+					defenseStrength += int(piece.Defend)
+				}
+				// Reduce score slightly for heavily defended territories
+				if defenseStrength > 10 {
+					score -= 2
+				}
+
+				targetScores = append(targetScores, targetScore{
+					territory: neighbor,
+					score:     score,
+				})
 				seen[neighbor.Name] = true
 			}
 		}
 	}
 
-	// Sort by value (prefer higher production territories)
-	sort.Slice(targets, func(i, j int) bool {
-		return targets[i].Production > targets[j].Production
+	// Sort by score (highest first)
+	sort.Slice(targetScores, func(i, j int) bool {
+		return targetScores[i].score > targetScores[j].score
 	})
+
+	// Extract territories in priority order
+	targets := make([]*models.Territory, len(targetScores))
+	for i, ts := range targetScores {
+		targets[i] = ts.territory
+	}
 
 	return targets
 }
@@ -410,7 +709,7 @@ func (npc *NPCAIPlayer) findAttackersFor(game *models.Game, player *models.Playe
 			// Filter out immobile pieces and industrial complexes
 			attackingPieces := make([]*models.Piece, 0)
 			for _, piece := range pieces {
-				if piece.Movement > 0 && piece.Name != "industrial_complex" && piece.Name != "AAA" {
+				if piece.Movement > 0 && piece.Name != "factory" && piece.Name != "industrial_complex" && piece.Name != "AAA" {
 					attackingPieces = append(attackingPieces, piece)
 				}
 			}
@@ -474,4 +773,181 @@ func findPieceID(game *models.Game, piece *models.Piece) int {
 		}
 	}
 	return -1
+}
+
+// findBestTerritoryForFactory finds the best territory to build a new factory
+// Returns nil if no suitable territory is found
+func (npc *NPCAIPlayer) findBestTerritoryForFactory(game *models.Game, player *models.Player) *models.Territory {
+	var bestTerritory *models.Territory
+	highestValue := 0
+
+	for _, territory := range player.Territories {
+		// Territory must have production value of at least 1 (per rulebook page 21)
+		if territory.Production < 1 {
+			continue
+		}
+
+		// Check if territory already has a factory
+		hasFactory := false
+		for _, pieceID := range territory.Pieces {
+			piece := game.Pieces[pieceID]
+			if piece.Name == "factory" || piece.Name == "industrial_complex" {
+				hasFactory = true
+				break
+			}
+		}
+
+		if hasFactory {
+			continue
+		}
+
+		// Prefer territories with higher production values
+		if territory.Production > highestValue {
+			highestValue = territory.Production
+			bestTerritory = territory
+		}
+	}
+
+	return bestTerritory
+}
+
+// findNearestVictoryCity finds the nearest enemy or neutral victory city
+// Returns the territory and distance, or nil if none found
+func (npc *NPCAIPlayer) findNearestVictoryCity(game *models.Game, fromTerritory *models.Territory, player *models.Player) (*models.Territory, int) {
+	// BFS to find nearest victory city
+	type node struct {
+		territory *models.Territory
+		distance  int
+	}
+
+	visited := make(map[string]bool)
+	queue := []node{{fromTerritory, 0}}
+	visited[fromTerritory.Name] = true
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		// Check if this is an enemy victory city
+		if current.territory.IsVictoryCity && current.territory.Owner != player && current.distance > 0 {
+			return current.territory, current.distance
+		}
+
+		// Explore neighbors
+		for _, neighbor := range current.territory.ConnectedTo {
+			if !visited[neighbor.Name] {
+				visited[neighbor.Name] = true
+				queue = append(queue, node{neighbor, current.distance + 1})
+			}
+		}
+	}
+
+	return nil, 0
+}
+
+// evaluateTerritoryThreat evaluates if a territory is under threat from enemy forces
+// Returns a threat score (0 = safe, higher = more threatened)
+func (npc *NPCAIPlayer) evaluateTerritoryThreat(game *models.Game, territory *models.Territory, player *models.Player) int {
+	threatScore := 0
+	friendlyPieces := game.GetPiecesInTerritory(territory.Name)
+
+	// Check all adjacent territories for enemy forces
+	for _, neighbor := range territory.ConnectedTo {
+		if neighbor.Owner == player || areAllies(player, neighbor.Owner) {
+			continue // Not a threat
+		}
+
+		enemyPieces := game.GetPiecesInTerritory(neighbor.Name)
+
+		// Count enemy mobile units (those that can attack)
+		enemyAttackPower := 0
+		for _, piece := range enemyPieces {
+			if piece.Movement > 0 && piece.Name != "factory" && piece.Name != "industrial_complex" {
+				enemyAttackPower += int(piece.Attack)
+			}
+		}
+
+		// Count friendly defense power
+		friendlyDefensePower := 0
+		for _, piece := range friendlyPieces {
+			friendlyDefensePower += int(piece.Defend)
+		}
+
+		// If enemy has more attack power than we have defense, it's a threat
+		if enemyAttackPower > friendlyDefensePower {
+			threatScore += (enemyAttackPower - friendlyDefensePower)
+		}
+	}
+
+	return threatScore
+}
+
+// wouldLeaveTerritoryVulnerable checks if removing units would make territory vulnerable
+func (npc *NPCAIPlayer) wouldLeaveTerritoryVulnerable(game *models.Game, territory *models.Territory, numUnitsToRemove int, player *models.Player) bool {
+	currentPieces := game.GetPiecesInTerritory(territory.Name)
+
+	// If we'd be left with 0 or 1 unit, it's vulnerable
+	if len(currentPieces)-numUnitsToRemove <= 1 {
+		// Check if there are adjacent enemies
+		for _, neighbor := range territory.ConnectedTo {
+			if neighbor.Owner != player && !areAllies(player, neighbor.Owner) {
+				enemyPieces := game.GetPiecesInTerritory(neighbor.Name)
+				if len(enemyPieces) > 0 {
+					return true // Vulnerable!
+				}
+			}
+		}
+	}
+
+	// Calculate remaining defense power
+	remainingDefense := 0
+	for i := numUnitsToRemove; i < len(currentPieces); i++ {
+		remainingDefense += int(currentPieces[i].Defend)
+	}
+
+	// Check threat from adjacent territories
+	maxThreat := 0
+	for _, neighbor := range territory.ConnectedTo {
+		if neighbor.Owner == player || areAllies(player, neighbor.Owner) {
+			continue
+		}
+
+		enemyPieces := game.GetPiecesInTerritory(neighbor.Name)
+		enemyAttack := 0
+		for _, piece := range enemyPieces {
+			if piece.Movement > 0 && piece.Name != "factory" && piece.Name != "industrial_complex" {
+				enemyAttack += int(piece.Attack)
+			}
+		}
+
+		if enemyAttack > maxThreat {
+			maxThreat = enemyAttack
+		}
+	}
+
+	// Vulnerable if remaining defense is less than 60% of max threat
+	return remainingDefense < int(float64(maxThreat)*0.6)
+}
+
+// identifyStrategicTargets identifies high-value targets to focus on
+func (npc *NPCAIPlayer) identifyStrategicTargets(game *models.Game, player *models.Player) []*models.Territory {
+	targets := make([]*models.Territory, 0)
+
+	// Find all enemy victory cities
+	for _, territory := range game.Board {
+		if territory.IsVictoryCity && territory.Owner != player && !areAllies(player, territory.Owner) {
+			targets = append(targets, territory)
+		}
+	}
+
+	// Sort by production value (higher first)
+	for i := 0; i < len(targets); i++ {
+		for j := i + 1; j < len(targets); j++ {
+			if targets[i].Production < targets[j].Production {
+				targets[i], targets[j] = targets[j], targets[i]
+			}
+		}
+	}
+
+	return targets
 }

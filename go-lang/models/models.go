@@ -41,6 +41,46 @@ func ParseTerrainType(s string) (TerrainType, error) {
 	}
 }
 
+// NeutralType represents the type of neutral territory
+type NeutralType int
+
+const (
+	NotNeutral NeutralType = iota  // Territory is owned by an active power
+	StrictNeutral                   // Cannot be attacked; attacking any strict neutral makes all hostile
+	ProAlliedNeutral                // Can be peacefully activated by Allied powers during noncombat
+	ProAxisNeutral                  // Can be peacefully activated by Axis powers during noncombat
+)
+
+func (n NeutralType) String() string {
+	switch n {
+	case NotNeutral:
+		return "not_neutral"
+	case StrictNeutral:
+		return "strict_neutral"
+	case ProAlliedNeutral:
+		return "pro_allied"
+	case ProAxisNeutral:
+		return "pro_axis"
+	default:
+		return "unknown"
+	}
+}
+
+func ParseNeutralType(s string) (NeutralType, error) {
+	switch s {
+	case "strict", "strict_neutral":
+		return StrictNeutral, nil
+	case "pro_allied", "pro-allied":
+		return ProAlliedNeutral, nil
+	case "pro_axis", "pro-axis":
+		return ProAxisNeutral, nil
+	case "not_neutral", "":
+		return NotNeutral, nil
+	default:
+		return NotNeutral, fmt.Errorf("unknown neutral type: %s", s)
+	}
+}
+
 // Phase represents the current phase of a player's turn
 type Phase int
 
@@ -106,14 +146,15 @@ type Player struct {
 
 // Territory represents a location on the game board
 type Territory struct {
-	Name        string
-	Owner       *Player
-	Pieces      []int // piece IDs
-	Terrain     TerrainType
-	Production  int
-	ConnectedTo []*Territory
-	IsVictoryCity bool // Whether this territory is a victory city
-	ICDamage      int  // Industrial Complex damage (reduces production capacity)
+	Name          string
+	Owner         *Player
+	Pieces        []int // piece IDs
+	Terrain       TerrainType
+	Production    int
+	ConnectedTo   []*Territory
+	IsVictoryCity bool        // Whether this territory is a victory city
+	ICDamage      int         // Industrial Complex damage (reduces production capacity)
+	NeutralType   NeutralType // Type of neutral territory (if Owner is "Neutral")
 }
 
 // Game is the top-level container for all game state
@@ -176,6 +217,10 @@ func (g *Game) AddTerritory(name string, terrain TerrainType, ownerName string, 
 	}
 
 	owner := g.GetOrCreatePlayer(ownerName)
+
+	// Determine neutral type based on owner and territory name
+	neutralType := determineNeutralType(ownerName, name, terrain)
+
 	territory := &Territory{
 		Name:          name,
 		Owner:         owner,
@@ -185,11 +230,58 @@ func (g *Game) AddTerritory(name string, terrain TerrainType, ownerName string, 
 		ConnectedTo:   make([]*Territory, 0),
 		IsVictoryCity: false,
 		ICDamage:      0,
+		NeutralType:   neutralType,
 	}
 
 	g.Board[name] = territory
 	owner.Territories = append(owner.Territories, territory)
 	return nil
+}
+
+// determineNeutralType determines the default neutral type for a territory
+// based on its owner, name, and terrain type
+func determineNeutralType(ownerName, territoryName string, terrain TerrainType) NeutralType {
+	// Non-neutral territories
+	if ownerName != "Neutral" {
+		return NotNeutral
+	}
+
+	// Water territories are not subject to neutral rules
+	if terrain == Water {
+		return NotNeutral
+	}
+
+	// Strict neutral territories (historically neutral countries)
+	strictNeutrals := map[string]bool{
+		"Turkey":      true,
+		"Afghanistan": true,
+		"Syria":       true,
+		"Mongolia":    true, // Special case, but starts as strict
+	}
+
+	if strictNeutrals[territoryName] {
+		return StrictNeutral
+	}
+
+	// Pro-Allied neutrals (most South American countries, some Middle Eastern)
+	proAlliedNeutrals := map[string]bool{
+		"Colombia":   true,
+		"Venezuela":  true,
+		"Peru":       true,
+		"Chile":      true,
+		"Argentina":  true,
+		"Arabia":     true,
+		"Iraq":       true,
+		"Mozambique": true,
+		"Angola":     true,
+	}
+
+	if proAlliedNeutrals[territoryName] {
+		return ProAlliedNeutral
+	}
+
+	// Default for unknown neutrals: pro-allied (safer default)
+	return ProAlliedNeutral
 }
 
 // ConnectTerritories creates a connection between two territories

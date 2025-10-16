@@ -342,21 +342,29 @@ func (gc *GameController) PlanMove(pieceID int, from, to string) error {
 		return fmt.Errorf("can only move during Combat Move or Noncombat Move phase")
 	}
 
-	// Validate the move
-	err := ValidateMovement(gc.Game, pieceID, from, to, moveType)
+	// Get current player
+	player, err := gc.GetCurrentPlayer()
 	if err != nil {
 		return err
 	}
 
-	// Check if piece can reach territory
-	canReach, err := CanReachTerritory(gc.Game, pieceID, from, to)
+	// Validate the move
+	err = ValidateMovement(gc.Game, pieceID, from, to, moveType)
 	if err != nil {
 		return err
 	}
-	if !canReach {
-		piece := gc.Game.Pieces[pieceID]
-		return fmt.Errorf("piece %s cannot reach %s from %s (movement=%d)",
-			piece.Name, to, from, piece.Movement)
+
+	// Check if piece can reach territory using pathfinding that considers enemy units
+	piece := gc.Game.Pieces[pieceID]
+	distance, _, err := CalculateMovementPathForPiece(gc.Game, piece, from, to, player, moveType)
+	if err != nil {
+		return fmt.Errorf("cannot move %s from %s to %s: %v", piece.Name, from, to, err)
+	}
+
+	// Check if distance is within movement range
+	if distance > int(piece.Movement) {
+		return fmt.Errorf("piece %s cannot reach %s from %s (distance=%d, movement=%d)",
+			piece.Name, to, from, distance, piece.Movement)
 	}
 
 	// Add to movement tracker
@@ -387,6 +395,9 @@ func (gc *GameController) ExecuteCombatMoves() error {
 	// Get all combat moves
 	combatMoves := gc.MoveTracker.GetMovesByType(CombatMove)
 
+	// Track if any strict neutral is being attacked
+	strictNeutralAttacked := false
+
 	// Execute each move
 	for _, move := range combatMoves {
 		err := gc.Game.MovePiece(move.PieceID, move.From, move.To)
@@ -397,6 +408,11 @@ func (gc *GameController) ExecuteCombatMoves() error {
 		// Check if move creates a battle
 		toTerritory := gc.Game.Board[move.To]
 		if toTerritory.Owner.Name != player.Name {
+			// Check if attacking a strict neutral
+			if toTerritory.Owner.Name == "Neutral" && toTerritory.NeutralType == models.StrictNeutral {
+				strictNeutralAttacked = true
+			}
+
 			// Moving into hostile territory - create battle
 			if _, exists := gc.PendingBattles[move.To]; !exists {
 				// Create new battle
@@ -407,6 +423,11 @@ func (gc *GameController) ExecuteCombatMoves() error {
 			gc.PendingBattles[move.To].AttackingPieceIDs = append(
 				gc.PendingBattles[move.To].AttackingPieceIDs, move.PieceID)
 		}
+	}
+
+	// If a strict neutral was attacked, trigger chain reaction
+	if strictNeutralAttacked {
+		gc.TriggerStrictNeutralChainReaction(player)
 	}
 
 	// Clear combat moves from tracker
@@ -425,11 +446,28 @@ func (gc *GameController) ExecuteNoncombatMoves() error {
 		return fmt.Errorf("can only execute noncombat moves during Noncombat Move phase")
 	}
 
+	player, err := gc.GetCurrentPlayer()
+	if err != nil {
+		return err
+	}
+
 	// Get all noncombat moves
 	noncombatMoves := gc.MoveTracker.GetMovesByType(NoncombatMove)
 
 	// Execute each move
 	for _, move := range noncombatMoves {
+		toTerritory := gc.Game.Board[move.To]
+
+		// Check if this is activating a pro-Allied or pro-Axis neutral
+		if toTerritory.Owner.Name == "Neutral" &&
+			(toTerritory.NeutralType == models.ProAlliedNeutral || toTerritory.NeutralType == models.ProAxisNeutral) {
+			// Activate the neutral territory
+			err := gc.ActivateNeutralTerritory(move.To, player.Name)
+			if err != nil {
+				return fmt.Errorf("failed to activate neutral: %v", err)
+			}
+		}
+
 		err := gc.Game.MovePiece(move.PieceID, move.From, move.To)
 		if err != nil {
 			return fmt.Errorf("failed to execute move: %v", err)
@@ -474,6 +512,11 @@ func (gc *GameController) GetPlannedAttacks() []string {
 
 // ResolveBattle resolves a battle in a territory and handles territory capture
 func (gc *GameController) ResolveBattle(territoryName string, diceRoller *DiceRoller) (*BattleResult, error) {
+	return gc.ResolveBattleWithRetreat(territoryName, diceRoller, nil)
+}
+
+// ResolveBattleWithRetreat resolves a battle with optional retreat decision callback
+func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRoller *DiceRoller, retreatDecider RetreatDecider) (*BattleResult, error) {
 	battle, exists := gc.PendingBattles[territoryName]
 	if !exists {
 		return nil, fmt.Errorf("no battle pending in %s", territoryName)
@@ -506,8 +549,8 @@ func (gc *GameController) ResolveBattle(territoryName string, diceRoller *DiceRo
 	battle.Attackers = attackerPieces
 	battle.Defenders = defenderPieces
 
-	// Resolve the combat
-	result, err := ResolveCombat(battle, diceRoller, 100)
+	// Resolve the combat with retreat option
+	result, err := ResolveCombatWithRetreat(battle, diceRoller, 100, retreatDecider)
 	if err != nil {
 		return nil, err
 	}
@@ -520,8 +563,8 @@ func (gc *GameController) ResolveBattle(territoryName string, diceRoller *DiceRo
 		gc.removePieceFromBoard(casualty, territoryName)
 	}
 
-	// Handle territory capture
-	if result.AttackerWins {
+	// Handle territory capture (only if attacker won, not if they retreated)
+	if result.AttackerWins && !result.AttackerRetreated {
 		err = gc.CaptureTerritory(territoryName, attacker.Name)
 		if err != nil {
 			return result, fmt.Errorf("failed to capture territory: %v", err)
@@ -634,4 +677,110 @@ func (gc *GameController) GetTransportCargo(transportID int) ([]int, error) {
 	}
 
 	return transport.Holding, nil
+}
+
+// TriggerStrictNeutralChainReaction converts all strict neutrals to be hostile to the attacker
+// This is triggered when any strict neutral is attacked
+func (gc *GameController) TriggerStrictNeutralChainReaction(attacker *models.Player) {
+	// Determine which side the attacker is on
+	var enemySide string
+	if attacker.Side == "Axis" {
+		enemySide = "Allies"
+	} else {
+		enemySide = "Axis"
+	}
+
+	// Find a major power on the enemy side to give strict neutrals to
+	var enemyPower *models.Player
+	for _, player := range gc.Game.Players {
+		if player.Side == enemySide && player.Name != "Neutral" {
+			// Prefer major powers (USSR, USA, UK, Germany, Japan)
+			if player.Name == "USSR" || player.Name == "USA" || player.Name == "UK" ||
+				player.Name == "Germany" || player.Name == "Japan" {
+				enemyPower = player
+				break
+			}
+		}
+	}
+
+	// If no major power found, use first enemy power found
+	if enemyPower == nil {
+		for _, player := range gc.Game.Players {
+			if player.Side == enemySide && player.Name != "Neutral" {
+				enemyPower = player
+				break
+			}
+		}
+	}
+
+	// If still no enemy power, something's wrong - just return
+	if enemyPower == nil {
+		return
+	}
+
+	// Convert all strict neutrals to hostile (give them to enemy power with infantry)
+	for _, territory := range gc.Game.Board {
+		if territory.Owner.Name == "Neutral" && territory.NeutralType == models.StrictNeutral {
+			// Transfer ownership to enemy power
+			models.ChangeOwnership(territory, enemyPower)
+
+			// Add defending infantry (one per production value, minimum 1)
+			infantryCount := territory.Production
+			if infantryCount < 1 {
+				infantryCount = 1
+			}
+
+			// Only add infantry if the template exists
+			if _, exists := gc.Game.GlobalPieceTemplates["infantry"]; exists {
+				gc.Game.PlacePieces(territory.Name, "infantry", infantryCount)
+			}
+		}
+	}
+}
+
+// ActivateNeutralTerritory peacefully transfers a pro-Allied or pro-Axis neutral
+// to the activating power during noncombat move
+func (gc *GameController) ActivateNeutralTerritory(territoryName, activatorName string) error {
+	territory, exists := gc.Game.Board[territoryName]
+	if !exists {
+		return fmt.Errorf("territory %s not found", territoryName)
+	}
+
+	activator, exists := gc.Game.Players[activatorName]
+	if !exists {
+		return fmt.Errorf("player %s not found", activatorName)
+	}
+
+	// Verify this is a neutral territory that can be activated
+	if territory.Owner.Name != "Neutral" {
+		return fmt.Errorf("territory %s is not neutral", territoryName)
+	}
+
+	if territory.NeutralType != models.ProAlliedNeutral && territory.NeutralType != models.ProAxisNeutral {
+		return fmt.Errorf("territory %s cannot be peacefully activated", territoryName)
+	}
+
+	// Verify the activator has the right side
+	if territory.NeutralType == models.ProAlliedNeutral && activator.Side != "Allies" {
+		return fmt.Errorf("only Allied powers can activate pro-Allied neutrals")
+	}
+	if territory.NeutralType == models.ProAxisNeutral && activator.Side != "Axis" {
+		return fmt.Errorf("only Axis powers can activate pro-Axis neutrals")
+	}
+
+	// Transfer ownership
+	models.ChangeOwnership(territory, activator)
+
+	// Add free infantry (based on production value)
+	infantryCount := territory.Production
+	if infantryCount < 1 {
+		infantryCount = 1
+	}
+
+	// Only add infantry if the template exists
+	if _, exists := gc.Game.GlobalPieceTemplates["infantry"]; exists {
+		gc.Game.PlacePieces(territory.Name, "infantry", infantryCount)
+	}
+
+	return nil
 }

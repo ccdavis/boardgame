@@ -150,15 +150,26 @@ func TestValidateMovementAirUnits(t *testing.T) {
 	}
 }
 
-// TestValidateMovementNotConnected tests error when territories aren't connected
+// TestValidateMovementNotConnected tests that ValidateMovement no longer requires direct connection
+// (since we now support multi-step movement via pathfinding)
 func TestValidateMovementNotConnected(t *testing.T) {
 	game := createMovementTestGame()
 	game.PlacePieces("Moscow", "infantry", 1)
 
-	// Moscow and Finland are not directly connected
+	// Moscow and Finland are not directly connected, but ValidateMovement should still pass
+	// because it only checks basic constraints (terrain, piece exists, etc.)
 	err := ValidateMovement(game, 1, "Moscow", "Finland", CombatMove)
-	if err == nil {
-		t.Error("Expected error: territories not directly connected")
+	if err != nil {
+		t.Errorf("ValidateMovement should not require direct connection: %v", err)
+	}
+
+	// However, CanReachTerritory should return false because infantry (movement=1) can't reach Finland (distance=2)
+	canReach, err := CanReachTerritory(game, 1, "Moscow", "Finland")
+	if err != nil {
+		t.Errorf("CanReachTerritory failed: %v", err)
+	}
+	if canReach {
+		t.Error("Infantry with movement=1 should not be able to reach Finland (distance=2)")
 	}
 }
 
@@ -463,5 +474,80 @@ func TestExecuteMoves(t *testing.T) {
 
 	if len(kareliaPieces) != 2 {
 		t.Errorf("Expected 2 pieces in Karelia after move, got %d", len(kareliaPieces))
+	}
+}
+
+// TestEnemyUnitsBlockPath tests that enemy-occupied territories block pathfinding
+func TestEnemyUnitsBlockPath(t *testing.T) {
+	game := createMovementTestGame()
+
+	// Place USSR infantry in Moscow
+	game.PlacePieces("Moscow", "infantry", 1)
+	ussr := game.Players["USSR"]
+
+	// Place German infantry in Karelia (blocking the path)
+	game.PlacePieces("Karelia", "infantry", 1)
+	germany := game.Players["Germany"]
+	models.ChangeOwnership(game.Board["Karelia"], germany)
+
+	// Try to pathfind from Moscow to Finland
+	// This should fail because Karelia (the only path) is occupied by enemy
+	piece := game.Pieces[1] // USSR infantry
+	_, _, err := CalculateMovementPathForPiece(game, piece, "Moscow", "Finland", ussr, NoncombatMove)
+
+	if err == nil {
+		t.Error("Expected pathfinding to fail when enemy units block the path")
+	}
+}
+
+// TestCombatMoveCanTargetEnemy tests that combat moves can target enemy territories
+func TestCombatMoveCanTargetEnemy(t *testing.T) {
+	game := createMovementTestGame()
+
+	// Place USSR infantry in Moscow
+	game.PlacePieces("Moscow", "armor", 1) // armor has movement=2
+	ussr := game.Players["USSR"]
+
+	// Place German infantry in Karelia (adjacent)
+	game.PlacePieces("Karelia", "infantry", 1)
+	germany := game.Players["Germany"]
+	models.ChangeOwnership(game.Board["Karelia"], germany)
+
+	// Combat move should be able to target Karelia (enemy territory)
+	piece := game.Pieces[1] // USSR armor
+	distance, path, err := CalculateMovementPathForPiece(game, piece, "Moscow", "Karelia", ussr, CombatMove)
+
+	if err != nil {
+		t.Errorf("Combat move should be able to target enemy territory: %v", err)
+	}
+
+	if distance != 1 {
+		t.Errorf("Expected distance 1, got %d", distance)
+	}
+
+	if len(path) != 2 || path[0] != "Moscow" || path[1] != "Karelia" {
+		t.Errorf("Expected path [Moscow, Karelia], got %v", path)
+	}
+}
+
+// TestNoncombatMoveCannotTargetEnemy tests that noncombat moves cannot target enemy territories
+func TestNoncombatMoveCannotTargetEnemy(t *testing.T) {
+	game := createMovementTestGame()
+
+	// Place USSR infantry in Moscow
+	game.PlacePieces("Moscow", "infantry", 1)
+	ussr := game.Players["USSR"]
+
+	// Place German infantry in Karelia
+	game.PlacePieces("Karelia", "infantry", 1)
+	germany := game.Players["Germany"]
+	models.ChangeOwnership(game.Board["Karelia"], germany)
+
+	// Noncombat move should NOT be able to target enemy territory
+	piece := game.Pieces[1] // USSR infantry
+	_, _, err := CalculateMovementPathForPiece(game, piece, "Moscow", "Karelia", ussr, NoncombatMove)
+
+	if err == nil {
+		t.Error("Noncombat move should not be able to target enemy territory")
 	}
 }
