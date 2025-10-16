@@ -294,3 +294,125 @@ func (mt *MovementTracker) ExecuteMoves(game *models.Game) error {
 	}
 	return nil
 }
+
+// ValidateLoad checks if a piece can be loaded onto a transport
+func ValidateLoad(game *models.Game, transportID, pieceID int, currentPlayerName string) error {
+	// Get the pieces
+	transport, exists := game.Pieces[transportID]
+	if !exists {
+		return fmt.Errorf("transport %d not found", transportID)
+	}
+
+	piece, exists := game.Pieces[pieceID]
+	if !exists {
+		return fmt.Errorf("piece %d not found", pieceID)
+	}
+
+	// Find territories where pieces are located
+	var transportTerritory, pieceTerritory *models.Territory
+	for _, territory := range game.Board {
+		for _, id := range territory.Pieces {
+			if id == transportID {
+				transportTerritory = territory
+			}
+			if id == pieceID {
+				pieceTerritory = territory
+			}
+		}
+	}
+
+	if transportTerritory == nil {
+		return fmt.Errorf("transport %d not on board", transportID)
+	}
+	if pieceTerritory == nil {
+		return fmt.Errorf("piece %d not on board", pieceID)
+	}
+
+	// Check if piece is already loaded
+	if game.IsLoaded(pieceID) {
+		return fmt.Errorf("piece %d is already loaded", pieceID)
+	}
+
+	// Check ownership - both must be owned by current player
+	currentPlayer := game.Players[currentPlayerName]
+	if transportTerritory.Owner != currentPlayer {
+		return fmt.Errorf("transport is in enemy territory %s", transportTerritory.Name)
+	}
+	if pieceTerritory.Owner != currentPlayer {
+		return fmt.Errorf("piece is in enemy territory %s", pieceTerritory.Name)
+	}
+
+	// Check if territories are the same or adjacent
+	if transportTerritory != pieceTerritory {
+		// Must be adjacent
+		if !areConnected(pieceTerritory, transportTerritory) {
+			return fmt.Errorf("piece in %s is not adjacent to transport in %s",
+				pieceTerritory.Name, transportTerritory.Name)
+		}
+	}
+
+	// The transport should be in water and piece should be land (for typical A&A rules)
+	if transport.Terrain != models.Water {
+		return fmt.Errorf("%s is not a sea transport", transport.Name)
+	}
+	if piece.Terrain != models.Land {
+		return fmt.Errorf("only land units can be loaded onto transports")
+	}
+
+	return nil
+}
+
+// ValidateUnload checks if a piece can be unloaded from a transport
+func ValidateUnload(game *models.Game, transportID, pieceID int, destinationName string) error {
+	// Check if piece is loaded in this transport
+	actualTransportID := game.GetTransportForPiece(pieceID)
+	if actualTransportID == -1 {
+		return fmt.Errorf("piece %d is not loaded in any transport", pieceID)
+	}
+	if actualTransportID != transportID {
+		return fmt.Errorf("piece %d is not in transport %d", pieceID, transportID)
+	}
+
+	// Get destination territory
+	destination, exists := game.Board[destinationName]
+	if !exists {
+		return fmt.Errorf("destination territory %s not found", destinationName)
+	}
+
+	// Find transport's current location
+	var transportTerritory *models.Territory
+	for _, territory := range game.Board {
+		for _, id := range territory.Pieces {
+			if id == transportID {
+				transportTerritory = territory
+				break
+			}
+		}
+		if transportTerritory != nil {
+			break
+		}
+	}
+
+	if transportTerritory == nil {
+		return fmt.Errorf("transport %d not found on board", transportID)
+	}
+
+	// Destination must be the same as transport location or adjacent
+	if destination != transportTerritory && !areConnected(transportTerritory, destination) {
+		return fmt.Errorf("cannot unload to %s - must be same or adjacent to transport location %s",
+			destinationName, transportTerritory.Name)
+	}
+
+	// Get the piece to check terrain compatibility
+	piece, exists := game.Pieces[pieceID]
+	if !exists {
+		return fmt.Errorf("piece %d not found", pieceID)
+	}
+
+	// Check if piece can move to destination terrain
+	if err := validateTerrain(piece, destination); err != nil {
+		return err
+	}
+
+	return nil
+}

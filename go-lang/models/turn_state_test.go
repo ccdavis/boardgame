@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -253,4 +254,311 @@ func TestTurnProgression(t *testing.T) {
 	if game.CurrentPower != "USSR" {
 		t.Errorf("Expected to wrap back to USSR, got %s", game.CurrentPower)
 	}
+}
+
+// Test StartGame function
+func TestStartGameFunction(t *testing.T) {
+	game := NewGame()
+	game.PlayerOrder = []string{"Germany", "USSR"}
+	game.GetOrCreatePlayer("Germany")
+	game.GetOrCreatePlayer("USSR")
+
+	err := game.StartGame()
+	if err != nil {
+		t.Fatalf("StartGame failed: %v", err)
+	}
+
+	if game.CurrentPower != "Germany" {
+		t.Errorf("Expected Germany to go first, got %s", game.CurrentPower)
+	}
+
+	if game.Turn != 1 {
+		t.Errorf("Expected turn 1, got %d", game.Turn)
+	}
+}
+
+// Test AdvancePhase function
+func TestAdvancePhaseFunction(t *testing.T) {
+	game := NewGame()
+	game.PlayerOrder = []string{"Germany"}
+	game.GetOrCreatePlayer("Germany")
+	game.StartGame()
+
+	err := game.AdvancePhase()
+	if err != nil {
+		t.Fatalf("AdvancePhase failed: %v", err)
+	}
+
+	if game.CurrentPhase != CombatMovePhase {
+		t.Errorf("Expected CombatMovePhase, got %v", game.CurrentPhase)
+	}
+}
+
+// Test PurchaseUnit function
+func TestPurchaseUnitFunction(t *testing.T) {
+	game := NewGame()
+	game.PlayerOrder = []string{"Germany"}
+	player := game.GetOrCreatePlayer("Germany")
+	player.IPCs = 50
+
+	game.AddPieceTemplate("infantry", Land, 1, 1, 2, 3)
+	game.StartGame()
+
+	err := game.PurchaseUnit("Germany", "infantry")
+	if err != nil {
+		t.Fatalf("PurchaseUnit failed: %v", err)
+	}
+
+	if player.IPCs != 47 {
+		t.Errorf("Expected 47 IPCs, got %d", player.IPCs)
+	}
+
+	if len(game.PurchasedUnits["Germany"]) != 1 {
+		t.Errorf("Expected 1 pending unit, got %d", len(game.PurchasedUnits["Germany"]))
+	}
+}
+
+// Test CollectIncome function
+func TestCollectIncomeFunction(t *testing.T) {
+	game := NewGame()
+	game.PlayerOrder = []string{"Germany"}
+	player := game.GetOrCreatePlayer("Germany")
+	player.IPCs = 10
+
+	game.AddTerritory("Berlin", Land, "Germany", 5)
+	game.StartGame()
+
+	// Advance to Collect Income phase
+	for game.CurrentPhase != CollectIncomePhase {
+		game.AdvancePhase()
+	}
+
+	err := game.CollectIncome()
+	if err != nil {
+		t.Fatalf("CollectIncome failed: %v", err)
+	}
+
+	if player.IPCs != 15 {
+		t.Errorf("Expected 15 IPCs (10 + 5), got %d", player.IPCs)
+	}
+}
+
+// Test CaptureCapital function
+func TestCaptureCapital(t *testing.T) {
+	game := NewGame()
+
+	// Create two players
+	germany := game.GetOrCreatePlayer("Germany")
+	germany.Capital = "Berlin"
+	germany.Side = "Axis"
+	germany.IPCs = 50
+
+	ussr := game.GetOrCreatePlayer("USSR")
+	ussr.Capital = "Moscow"
+	ussr.Side = "Allies"
+	ussr.IPCs = 20
+
+	// Add Berlin territory
+	err := game.AddTerritory("Berlin", Land, "Germany", 10)
+	if err != nil {
+		t.Fatalf("Failed to add Berlin: %v", err)
+	}
+
+	// USSR captures Berlin
+	err = game.CaptureCapital("Berlin", "USSR")
+	if err != nil {
+		t.Fatalf("CaptureCapital failed: %v", err)
+	}
+
+	// Check that USSR got Germany's IPCs
+	if ussr.IPCs != 70 {
+		t.Errorf("Expected USSR to have 70 IPCs (20 + 50), got %d", ussr.IPCs)
+	}
+
+	// Check that Germany lost all IPCs
+	if germany.IPCs != 0 {
+		t.Errorf("Expected Germany to have 0 IPCs, got %d", germany.IPCs)
+	}
+
+	// Check that Berlin is now owned by USSR
+	berlin := game.Board["Berlin"]
+	if berlin.Owner != ussr {
+		t.Error("Berlin should be owned by USSR")
+	}
+}
+
+// Test CountVictoryCities function
+func TestCountVictoryCities(t *testing.T) {
+	game := NewGame()
+
+	// Create players
+	germany := game.GetOrCreatePlayer("Germany")
+	germany.Side = "Axis"
+
+	japan := game.GetOrCreatePlayer("Japan")
+	japan.Side = "Axis"
+
+	ussr := game.GetOrCreatePlayer("USSR")
+	ussr.Side = "Allies"
+
+	uk := game.GetOrCreatePlayer("UK")
+	uk.Side = "Allies"
+
+	// Add territories with victory cities
+	game.AddTerritory("Berlin", Land, "Germany", 10)
+	game.Board["Berlin"].IsVictoryCity = true
+
+	game.AddTerritory("Tokyo", Land, "Japan", 8)
+	game.Board["Tokyo"].IsVictoryCity = true
+
+	game.AddTerritory("Moscow", Land, "USSR", 8)
+	game.Board["Moscow"].IsVictoryCity = true
+
+	game.AddTerritory("London", Land, "UK", 8)
+	game.Board["London"].IsVictoryCity = true
+
+	game.AddTerritory("Paris", Land, "Germany", 6) // Axis-controlled Allied VC
+	game.Board["Paris"].IsVictoryCity = true
+
+	// Count victory cities
+	axisVC, alliesVC := game.CountVictoryCities()
+
+	if axisVC != 3 {
+		t.Errorf("Expected Axis to control 3 VCs (Berlin, Tokyo, Paris), got %d", axisVC)
+	}
+
+	if alliesVC != 2 {
+		t.Errorf("Expected Allies to control 2 VCs (Moscow, London), got %d", alliesVC)
+	}
+}
+
+// Test CheckVictoryConditions - No winner yet
+func TestCheckVictoryConditions_NoWinner(t *testing.T) {
+	game := NewGame()
+
+	// Create players
+	germany := game.GetOrCreatePlayer("Germany")
+	germany.Side = "Axis"
+
+	ussr := game.GetOrCreatePlayer("USSR")
+	ussr.Side = "Allies"
+
+	// Add some victory cities but not enough for victory
+	game.AddTerritory("Berlin", Land, "Germany", 10)
+	game.Board["Berlin"].IsVictoryCity = true
+
+	game.AddTerritory("Moscow", Land, "USSR", 8)
+	game.Board["Moscow"].IsVictoryCity = true
+
+	winner, hasWon, desc := game.CheckVictoryConditions()
+
+	if hasWon {
+		t.Errorf("Expected no winner yet, but got winner: %s (%s)", winner, desc)
+	}
+
+	if winner != "" {
+		t.Errorf("Expected empty winner string, got %s", winner)
+	}
+}
+
+// Test CheckVictoryConditions - Axis victory
+func TestCheckVictoryConditions_AxisVictory(t *testing.T) {
+	game := NewGame()
+
+	germany := game.GetOrCreatePlayer("Germany")
+	germany.Side = "Axis"
+
+	// Add 9 victory cities controlled by Axis
+	for i := 1; i <= 9; i++ {
+		name := fmt.Sprintf("VC%d", i)
+		game.AddTerritory(name, Land, "Germany", 5)
+		game.Board[name].IsVictoryCity = true
+	}
+
+	winner, hasWon, desc := game.CheckVictoryConditions()
+
+	if !hasWon {
+		t.Error("Expected Axis to have won")
+	}
+
+	if winner != "Axis" {
+		t.Errorf("Expected Axis to win, got %s", winner)
+	}
+
+	if desc == "" {
+		t.Error("Expected victory description")
+	}
+}
+
+// Test CheckVictoryConditions - Allies victory
+func TestCheckVictoryConditions_AlliesVictory(t *testing.T) {
+	game := NewGame()
+
+	ussr := game.GetOrCreatePlayer("USSR")
+	ussr.Side = "Allies"
+
+	// Add 10 victory cities controlled by Allies
+	for i := 1; i <= 10; i++ {
+		name := fmt.Sprintf("VC%d", i)
+		game.AddTerritory(name, Land, "USSR", 5)
+		game.Board[name].IsVictoryCity = true
+	}
+
+	winner, hasWon, desc := game.CheckVictoryConditions()
+
+	if !hasWon {
+		t.Error("Expected Allies to have won")
+	}
+
+	if winner != "Allies" {
+		t.Errorf("Expected Allies to win, got %s", winner)
+	}
+
+	if desc == "" {
+		t.Error("Expected victory description")
+	}
+}
+
+// Test CheckVictoryConditions - Total victory
+func TestCheckVictoryConditions_TotalVictory(t *testing.T) {
+	game := NewGame()
+
+	germany := game.GetOrCreatePlayer("Germany")
+	germany.Side = "Axis"
+
+	// Add all 13 victory cities controlled by Axis
+	for i := 1; i <= 13; i++ {
+		name := fmt.Sprintf("VC%d", i)
+		game.AddTerritory(name, Land, "Germany", 5)
+		game.Board[name].IsVictoryCity = true
+	}
+
+	winner, hasWon, desc := game.CheckVictoryConditions()
+
+	if !hasWon {
+		t.Error("Expected Axis to have won with total victory")
+	}
+
+	if winner != "Axis" {
+		t.Errorf("Expected Axis to win, got %s", winner)
+	}
+
+	// Should mention "Total Victory"
+	if desc == "" || !contains(desc, "Total Victory") {
+		t.Errorf("Expected 'Total Victory' in description, got: %s", desc)
+	}
+}
+
+// Helper function for string contains check
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || hasSubstring(s, substr)))
+}
+
+func hasSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

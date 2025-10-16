@@ -89,6 +89,7 @@ type Piece struct {
 	Name      string
 	CanCarry  []string
 	Holding   []int // piece IDs
+	Hits      int   // Number of hits taken (for multi-hit units like battleships)
 }
 
 // Player represents a player in the game
@@ -99,6 +100,8 @@ type Player struct {
 	IPCs           int // Industrial Production Certificates (money)
 	Territories    []*Territory
 	PieceTemplates map[string]*Piece
+	Capital        string // Name of capital territory
+	Side           string // "Axis" or "Allies"
 }
 
 // Territory represents a location on the game board

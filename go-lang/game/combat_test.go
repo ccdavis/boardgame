@@ -262,7 +262,7 @@ func TestCombatRound(t *testing.T) {
 		battle.AddDefender(&models.Piece{Name: "infantry", Attack: 1, Defend: 2})
 	}
 
-	attackerHits, defenderHits := roller.CombatRound(battle)
+	attackerHits, defenderHits, surpriseCas := roller.CombatRound(battle)
 
 	// Should have executed round 1
 	if battle.Round != 1 {
@@ -272,6 +272,11 @@ func TestCombatRound(t *testing.T) {
 	// Should have some hit results (may be empty due to randomness)
 	if attackerHits == nil || defenderHits == nil {
 		t.Error("Hit results should not be nil")
+	}
+
+	// Surprise casualties should be empty for land battle
+	if len(surpriseCas) != 0 {
+		t.Error("Land battle should not have surprise casualties")
 	}
 }
 

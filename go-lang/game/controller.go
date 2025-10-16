@@ -576,3 +576,62 @@ func (gc *GameController) removePieceFromBoard(piece *models.Piece, territoryNam
 	// Remove from game
 	delete(gc.Game.Pieces, pieceID)
 }
+
+// LoadUnit loads a unit onto a transport during noncombat move phase
+func (gc *GameController) LoadUnit(transportID, pieceID int) error {
+	// Can only load during noncombat move phase
+	if gc.Game.CurrentPhase != models.NoncombatMovePhase {
+		return fmt.Errorf("can only load units during Noncombat Move phase")
+	}
+
+	player, err := gc.GetCurrentPlayer()
+	if err != nil {
+		return err
+	}
+
+	// Validate the load operation
+	err = ValidateLoad(gc.Game, transportID, pieceID, player.Name)
+	if err != nil {
+		return err
+	}
+
+	// Execute the load
+	err = gc.Game.LoadPiece(transportID, pieceID)
+	if err != nil {
+		return fmt.Errorf("failed to load piece: %v", err)
+	}
+
+	return nil
+}
+
+// UnloadUnit unloads a unit from a transport during noncombat move phase
+func (gc *GameController) UnloadUnit(transportID, pieceID int, destinationName string) error {
+	// Can only unload during noncombat move phase
+	if gc.Game.CurrentPhase != models.NoncombatMovePhase {
+		return fmt.Errorf("can only unload units during Noncombat Move phase")
+	}
+
+	// Validate the unload operation
+	err := ValidateUnload(gc.Game, transportID, pieceID, destinationName)
+	if err != nil {
+		return err
+	}
+
+	// Execute the unload
+	err = gc.Game.UnloadPiece(transportID, pieceID, destinationName)
+	if err != nil {
+		return fmt.Errorf("failed to unload piece: %v", err)
+	}
+
+	return nil
+}
+
+// GetTransportCargo returns the piece IDs held by a transport
+func (gc *GameController) GetTransportCargo(transportID int) ([]int, error) {
+	transport, exists := gc.Game.Pieces[transportID]
+	if !exists {
+		return nil, fmt.Errorf("transport %d not found", transportID)
+	}
+
+	return transport.Holding, nil
+}

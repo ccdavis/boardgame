@@ -520,6 +520,94 @@ func (t *Terminal) processNoncombatMoveCommand(parts []string) error {
 		fmt.Printf("Planned noncombat move: piece %d from %s to %s\n", pieceID, from, to)
 		return nil
 
+	case "load":
+		if len(parts) < 3 {
+			return fmt.Errorf("usage: load <transport-id> <piece-id>")
+		}
+		transportID, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid transport ID: %s", parts[1])
+		}
+		pieceID, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return fmt.Errorf("invalid piece ID: %s", parts[2])
+		}
+
+		err = t.Controller.LoadUnit(transportID, pieceID)
+		if err != nil {
+			return err
+		}
+
+		piece := t.Controller.Game.Pieces[pieceID]
+		transport := t.Controller.Game.Pieces[transportID]
+		fmt.Printf("Loaded %s (ID: %d) onto %s (ID: %d)\n", piece.Name, pieceID, transport.Name, transportID)
+
+		// Show current cargo
+		cargo, _ := t.Controller.GetTransportCargo(transportID)
+		fmt.Printf("%s is now carrying %d unit(s)\n", transport.Name, len(cargo))
+
+		return nil
+
+	case "unload":
+		if len(parts) < 4 {
+			return fmt.Errorf("usage: unload <transport-id> <piece-id> <destination>")
+		}
+		transportID, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid transport ID: %s", parts[1])
+		}
+		pieceID, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return fmt.Errorf("invalid piece ID: %s", parts[2])
+		}
+		destination := strings.Join(parts[3:], " ")
+
+		err = t.Controller.UnloadUnit(transportID, pieceID, destination)
+		if err != nil {
+			return err
+		}
+
+		piece := t.Controller.Game.Pieces[pieceID]
+		transport := t.Controller.Game.Pieces[transportID]
+		fmt.Printf("Unloaded %s (ID: %d) from %s (ID: %d) to %s\n",
+			piece.Name, pieceID, transport.Name, transportID, destination)
+
+		return nil
+
+	case "cargo":
+		if len(parts) < 2 {
+			return fmt.Errorf("usage: cargo <transport-id>")
+		}
+		transportID, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid transport ID: %s", parts[1])
+		}
+
+		transport, exists := t.Controller.Game.Pieces[transportID]
+		if !exists {
+			return fmt.Errorf("transport %d not found", transportID)
+		}
+
+		cargo, err := t.Controller.GetTransportCargo(transportID)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("\n=== %s (ID: %d) Cargo ===\n", transport.Name, transportID)
+		fmt.Printf("Capacity: %d/%d\n", len(cargo), transport.Capacity)
+
+		if len(cargo) == 0 {
+			fmt.Println("Empty")
+		} else {
+			fmt.Println("\nCarrying:")
+			for _, pieceID := range cargo {
+				piece := t.Controller.Game.Pieces[pieceID]
+				fmt.Printf("  ID %d: %s\n", pieceID, piece.Name)
+			}
+		}
+
+		return nil
+
 	case "cancel":
 		if len(parts) < 2 {
 			return fmt.Errorf("usage: cancel <piece-id>")
@@ -674,7 +762,8 @@ func (t *Terminal) displayPhaseHeader() {
 	case models.NoncombatMovePhase:
 		fmt.Println("\n🚚 NONCOMBAT MOVE PHASE")
 		fmt.Println("Reposition units that didn't attack. Cannot move into enemy territories.")
-		fmt.Println("Commands: move (interactive), show, done")
+		fmt.Println("Load/unload transports to move land units across water.")
+		fmt.Println("Commands: move, load, unload, cargo, show, done")
 
 		// Auto-display player's territories with units
 		t.displayPlayerUnits()
@@ -725,7 +814,7 @@ func (t *Terminal) displayExpertHelp() {
 		fmt.Println("battles | view <terr> | resolve <terr> | auto | done")
 
 	case models.NoncombatMovePhase:
-		fmt.Println("move [id from to] | cancel <id> | show | done")
+		fmt.Println("move [id from to] | load <transport> <unit> | unload <transport> <unit> <dest> | cargo <transport> | cancel <id> | show | done")
 
 	case models.MobilizePhase:
 		fmt.Println("place <unit> <terr> <qty> | show | done")
@@ -796,9 +885,17 @@ func (t *Terminal) displayTutorialHelp() {
 		fmt.Println("  Move units that didn't attack to better positions")
 		fmt.Println("  Cannot move into enemy territories (attacks are done!)")
 		fmt.Println("  Units that attacked cannot move again this turn")
+		fmt.Println("  Load/unload transports to move land units across water")
 		fmt.Println("\nCommands:")
 		fmt.Println("  move                        - Interactive move (easy!)")
 		fmt.Println("  move <piece-id> <from> <to> - Direct move command")
+		fmt.Println("  load <transport-id> <unit-id>")
+		fmt.Println("    Example: load 42 15       - Load unit 15 onto transport 42")
+		fmt.Println("    Land units must be in same or adjacent territory to transport")
+		fmt.Println("  unload <transport-id> <unit-id> <destination>")
+		fmt.Println("    Example: unload 42 15 France")
+		fmt.Println("    Unload unit to transport's location or adjacent territory")
+		fmt.Println("  cargo <transport-id>        - View what a transport is carrying")
 		fmt.Println("  show                        - Show planned moves")
 		fmt.Println("  cancel <piece-id>           - Cancel a move")
 		fmt.Println("  done                        - Execute moves and proceed")
