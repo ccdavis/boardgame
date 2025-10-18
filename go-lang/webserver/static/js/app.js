@@ -140,6 +140,12 @@ const app = createApp({
                 this.gameState = result.game;
                 this.gameStarted = true;
 
+                // Wait for Vue to render the game screen before initializing map
+                await this.$nextTick();
+
+                // Initialize map overlay (ensure circles are created)
+                this.initializeMapOverlay();
+
                 // Load initial data
                 await this.loadTerritories();
                 await this.updateGameState();
@@ -439,7 +445,16 @@ const app = createApp({
          */
         initializeMapOverlay() {
             const overlay = document.getElementById('mapOverlay');
-            if (!overlay || !window.TERRITORY_COORDS) return;
+            if (!overlay) {
+                console.error('Map overlay element not found');
+                return;
+            }
+            if (!window.TERRITORY_COORDS) {
+                console.error('TERRITORY_COORDS not loaded');
+                return;
+            }
+
+            console.log('Initializing map overlay...');
 
             // Clear any existing elements
             overlay.innerHTML = '';
@@ -449,7 +464,8 @@ const app = createApp({
                 const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                 circle.setAttribute('cx', coords.x);
                 circle.setAttribute('cy', coords.y);
-                circle.setAttribute('r', coords.radius);
+                // Make circles 3x larger for better clickability (min 4.5, max 12)
+                circle.setAttribute('r', coords.radius * 3);
                 circle.setAttribute('data-territory', territoryName);
                 circle.classList.add('territory-region');
 
@@ -460,6 +476,8 @@ const app = createApp({
 
                 overlay.appendChild(circle);
             });
+
+            console.log(`✓ Map overlay initialized with ${Object.keys(window.TERRITORY_COORDS).length} clickable territories`);
         },
 
         /**
