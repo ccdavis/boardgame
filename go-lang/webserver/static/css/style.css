@@ -417,6 +417,70 @@ body {
     font-weight: bold;
 }
 
+/* Units Summary */
+.unit-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.unit-summary-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.unit-count {
+    font-weight: bold;
+    font-size: 1.2rem;
+    color: #007bff;
+    min-width: 24px;
+    text-align: center;
+}
+
+.unit-type {
+    text-transform: capitalize;
+    color: #495057;
+}
+
+.no-units {
+    color: #6c757d;
+    font-style: italic;
+    text-align: center;
+    padding: 1rem;
+}
+
+/* Unit Details Toggle */
+.unit-details-toggle {
+    margin-top: 1rem;
+    border-top: 1px solid #dee2e6;
+    padding-top: 0.5rem;
+}
+
+.unit-details-toggle summary {
+    cursor: pointer;
+    padding: 0.5rem;
+    background: #f1f3f5;
+    border-radius: 4px;
+    font-weight: 500;
+    color: #495057;
+    user-select: none;
+}
+
+.unit-details-toggle summary:hover {
+    background: #e9ecef;
+}
+
+.unit-details-toggle[open] summary {
+    margin-bottom: 0.5rem;
+}
+
 /* Units */
 .unit-list {
     list-style: none;

@@ -247,6 +247,26 @@ const app = createApp({
         },
 
         /**
+         * Get summary of units grouped by type
+         * Returns object like { "infantry": 3, "tank": 2, "fighter": 1 }
+         */
+        getUnitSummary(units) {
+            const summary = {};
+            for (const unit of units) {
+                const type = unit.name;
+                summary[type] = (summary[type] || 0) + 1;
+            }
+            return summary;
+        },
+
+        /**
+         * Check if territory belongs to the human player
+         */
+        isMyTerritory(territoryDetails) {
+            return territoryDetails && territoryDetails.owner === this.gameState.humanPlayer;
+        },
+
+        /**
          * Move a unit
          */
         async moveUnit(unit) {

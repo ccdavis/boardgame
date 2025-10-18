@@ -133,25 +133,44 @@
                                 </dl>
                             </div>
 
-                            <!-- Units in Territory -->
+                            <!-- Units in Territory - Summary by Type -->
                             <div v-if="territoryDetails.units && territoryDetails.units.length > 0" class="detail-section">
-                                <h3>Units ({{ territoryDetails.units.length }})</h3>
-                                <ul class="unit-list">
-                                    <li v-for="unit in territoryDetails.units" :key="unit.id" class="unit-item">
-                                        <div class="unit-info">
-                                            <strong>{{ unit.name }}</strong> (ID: {{ unit.id }})
-                                            <span class="unit-stats">
-                                                A:{{ unit.attack }} D:{{ unit.defend }} M:{{ unit.movement }}
-                                            </span>
-                                        </div>
-                                        <div v-if="canInteractWithUnit(unit)" class="unit-actions">
-                                            <button @click="moveUnit(unit)" class="btn btn-sm"
-                                                    v-if="unit.canMove && (gameState.currentPhase === 'Combat Move' || gameState.currentPhase === 'Noncombat Move')">
-                                                Move
-                                            </button>
-                                        </div>
-                                    </li>
-                                </ul>
+                                <h3>Forces ({{ territoryDetails.units.length }} units)</h3>
+                                <div class="unit-summary">
+                                    <div v-for="(count, unitType) in getUnitSummary(territoryDetails.units)"
+                                         :key="unitType"
+                                         class="unit-summary-item">
+                                        <span class="unit-count">{{ count }}</span>
+                                        <span class="unit-type">{{ unitType }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- Show detailed unit list only if it's your territory and during movement phases -->
+                                <details v-if="isMyTerritory(territoryDetails) && (gameState.currentPhase === 'Combat Move' || gameState.currentPhase === 'Noncombat Move')"
+                                         class="unit-details-toggle">
+                                    <summary>Detailed Unit List</summary>
+                                    <ul class="unit-list">
+                                        <li v-for="unit in territoryDetails.units" :key="unit.id" class="unit-item">
+                                            <div class="unit-info">
+                                                <strong>{{ unit.name }}</strong> (ID: {{ unit.id }})
+                                                <span class="unit-stats">
+                                                    A:{{ unit.attack }} D:{{ unit.defend }} M:{{ unit.movement }}
+                                                </span>
+                                            </div>
+                                            <div v-if="canInteractWithUnit(unit)" class="unit-actions">
+                                                <button @click="moveUnit(unit)" class="btn btn-sm"
+                                                        v-if="unit.canMove">
+                                                    Move
+                                                </button>
+                                            </div>
+                                        </li>
+                                    </ul>
+                                </details>
+                            </div>
+
+                            <!-- Empty Territory -->
+                            <div v-else class="detail-section">
+                                <p class="no-units">No units in this territory</p>
                             </div>
 
                             <!-- Connected Territories -->
