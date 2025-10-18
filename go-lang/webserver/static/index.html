@@ -100,12 +100,13 @@
                     </ul>
                 </aside>
 
-                <!-- Center: Map Placeholder -->
+                <!-- Center: Interactive Map -->
                 <section class="map-container" role="region" aria-label="Game Map">
-                    <div class="map-placeholder">
-                        <p>Interactive map will be displayed here</p>
-                        <p class="map-instruction">Use the territory list on the left or keyboard navigation</p>
-                        <!-- Map will be added later -->
+                    <div class="map-wrapper">
+                        <img id="gameMap" src="/images/map.jpg" alt="Axis & Allies Game Map" class="game-map-image">
+                        <svg id="mapOverlay" class="map-overlay" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+                            <!-- Territory click regions will be added dynamically -->
+                        </svg>
                     </div>
                 </section>
 
@@ -154,16 +155,31 @@
                             </div>
 
                             <!-- Connected Territories -->
-                            <div v-if="territoryDetails.connectedTerritories" class="detail-section">
-                                <h3>Connected To</h3>
+                            <div v-if="territoryDetails.connectedTerritories && territoryDetails.connectedTerritories.length > 0" class="detail-section">
+                                <h3>Adjacent Territories ({{ territoryDetails.connectedTerritories.length }})</h3>
                                 <ul class="connected-list">
                                     <li v-for="conn in territoryDetails.connectedTerritories" :key="conn.name">
-                                        <button @click="selectTerritory(conn.name)" class="territory-link">
-                                            {{ conn.name }}
-                                            <span class="conn-owner" :class="'owner-' + conn.owner.toLowerCase()">
-                                                ({{ conn.owner }})
-                                            </span>
-                                            <span v-if="conn.canAttack" class="can-attack">⚔️ Can Attack</span>
+                                        <button @click="selectTerritory(conn.name)"
+                                                class="territory-link"
+                                                :class="{'can-attack-link': conn.canAttack, 'same-owner': conn.owner === territoryDetails.owner}">
+                                            <div class="territory-link-header">
+                                                <span class="territory-link-name">{{ conn.name }}</span>
+                                                <span class="conn-owner" :class="'owner-' + conn.owner.toLowerCase()">
+                                                    {{ conn.owner }}
+                                                </span>
+                                            </div>
+                                            <div v-if="conn.canAttack" class="territory-link-action">
+                                                <span class="action-icon">⚔️</span>
+                                                <span class="action-label">Attack Available</span>
+                                            </div>
+                                            <div v-else-if="conn.owner === territoryDetails.owner && (gameState.currentPhase === 'Noncombat Move' || gameState.currentPhase === 'Combat Move')"
+                                                 class="territory-link-action friendly-move">
+                                                <span class="action-icon">→</span>
+                                                <span class="action-label">Can Move Here</span>
+                                            </div>
+                                            <div v-if="conn.unitCount" class="territory-link-units">
+                                                {{ conn.unitCount }} units
+                                            </div>
                                         </button>
                                     </li>
                                 </ul>
@@ -273,6 +289,7 @@
         </dialog>
     </div>
 
+    <script src="/js/territory-coords.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/app.js"></script>
 </body>

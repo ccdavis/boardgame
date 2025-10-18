@@ -288,22 +288,80 @@ body {
 
 /* Map Container */
 .map-container {
-    background: #e8f4f8;
-    padding: 2rem;
+    background: #1a1a1a;
+    padding: 1rem;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: auto;
 }
 
-.map-placeholder {
-    text-align: center;
-    color: #666;
+.map-wrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.map-instruction {
-    margin-top: 0.5rem;
-    font-style: italic;
+.game-map-image {
+    max-width: 100%;
+    max-height: 100%;
+    display: block;
+    border: 2px solid #333;
+    border-radius: 4px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+}
+
+.map-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.map-overlay circle,
+.map-overlay polygon {
+    pointer-events: all;
+    cursor: pointer;
+    fill: transparent;
+    stroke: transparent;
+    transition: all 0.2s;
+}
+
+.map-overlay circle:hover,
+.map-overlay polygon:hover {
+    fill: rgba(255, 255, 255, 0.2);
+    stroke: #ffff00;
+    stroke-width: 0.3;
+}
+
+.map-overlay circle.selected,
+.map-overlay polygon.selected {
+    fill: rgba(255, 215, 0, 0.3);
+    stroke: #ffd700;
+    stroke-width: 0.4;
+}
+
+.map-overlay circle.friendly,
+.map-overlay polygon.friendly {
+    stroke: #00ff00;
+    stroke-width: 0.2;
+}
+
+.map-overlay circle.enemy,
+.map-overlay polygon.enemy {
+    stroke: #ff0000;
+    stroke-width: 0.2;
+}
+
+.map-overlay circle.neutral,
+.map-overlay polygon.neutral {
+    stroke: #888888;
+    stroke-width: 0.15;
 }
 
 /* Action Sidebar */
@@ -397,22 +455,88 @@ body {
 .territory-link {
     width: 100%;
     text-align: left;
-    padding: 0.5rem;
+    padding: 0.75rem;
     background: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
+    border: 2px solid #dee2e6;
+    border-radius: 6px;
     cursor: pointer;
-    margin-bottom: 0.25rem;
+    margin-bottom: 0.5rem;
     display: block;
+    transition: all 0.2s;
 }
 
 .territory-link:hover {
     background: #e9ecef;
+    border-color: #007bff;
+    transform: translateX(4px);
+}
+
+.territory-link.can-attack-link {
+    border-color: #c41e3a;
+    background: #fff5f5;
+}
+
+.territory-link.can-attack-link:hover {
+    background: #ffe0e0;
+    border-color: #a01628;
+}
+
+.territory-link.same-owner {
+    border-color: #28a745;
+}
+
+.territory-link.same-owner:hover {
+    background: #f0fff0;
+    border-color: #1e7e34;
+}
+
+.territory-link-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.territory-link-name {
+    font-weight: 500;
+    font-size: 0.95rem;
 }
 
 .conn-owner {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+}
+
+.territory-link-action {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: #fff;
+    border-radius: 4px;
+    margin-top: 0.25rem;
     font-size: 0.85rem;
-    margin-left: 0.5rem;
+    color: #c41e3a;
+    font-weight: 500;
+}
+
+.territory-link-action.friendly-move {
+    color: #28a745;
+}
+
+.action-icon {
+    font-size: 1.1rem;
+}
+
+.action-label {
+    font-size: 0.85rem;
+}
+
+.territory-link-units {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 0.25rem;
 }
 
 .can-attack {

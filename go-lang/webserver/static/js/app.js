@@ -162,6 +162,7 @@ const app = createApp({
         async loadTerritories() {
             try {
                 this.territories = await this.api.getTerritories();
+                this.updateMapOverlay();
             } catch (error) {
                 console.error('Failed to load territories:', error);
             }
@@ -205,6 +206,9 @@ const app = createApp({
                     await this.loadTerritoryDetails(this.selectedTerritory);
                 }
 
+                // Update map overlay
+                this.updateMapOverlay();
+
             } catch (error) {
                 console.error('Failed to update game state:', error);
             }
@@ -216,6 +220,7 @@ const app = createApp({
         async selectTerritory(territoryName) {
             this.selectedTerritory = territoryName;
             await this.loadTerritoryDetails(territoryName);
+            this.updateMapOverlay();
         },
 
         /**
@@ -407,10 +412,76 @@ const app = createApp({
                 clearInterval(this.pollingInterval);
                 this.pollingInterval = null;
             }
+        },
+
+        /**
+         * Initialize the interactive map overlay
+         */
+        initializeMapOverlay() {
+            const overlay = document.getElementById('mapOverlay');
+            if (!overlay || !window.TERRITORY_COORDS) return;
+
+            // Clear any existing elements
+            overlay.innerHTML = '';
+
+            // Create clickable regions for each territory
+            Object.entries(window.TERRITORY_COORDS).forEach(([territoryName, coords]) => {
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', coords.x);
+                circle.setAttribute('cy', coords.y);
+                circle.setAttribute('r', coords.radius);
+                circle.setAttribute('data-territory', territoryName);
+                circle.classList.add('territory-region');
+
+                // Add click handler
+                circle.addEventListener('click', () => {
+                    this.selectTerritory(territoryName);
+                });
+
+                overlay.appendChild(circle);
+            });
+        },
+
+        /**
+         * Update map overlay to highlight territories based on game state
+         */
+        updateMapOverlay() {
+            if (!this.gameStarted) return;
+
+            const overlay = document.getElementById('mapOverlay');
+            if (!overlay) return;
+
+            // Update each territory region's visual state
+            const circles = overlay.querySelectorAll('circle[data-territory]');
+            circles.forEach(circle => {
+                const territoryName = circle.getAttribute('data-territory');
+                const territory = this.territories.find(t => t.name === territoryName);
+
+                // Remove all state classes
+                circle.classList.remove('selected', 'friendly', 'enemy', 'neutral');
+
+                // Add selected class
+                if (this.selectedTerritory === territoryName) {
+                    circle.classList.add('selected');
+                }
+                // Add ownership classes
+                else if (territory) {
+                    if (territory.owner === this.gameState.humanPlayer) {
+                        circle.classList.add('friendly');
+                    } else if (territory.owner === 'Neutral') {
+                        circle.classList.add('neutral');
+                    } else {
+                        circle.classList.add('enemy');
+                    }
+                }
+            });
         }
     },
 
     mounted() {
+        // Initialize map overlay
+        this.initializeMapOverlay();
+
         // Cleanup on page unload
         window.addEventListener('beforeunload', () => {
             this.stopPolling();
@@ -426,4 +497,7 @@ const app = createApp({
 });
 
 // Mount the app
-app.mount('#app');
+const mountedApp = app.mount('#app');
+
+// Export for testing and debugging
+window.vueApp = mountedApp;
