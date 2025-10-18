@@ -200,13 +200,56 @@ func (t *Terminal) ProcessCommand(command string) error {
 	return fmt.Errorf("unknown command: %s", cmd)
 }
 
-// advancePhase advances to the next phase
+// advancePhase advances to the next phase with smart confirmations
 func (t *Terminal) advancePhase() error {
 	phase := t.Controller.Game.CurrentPhase
+	player, _ := t.Controller.GetCurrentPlayer()
+
+	// Show summary and warnings before advancing
+	if t.Mode == TutorialMode {
+		warnings := t.getPhaseAdvanceWarnings()
+		if len(warnings) > 0 {
+			fmt.Println("\n⚠️  WARNINGS:")
+			for _, warning := range warnings {
+				fmt.Printf("   • %s\n", warning)
+			}
+
+			// Ask for confirmation
+			fmt.Print("\nAre you sure you want to proceed? (y/n): ")
+			input, err := t.Reader.ReadString('\n')
+			if err != nil {
+				return err
+			}
+			if strings.ToLower(strings.TrimSpace(input)) != "y" {
+				fmt.Println("✗ Cancelled - staying in current phase")
+				return nil
+			}
+		}
+	}
 
 	// Execute phase-specific actions before advancing
 	switch phase {
+	case models.PurchasePhase:
+		// Show purchase summary
+		purchased := t.Controller.Game.PurchasedUnits[player.Name]
+		if len(purchased) > 0 {
+			fmt.Println("\n✓ Purchase Summary:")
+			DisplayPurchasedUnits(t.Controller.Game, player.Name)
+			fmt.Printf("   Remaining IPCs: %d\n", player.IPCs)
+		} else {
+			fmt.Println("\n→ No units purchased this turn")
+		}
+
 	case models.CombatMovePhase:
+		// Show planned moves summary
+		moves := t.Controller.GetPlannedMoves()
+		if len(moves) > 0 {
+			fmt.Println("\n✓ Executing planned moves...")
+			fmt.Printf("   Moving %d units\n", len(moves))
+		} else {
+			fmt.Println("\n→ No combat moves planned")
+		}
+
 		// Execute all combat moves and set up battles
 		err := t.Controller.ExecuteCombatMoves()
 		if err != nil {
@@ -214,29 +257,58 @@ func (t *Terminal) advancePhase() error {
 		}
 
 		if len(t.Controller.PendingBattles) > 0 {
-			fmt.Printf("\n%d battle(s) created\n", len(t.Controller.PendingBattles))
+			fmt.Println("\n⚔️  Battles created:")
 			for territory := range t.Controller.PendingBattles {
-				fmt.Printf("  - %s\n", territory)
+				pieces := t.Controller.Game.GetPiecesInTerritory(territory)
+				fmt.Printf("   • %s (%d defenders)\n", territory, len(pieces))
 			}
+		} else {
+			fmt.Println("\n→ No battles to resolve")
 		}
 
+	case models.ConductCombatPhase:
+		if len(t.Controller.PendingBattles) > 0 {
+			return fmt.Errorf("you still have %d unresolved battle(s) - use 'auto' or 'resolve <territory>'", len(t.Controller.PendingBattles))
+		}
+		fmt.Println("\n✓ All battles resolved")
+
 	case models.NoncombatMovePhase:
+		// Show noncombat moves summary
+		moves := t.Controller.GetPlannedMoves()
+		if len(moves) > 0 {
+			fmt.Println("\n✓ Executing noncombat moves...")
+			fmt.Printf("   Moving %d units\n", len(moves))
+		} else {
+			fmt.Println("\n→ No noncombat moves planned")
+		}
+
 		// Execute all noncombat moves
 		err := t.Controller.ExecuteNoncombatMoves()
 		if err != nil {
 			return fmt.Errorf("failed to execute noncombat moves: %v", err)
 		}
 
+	case models.MobilizePhase:
+		// Check if units still need to be placed
+		purchased := t.Controller.Game.PurchasedUnits[player.Name]
+		if len(purchased) > 0 {
+			return fmt.Errorf("you still have %d unit(s) to place - use 'place <unit> <territory> <qty>'", len(purchased))
+		}
+		fmt.Println("\n✓ All units placed")
+
 	case models.CollectIncomePhase:
 		// Collect income before advancing
+		income, _ := t.Controller.CalculateIncome(player.Name)
 		err := t.Controller.CollectIncome()
 		if err != nil {
 			return fmt.Errorf("failed to collect income: %v", err)
 		}
 
-		player, _ := t.Controller.GetCurrentPlayer()
-		fmt.Printf("\n%s collected income!\n", player.Name)
-		DisplayPlayerStatus(player)
+		fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+		fmt.Println("│ 💰 INCOME COLLECTED                                     │")
+		fmt.Println("└─────────────────────────────────────────────────────────┘")
+		fmt.Printf("\n✓ Collected %d IPCs from your territories\n", income)
+		fmt.Printf("   Total IPCs: %d\n", player.IPCs)
 	}
 
 	err := t.Controller.AdvancePhase()
@@ -244,8 +316,45 @@ func (t *Terminal) advancePhase() error {
 		return err
 	}
 
-	fmt.Println("\nAdvanced to next phase")
+	fmt.Println("\n═══════════════════════════════════════════════════════════")
+	fmt.Println("✓ Advanced to next phase")
+	fmt.Println("═══════════════════════════════════════════════════════════\n")
 	return nil
+}
+
+// getPhaseAdvanceWarnings returns warnings before advancing phase
+func (t *Terminal) getPhaseAdvanceWarnings() []string {
+	warnings := make([]string, 0)
+	phase := t.Controller.Game.CurrentPhase
+	player, _ := t.Controller.GetCurrentPlayer()
+
+	switch phase {
+	case models.PurchasePhase:
+		// Warn if player has unspent IPCs
+		if player.IPCs > 10 {
+			warnings = append(warnings, fmt.Sprintf("You have %d unspent IPCs", player.IPCs))
+		}
+
+	case models.CombatMovePhase:
+		// Warn if no moves planned
+		moves := t.Controller.GetPlannedMoves()
+		if len(moves) == 0 {
+			warnings = append(warnings, "No combat moves planned - you won't attack any territories")
+		}
+
+	case models.NoncombatMovePhase:
+		// Check for aircraft that need to land (this is just a helpful hint)
+		// The game will handle this automatically, but good to warn the player
+
+	case models.MobilizePhase:
+		// Warn if units aren't placed
+		purchased := t.Controller.Game.PurchasedUnits[player.Name]
+		if len(purchased) > 0 {
+			warnings = append(warnings, fmt.Sprintf("You have %d unit(s) not yet placed", len(purchased)))
+		}
+	}
+
+	return warnings
 }
 
 // processPurchaseCommand handles purchase phase commands
@@ -729,6 +838,8 @@ func (t *Terminal) displayPhaseHeader() {
 	if t.Mode == ExpertMode {
 		// Expert mode: minimal, clean display
 		DisplayGameStatus(t.Controller.Game)
+		fmt.Printf("IPCs: %d | ", player.IPCs)
+		t.displayPhaseActionHint()
 		return
 	}
 
@@ -737,65 +848,144 @@ func (t *Terminal) displayPhaseHeader() {
 
 	fmt.Printf("IPCs: %d\n", player.IPCs)
 
-	// Show phase-specific tips
+	// Show phase-specific tips with enhanced guidance
 	switch t.Controller.Game.CurrentPhase {
 	case models.PurchasePhase:
-		fmt.Println("\n📦 PURCHASE PHASE")
-		fmt.Println("Buy new units with your IPCs. Units will be placed later in the Mobilize phase.")
-		fmt.Println("Commands: buy <unit> <qty>, repair <territory> <amt>, done")
+		fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+		fmt.Println("│ 📦 PURCHASE PHASE                                        │")
+		fmt.Println("└─────────────────────────────────────────────────────────┘")
+		fmt.Println("\n💡 What to do:")
+		fmt.Println("   Buy units with your IPCs. They'll be placed later in Mobilize phase.")
+
+		t.displayAvailableUnits()
+
+		fmt.Println("\n📋 Suggested Actions:")
+		fmt.Println("   1. Type 'buy infantry 3' to purchase 3 infantry (9 IPCs)")
+		fmt.Println("   2. Check 'status' to see your current position")
+		fmt.Println("   3. Type 'done' when finished purchasing")
+		fmt.Println("\n⌨️  Commands: buy <unit> <qty> | repair <territory> <amt> | done")
 
 	case models.CombatMovePhase:
-		fmt.Println("\n⚔️  COMBAT MOVE PHASE")
-		fmt.Println("Move units to attack enemy territories.")
-		fmt.Println("Commands: move (interactive), attack, show, done")
+		fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+		fmt.Println("│ ⚔️  COMBAT MOVE PHASE                                    │")
+		fmt.Println("└─────────────────────────────────────────────────────────┘")
+		fmt.Println("\n💡 What to do:")
+		fmt.Println("   Move units to attack enemy territories or activate friendly neutrals.")
 
 		// Auto-display player's territories with units
-		t.displayPlayerUnits()
+		t.displayPlayerUnitsEnhanced()
+
+		// Show suggested targets
+		t.displaySuggestedTargets()
+
+		fmt.Println("\n📋 Suggested Actions:")
+		fmt.Println("   1. Type 'move' for easy interactive movement")
+		fmt.Println("   2. Select units and destinations step-by-step")
+		fmt.Println("   3. Type 'show' to review planned moves")
+		fmt.Println("   4. Type 'done' to execute moves and start battles")
+		fmt.Println("\n⌨️  Commands: move | attack [terr] | show | cancel <id> | done")
 
 	case models.ConductCombatPhase:
-		fmt.Println("\n💥 CONDUCT COMBAT PHASE")
-		fmt.Println("Resolve battles in attacked territories.")
+		fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+		fmt.Println("│ 💥 CONDUCT COMBAT PHASE                                  │")
+		fmt.Println("└─────────────────────────────────────────────────────────┘")
+
 		if len(t.Controller.PendingBattles) > 0 {
-			fmt.Printf("%d battle(s) to resolve: ", len(t.Controller.PendingBattles))
-			first := true
+			fmt.Printf("\n⚠️  You have %d battle(s) to resolve:\n", len(t.Controller.PendingBattles))
 			for territory := range t.Controller.PendingBattles {
-				if !first {
-					fmt.Print(", ")
-				}
-				fmt.Print(territory)
-				first = false
+				fmt.Printf("   • %s\n", territory)
 			}
-			fmt.Println()
+
+			fmt.Println("\n📋 Suggested Actions:")
+			fmt.Println("   1. Type 'auto' to resolve all battles automatically (recommended)")
+			fmt.Println("   2. Or use 'resolve <territory>' for individual battles")
+			fmt.Println("   3. Type 'done' when all battles are resolved")
 		} else {
-			fmt.Println("No battles to resolve.")
+			fmt.Println("\n✓ No battles to resolve.")
+			fmt.Println("\n📋 Next Step:")
+			fmt.Println("   Type 'done' to proceed to Noncombat Move phase")
 		}
-		fmt.Println("Commands: battles, view <territory>, resolve <territory>, auto, done")
+		fmt.Println("\n⌨️  Commands: auto | battles | view <terr> | resolve <terr> | done")
 
 	case models.NoncombatMovePhase:
-		fmt.Println("\n🚚 NONCOMBAT MOVE PHASE")
-		fmt.Println("Reposition units that didn't attack. Cannot move into enemy territories.")
-		fmt.Println("Load/unload transports to move land units across water.")
-		fmt.Println("Commands: move, load, unload, cargo, show, done")
+		fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+		fmt.Println("│ 🚚 NONCOMBAT MOVE PHASE                                  │")
+		fmt.Println("└─────────────────────────────────────────────────────────┘")
+		fmt.Println("\n💡 What to do:")
+		fmt.Println("   Reposition units that didn't attack (cannot enter enemy territory).")
+		fmt.Println("   Land aircraft from battles, load/unload transports.")
 
-		// Auto-display player's territories with units
-		t.displayPlayerUnits()
+		// Auto-display player's territories with units (excluding those that moved)
+		t.displayPlayerUnitsEnhanced()
+
+		fmt.Println("\n📋 Suggested Actions:")
+		fmt.Println("   1. Type 'move' for interactive movement")
+		fmt.Println("   2. Use 'load <transport-id> <unit-id>' to load transports")
+		fmt.Println("   3. Type 'show' to review planned moves")
+		fmt.Println("   4. Type 'done' to execute moves")
+		fmt.Println("\n⌨️  Commands: move | load | unload | cargo <id> | show | done")
 
 	case models.MobilizePhase:
-		fmt.Println("\n🏭 MOBILIZE PHASE")
-		fmt.Println("Place units purchased earlier at your industrial complexes.")
+		fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+		fmt.Println("│ 🏭 MOBILIZE PHASE                                        │")
+		fmt.Println("└─────────────────────────────────────────────────────────┘")
+
 		purchased := t.Controller.Game.PurchasedUnits[player.Name]
 		if len(purchased) > 0 {
-			fmt.Printf("Units to place: %d\n", len(purchased))
+			fmt.Printf("\n⚠️  You have %d unit(s) to place:\n", len(purchased))
+			DisplayPurchasedUnits(t.Controller.Game, player.Name)
+
+			t.displayAvailablePlacementLocations()
+
+			fmt.Println("\n📋 Suggested Actions:")
+			fmt.Println("   1. Choose a territory with an industrial complex")
+			fmt.Println("   2. Type 'place infantry <territory> 3' to place units")
+			fmt.Println("   3. Type 'show' to see remaining units")
+			fmt.Println("   4. Type 'done' when all units are placed")
 		} else {
-			fmt.Println("No units to place.")
+			fmt.Println("\n✓ No units to place.")
+			fmt.Println("\n📋 Next Step:")
+			fmt.Println("   Type 'done' to proceed to Collect Income phase")
 		}
-		fmt.Println("Commands: place <unit> <territory> <qty>, show, done")
+		fmt.Println("\n⌨️  Commands: place <unit> <territory> <qty> | show | done")
 
 	case models.CollectIncomePhase:
-		fmt.Println("\n💰 COLLECT INCOME PHASE")
+		fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+		fmt.Println("│ 💰 COLLECT INCOME PHASE                                  │")
+		fmt.Println("└─────────────────────────────────────────────────────────┘")
 		income, _ := t.Controller.CalculateIncome(player.Name)
-		fmt.Printf("You will collect %d IPCs from your territories.\n", income)
-		fmt.Println("Command: done (to collect and end turn)")
+		fmt.Printf("\n✓ You will collect %d IPCs from your territories.\n", income)
+		fmt.Println("\n📋 Next Step:")
+		fmt.Println("   Type 'done' to collect income and end your turn")
+		fmt.Println("\n⌨️  Command: done")
+	}
+}
+
+// displayPhaseActionHint shows a quick hint for expert mode
+func (t *Terminal) displayPhaseActionHint() {
+	phase := t.Controller.Game.CurrentPhase
+	switch phase {
+	case models.PurchasePhase:
+		fmt.Println("Type 'buy' to purchase units, 'done' when ready")
+	case models.CombatMovePhase:
+		fmt.Println("Type 'move' for interactive movement, 'done' to execute")
+	case models.ConductCombatPhase:
+		if len(t.Controller.PendingBattles) > 0 {
+			fmt.Printf("%d battles - type 'auto' to resolve all\n", len(t.Controller.PendingBattles))
+		} else {
+			fmt.Println("No battles - type 'done' to continue")
+		}
+	case models.NoncombatMovePhase:
+		fmt.Println("Type 'move' to reposition units, 'done' when ready")
+	case models.MobilizePhase:
+		purchased := t.Controller.Game.PurchasedUnits[t.Controller.Game.CurrentPower]
+		if len(purchased) > 0 {
+			fmt.Printf("%d units to place - use 'place' command\n", len(purchased))
+		} else {
+			fmt.Println("No units to place - type 'done' to continue")
+		}
+	case models.CollectIncomePhase:
+		fmt.Println("Type 'done' to collect income and end turn")
 	}
 }
 
@@ -1005,6 +1195,228 @@ func (t *Terminal) displayPlayerUnits() {
 	fmt.Println("\nType 'move' to start interactive movement, or use the traditional command format.")
 }
 
+// displayPlayerUnitsEnhanced shows an enhanced summary with movement hints
+func (t *Terminal) displayPlayerUnitsEnhanced() {
+	player, err := t.Controller.GetCurrentPlayer()
+	if err != nil {
+		return
+	}
+
+	// Group territories by those with units
+	territoriesWithUnits := make([]*models.Territory, 0)
+	for _, territory := range player.Territories {
+		// Filter out pieces that have already moved in combat phase
+		movablePieces := 0
+		for _, pieceID := range territory.Pieces {
+			// Check if piece has a planned move
+			hasPlannedMove := false
+			for _, move := range t.Controller.GetPlannedMoves() {
+				if move.PieceID == pieceID {
+					hasPlannedMove = true
+					break
+				}
+			}
+			if !hasPlannedMove {
+				movablePieces++
+			}
+		}
+		if movablePieces > 0 {
+			territoriesWithUnits = append(territoriesWithUnits, territory)
+		}
+	}
+
+	if len(territoriesWithUnits) == 0 {
+		fmt.Println("\n✓ All your units have moves planned or cannot move further")
+		return
+	}
+
+	fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+	fmt.Println("│ 📍 Your Territories with Units                          │")
+	fmt.Println("└─────────────────────────────────────────────────────────┘")
+
+	// Sort by name
+	sort.Slice(territoriesWithUnits, func(i, j int) bool {
+		return territoriesWithUnits[i].Name < territoriesWithUnits[j].Name
+	})
+
+	// Limit display to first 10 territories to avoid overwhelming output
+	displayLimit := 10
+	for idx, territory := range territoriesWithUnits {
+		if idx >= displayLimit {
+			fmt.Printf("\n... and %d more territories (use 'board' to see all)\n", len(territoriesWithUnits)-displayLimit)
+			break
+		}
+
+		// Count movable units by type
+		unitCounts := make(map[string]int)
+		for _, pieceID := range territory.Pieces {
+			piece := t.Controller.Game.Pieces[pieceID]
+			// Check if piece has a planned move
+			hasPlannedMove := false
+			for _, move := range t.Controller.GetPlannedMoves() {
+				if move.PieceID == pieceID {
+					hasPlannedMove = true
+					break
+				}
+			}
+			if !hasPlannedMove {
+				unitCounts[piece.Name]++
+			}
+		}
+
+		// Build summary string
+		unitTypes := make([]string, 0, len(unitCounts))
+		for unitType := range unitCounts {
+			unitTypes = append(unitTypes, unitType)
+		}
+		sort.Strings(unitTypes)
+
+		summary := make([]string, 0, len(unitTypes))
+		for _, unitType := range unitTypes {
+			count := unitCounts[unitType]
+			if count > 0 {
+				summary = append(summary, fmt.Sprintf("%d %s", count, unitType))
+			}
+		}
+
+		if len(summary) > 0 {
+			fmt.Printf("   %s: %s\n", territory.Name, strings.Join(summary, ", "))
+		}
+	}
+
+	fmt.Println("\n💡 Tip: Type 'move' to interactively select units to move")
+}
+
+// displayAvailableUnits shows units that can be purchased
+func (t *Terminal) displayAvailableUnits() {
+	fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+	fmt.Println("│ 🛒 Available Units to Purchase                          │")
+	fmt.Println("└─────────────────────────────────────────────────────────┘")
+
+	// Get unit types from the game's unit definitions
+	unitTypes := []struct {
+		name   string
+		cost   int
+		desc   string
+	}{
+		{"infantry", 3, "Basic ground unit (Atk:1 Def:2)"},
+		{"artillery", 4, "Boosts infantry (Atk:2 Def:2)"},
+		{"armor", 5, "Tank, fast & powerful (Atk:3 Def:3)"},
+		{"fighter", 10, "Air superiority (Atk:3 Def:4)"},
+		{"bomber", 12, "Heavy bomber (Atk:4 Def:1)"},
+		{"submarine", 6, "Stealth attacker (Atk:2 Def:1)"},
+		{"transport", 7, "Carries 2 land units"},
+		{"destroyer", 8, "Anti-sub (Atk:2 Def:2)"},
+		{"carrier", 14, "Holds 2 fighters (Atk:1 Def:2)"},
+		{"battleship", 20, "Heavy warship (Atk:4 Def:4)"},
+	}
+
+	for _, unit := range unitTypes {
+		fmt.Printf("   %-12s %2d IPCs  - %s\n", unit.name, unit.cost, unit.desc)
+	}
+}
+
+// displaySuggestedTargets shows potential enemy territories to attack
+func (t *Terminal) displaySuggestedTargets() {
+	player, err := t.Controller.GetCurrentPlayer()
+	if err != nil {
+		return
+	}
+
+	// Find adjacent enemy territories
+	enemyTerritories := make(map[string]bool)
+
+	for _, territory := range player.Territories {
+		for _, conn := range territory.ConnectedTo {
+			if conn.Owner.Name != player.Name && conn.Owner.Name != "Neutral" {
+				enemyTerritories[conn.Name] = true
+			}
+		}
+	}
+
+	if len(enemyTerritories) == 0 {
+		return
+	}
+
+	fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+	fmt.Println("│ 🎯 Potential Attack Targets (Adjacent Enemy Territories)│")
+	fmt.Println("└─────────────────────────────────────────────────────────┘")
+
+	// Convert to slice and sort
+	targets := make([]string, 0, len(enemyTerritories))
+	for name := range enemyTerritories {
+		targets = append(targets, name)
+	}
+	sort.Strings(targets)
+
+	// Show up to 8 targets
+	displayLimit := 8
+	for idx, name := range targets {
+		if idx >= displayLimit {
+			fmt.Printf("\n... and %d more (use 'board' to explore)\n", len(targets)-displayLimit)
+			break
+		}
+
+		territory := t.Controller.Game.Board[name]
+		pieces := t.Controller.Game.GetPiecesInTerritory(name)
+
+		// Count defenders
+		defenderCount := len(pieces)
+		victoryCity := ""
+		if territory.IsVictoryCity {
+			victoryCity = " ★ VICTORY CITY"
+		}
+
+		fmt.Printf("   %s (Owner: %s, %d defenders)%s\n",
+			name, territory.Owner.Name, defenderCount, victoryCity)
+	}
+}
+
+// displayAvailablePlacementLocations shows where units can be placed
+func (t *Terminal) displayAvailablePlacementLocations() {
+	player, err := t.Controller.GetCurrentPlayer()
+	if err != nil {
+		return
+	}
+
+	fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+	fmt.Println("│ 🏭 Your Industrial Complexes (Placement Locations)      │")
+	fmt.Println("└─────────────────────────────────────────────────────────┘")
+
+	// Find territories with industrial complexes
+	icTerritories := make([]*models.Territory, 0)
+	for _, territory := range player.Territories {
+		if territory.Production > 0 {
+			icTerritories = append(icTerritories, territory)
+		}
+	}
+
+	if len(icTerritories) == 0 {
+		fmt.Println("   No industrial complexes available")
+		return
+	}
+
+	// Sort by production value (descending)
+	sort.Slice(icTerritories, func(i, j int) bool {
+		return icTerritories[i].Production > icTerritories[j].Production
+	})
+
+	for _, territory := range icTerritories {
+		effectiveProd := territory.Production - territory.ICDamage
+		if effectiveProd < 0 {
+			effectiveProd = 0
+		}
+
+		damageInfo := ""
+		if territory.ICDamage > 0 {
+			damageInfo = fmt.Sprintf(" (DAMAGED: %d effective)", effectiveProd)
+		}
+
+		fmt.Printf("   %s: Can place up to %d units%s\n",
+			territory.Name, effectiveProd, damageInfo)
+	}
+}
+
 // selectPlayerNation prompts the player to select which nation to play
 func (t *Terminal) selectPlayerNation() error {
 	fmt.Println("\n=== Select Your Nation ===")
@@ -1174,18 +1586,38 @@ func (t *Terminal) promptInteractiveMove() error {
 		return err
 	}
 
-	// Step 1: Show player's territories with units
-	fmt.Println("\n=== Your Territories ===")
+	fmt.Println("\n╔═══════════════════════════════════════════════════════════╗")
+	fmt.Println("║            🎯 INTERACTIVE MOVE WIZARD                     ║")
+	fmt.Println("╚═══════════════════════════════════════════════════════════╝")
+
+	// Step 1: Show player's territories with MOVABLE units only
 	playerTerritories := make([]*models.Territory, 0)
 	for _, territory := range player.Territories {
-		pieces := t.Controller.Game.GetPiecesInTerritory(territory.Name)
-		if len(pieces) > 0 {
+		// Check if there are any movable pieces
+		hasMovablePieces := false
+		for _, pieceID := range territory.Pieces {
+			// Check if piece has already moved
+			hasPlannedMove := false
+			for _, move := range t.Controller.GetPlannedMoves() {
+				if move.PieceID == pieceID {
+					hasPlannedMove = true
+					break
+				}
+			}
+			if !hasPlannedMove {
+				hasMovablePieces = true
+				break
+			}
+		}
+
+		if hasMovablePieces {
 			playerTerritories = append(playerTerritories, territory)
 		}
 	}
 
 	if len(playerTerritories) == 0 {
-		fmt.Println("You have no units to move")
+		fmt.Println("\n✓ All your units have been moved or cannot move")
+		fmt.Println("\n💡 Tip: Type 'show' to review planned moves, or 'done' to execute")
 		return nil
 	}
 
@@ -1194,13 +1626,32 @@ func (t *Terminal) promptInteractiveMove() error {
 		return playerTerritories[i].Name < playerTerritories[j].Name
 	})
 
+	fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+	fmt.Println("│ STEP 1: Select source territory                         │")
+	fmt.Println("└─────────────────────────────────────────────────────────┘")
+	fmt.Printf("\nYou have units in %d territories:\n\n", len(playerTerritories))
+
 	for i, territory := range playerTerritories {
-		pieces := t.Controller.Game.GetPiecesInTerritory(territory.Name)
-		fmt.Printf("  %d. %s (%d units)\n", i+1, territory.Name, len(pieces))
+		// Count movable units
+		movableCount := 0
+		for _, pieceID := range territory.Pieces {
+			hasPlannedMove := false
+			for _, move := range t.Controller.GetPlannedMoves() {
+				if move.PieceID == pieceID {
+					hasPlannedMove = true
+					break
+				}
+			}
+			if !hasPlannedMove {
+				movableCount++
+			}
+		}
+
+		fmt.Printf("  %2d. %-30s (%d movable units)\n", i+1, territory.Name, movableCount)
 	}
 
 	// Prompt for territory selection
-	fmt.Print("\nFrom which territory? (number or 'cancel'): ")
+	fmt.Print("\n➤ From which territory? (enter number, or 'cancel'): ")
 	input, err := t.Reader.ReadString('\n')
 	if err != nil {
 		return err
@@ -1208,21 +1659,64 @@ func (t *Terminal) promptInteractiveMove() error {
 	input = strings.TrimSpace(input)
 
 	if strings.ToLower(input) == "cancel" {
-		fmt.Println("Move cancelled")
+		fmt.Println("\n✗ Move cancelled")
 		return nil
 	}
 
 	territoryChoice, err := strconv.Atoi(input)
 	if err != nil || territoryChoice < 1 || territoryChoice > len(playerTerritories) {
-		return fmt.Errorf("invalid territory selection")
+		return fmt.Errorf("invalid selection - please enter a number from 1 to %d", len(playerTerritories))
 	}
 
 	fromTerritory := playerTerritories[territoryChoice-1]
 
-	// Step 2: Show units in selected territory
-	DisplayTerritory(t.Controller.Game, fromTerritory.Name)
+	// Step 2: Show MOVABLE units in selected territory with better formatting
+	fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+	fmt.Printf("│ STEP 2: Select unit from %-31s│\n", fromTerritory.Name)
+	fmt.Println("└─────────────────────────────────────────────────────────┘")
 
-	fmt.Print("\nMove which unit? (enter piece ID or 'cancel'): ")
+	// Filter movable pieces and track their IDs
+	type MovablePiece struct {
+		ID    int
+		Piece *models.Piece
+	}
+	movablePieces := make([]MovablePiece, 0)
+	for _, pieceID := range fromTerritory.Pieces {
+		hasPlannedMove := false
+		for _, move := range t.Controller.GetPlannedMoves() {
+			if move.PieceID == pieceID {
+				hasPlannedMove = true
+				break
+			}
+		}
+		if !hasPlannedMove {
+			piece := t.Controller.Game.Pieces[pieceID]
+			movablePieces = append(movablePieces, MovablePiece{ID: pieceID, Piece: piece})
+		}
+	}
+
+	if len(movablePieces) == 0 {
+		fmt.Println("\n✗ No movable units in this territory")
+		return nil
+	}
+
+	// Sort by unit type for better readability
+	sort.Slice(movablePieces, func(i, j int) bool {
+		if movablePieces[i].Piece.Name == movablePieces[j].Piece.Name {
+			return movablePieces[i].ID < movablePieces[j].ID
+		}
+		return movablePieces[i].Piece.Name < movablePieces[j].Piece.Name
+	})
+
+	fmt.Println("\nAvailable units to move:\n")
+	fmt.Println("  ID    Unit Type      Movement  Attack  Defense")
+	fmt.Println("  ────────────────────────────────────────────────")
+	for _, mp := range movablePieces {
+		fmt.Printf("  %-5d %-14s %-9d %-7d %-7d\n",
+			mp.ID, mp.Piece.Name, mp.Piece.Movement, mp.Piece.Attack, mp.Piece.Defend)
+	}
+
+	fmt.Print("\n➤ Move which unit? (enter ID, or 'cancel'): ")
 	input, err = t.Reader.ReadString('\n')
 	if err != nil {
 		return err
@@ -1230,34 +1724,53 @@ func (t *Terminal) promptInteractiveMove() error {
 	input = strings.TrimSpace(input)
 
 	if strings.ToLower(input) == "cancel" {
-		fmt.Println("Move cancelled")
+		fmt.Println("\n✗ Move cancelled")
 		return nil
 	}
 
 	pieceID, err := strconv.Atoi(input)
 	if err != nil {
-		return fmt.Errorf("invalid piece ID")
+		return fmt.Errorf("invalid piece ID - please enter a valid number")
 	}
 
-	// Verify piece exists and is in the territory
+	// Verify piece exists and is movable
 	piece, exists := t.Controller.Game.Pieces[pieceID]
 	if !exists {
 		return fmt.Errorf("piece %d not found", pieceID)
 	}
 
-	// Step 3: Show reachable destination options for this piece
-	connectionMap, err := t.displayReachableTerritoriesForPiece(pieceID, fromTerritory.Name)
+	// Check if piece is in the movable list
+	isMovable := false
+	for _, mp := range movablePieces {
+		if mp.ID == pieceID {
+			isMovable = true
+			break
+		}
+	}
+	if !isMovable {
+		return fmt.Errorf("piece %d is not movable from this territory", pieceID)
+	}
+
+	// Step 3: Show reachable destination options for this piece with enhanced display
+	fmt.Println("\n┌─────────────────────────────────────────────────────────┐")
+	fmt.Printf("│ STEP 3: Select destination for %s%-19s│\n", piece.Name, " ")
+	fmt.Println("└─────────────────────────────────────────────────────────┘")
+
+	connectionMap, err := t.displayReachableTerritoriesForPieceEnhanced(pieceID, fromTerritory.Name)
 	if err != nil {
 		return err
 	}
 
 	if len(connectionMap) == 0 {
-		fmt.Printf("No reachable territories for %s (movement: %d)\n", piece.Name, piece.Movement)
-		fmt.Println("Hint: Enemies may be blocking the path, or terrain may be incompatible")
+		fmt.Printf("\n✗ No reachable territories for %s (movement: %d)\n", piece.Name, piece.Movement)
+		fmt.Println("\n💡 Possible reasons:")
+		fmt.Println("   • Path blocked by enemy units")
+		fmt.Println("   • Wrong terrain type (e.g., land unit trying to enter water)")
+		fmt.Println("   • Movement range too short")
 		return nil
 	}
 
-	fmt.Print("\nTo which territory? (enter letter or 'cancel'): ")
+	fmt.Print("\n➤ To which territory? (enter letter, or 'cancel'): ")
 	input, err = t.Reader.ReadString('\n')
 	if err != nil {
 		return err
@@ -1265,25 +1778,146 @@ func (t *Terminal) promptInteractiveMove() error {
 	input = strings.TrimSpace(strings.ToUpper(input))
 
 	if strings.ToLower(input) == "CANCEL" {
-		fmt.Println("Move cancelled")
+		fmt.Println("\n✗ Move cancelled")
 		return nil
 	}
 
 	toTerritoryName, exists := connectionMap[input]
 	if !exists {
-		return fmt.Errorf("invalid territory letter")
+		return fmt.Errorf("invalid selection - please enter a letter from the list")
 	}
 
 	// Execute the move planning
 	err = t.Controller.PlanMove(pieceID, fromTerritory.Name, toTerritoryName)
 	if err != nil {
-		return err
+		return fmt.Errorf("move failed: %v\n\n💡 Tip: Use 'help' to see movement rules", err)
 	}
 
-	fmt.Printf("Planned move: %s (ID: %d) from %s to %s\n",
-		piece.Name, pieceID, fromTerritory.Name, toTerritoryName)
+	fmt.Println("\n╔═══════════════════════════════════════════════════════════╗")
+	fmt.Printf("║  ✓ Move Planned: %s (ID: %d)\n", piece.Name, pieceID)
+	fmt.Printf("║    From: %s\n", fromTerritory.Name)
+	fmt.Printf("║    To:   %s\n", toTerritoryName)
+	fmt.Println("╚═══════════════════════════════════════════════════════════╝")
+
+	// Ask if they want to move another unit
+	fmt.Print("\nMove another unit? (y/n): ")
+	input, err = t.Reader.ReadString('\n')
+	if err == nil && strings.ToLower(strings.TrimSpace(input)) == "y" {
+		return t.promptInteractiveMove()
+	}
 
 	return nil
+}
+
+// displayReachableTerritoriesForPieceEnhanced shows reachable territories with enhanced formatting
+func (t *Terminal) displayReachableTerritoriesForPieceEnhanced(pieceID int, fromTerritory string) (map[string]string, error) {
+	piece, exists := t.Controller.Game.Pieces[pieceID]
+	if !exists {
+		return nil, fmt.Errorf("piece %d not found", pieceID)
+	}
+
+	// Get reachable territories using the game's pathfinding
+	reachable, err := game.GetReachableTerritories(t.Controller.Game, pieceID, fromTerritory)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(reachable) == 0 {
+		return make(map[string]string), nil
+	}
+
+	fmt.Printf("\nYour %s (Movement: %d) can reach %d territories:\n\n",
+		piece.Name, piece.Movement, len(reachable))
+
+	// Sort territories alphabetically
+	sort.Slice(reachable, func(i, j int) bool {
+		return reachable[i].Name < reachable[j].Name
+	})
+
+	// Create letter map
+	connectionMap := make(map[string]string)
+
+	// Get current player and phase for context
+	player, _ := t.Controller.GetCurrentPlayer()
+	currentPhase := t.Controller.Game.CurrentPhase
+
+	// Group territories by type for better organization
+	attacks := make([]string, 0)
+	friendlyMoves := make([]string, 0)
+	neutrals := make([]string, 0)
+
+	for _, territory := range reachable {
+		owner := territory.Owner.Name
+		pieces := t.Controller.Game.GetPiecesInTerritory(territory.Name)
+
+		if owner != player.Name && len(pieces) > 0 {
+			attacks = append(attacks, territory.Name)
+		} else if owner == player.Name {
+			friendlyMoves = append(friendlyMoves, territory.Name)
+		} else {
+			neutrals = append(neutrals, territory.Name)
+		}
+	}
+
+	letterIdx := 0
+
+	// Display attacks first (if in combat phase)
+	if len(attacks) > 0 && currentPhase == models.CombatMovePhase {
+		fmt.Println("⚔️  ATTACK DESTINATIONS:")
+		for _, name := range attacks {
+			letter := string(rune('A' + letterIdx))
+			letterIdx++
+			connectionMap[letter] = name
+
+			territory := t.Controller.Game.Board[name]
+			pieces := t.Controller.Game.GetPiecesInTerritory(name)
+
+			victoryCity := ""
+			if territory.IsVictoryCity {
+				victoryCity = " ★"
+			}
+
+			fmt.Printf("  %s. %-30s (Owner: %s, %d defenders)%s\n",
+				letter, name, territory.Owner.Name, len(pieces), victoryCity)
+		}
+		fmt.Println()
+	}
+
+	// Display friendly territories
+	if len(friendlyMoves) > 0 {
+		fmt.Println("🏠 FRIENDLY TERRITORIES:")
+		for _, name := range friendlyMoves {
+			letter := string(rune('A' + letterIdx))
+			letterIdx++
+			connectionMap[letter] = name
+
+			fmt.Printf("  %s. %-30s (Your territory)\n", letter, name)
+		}
+		fmt.Println()
+	}
+
+	// Display neutrals
+	if len(neutrals) > 0 {
+		fmt.Println("🌍 NEUTRAL/EMPTY TERRITORIES:")
+		for _, name := range neutrals {
+			letter := string(rune('A' + letterIdx))
+			letterIdx++
+			connectionMap[letter] = name
+
+			destTerritory := t.Controller.Game.Board[name]
+			destPieces := t.Controller.Game.GetPiecesInTerritory(name)
+
+			status := "Empty"
+			if len(destPieces) > 0 {
+				status = fmt.Sprintf("%d units", len(destPieces))
+			}
+
+			fmt.Printf("  %s. %-30s (%s)\n", letter, name, status)
+			_ = destTerritory // Mark as used to avoid compiler warning
+		}
+	}
+
+	return connectionMap, nil
 }
 
 // showPlannedAttack shows details about a planned attack
