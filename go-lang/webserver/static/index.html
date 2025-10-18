@@ -104,11 +104,12 @@
                 <section class="map-container" role="region" aria-label="Game Map">
                     <div class="map-wrapper">
                         <img id="gameMap" src="/images/map.jpg" alt="Axis & Allies Game Map" class="game-map-image">
-                        <svg id="mapOverlay" class="map-overlay" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+                        <!-- SVG overlay matches the coordinate system (0-100 for both x and y percentages) -->
+                        <!-- preserveAspectRatio="none" allows the 100x100 viewBox to stretch to match image aspect ratio -->
+                        <svg id="mapOverlay" class="map-overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
                             <!-- Territory click regions will be added dynamically -->
                         </svg>
-                    </div>
-                </section>
+                    </div>                </section>
 
                 <!-- Right Sidebar: Territory Details and Actions -->
                 <aside class="action-sidebar" role="complementary" aria-label="Territory Details and Actions">
