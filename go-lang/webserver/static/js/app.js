@@ -478,14 +478,28 @@ const app = createApp({
                 const territory = this.territories.find(t => t.name === territoryName);
 
                 // Remove all state classes
-                circle.classList.remove('selected', 'friendly', 'enemy', 'neutral');
+                circle.classList.remove('selected', 'friendly', 'enemy', 'neutral', 'has-units',
+                    'owner-germany', 'owner-ussr', 'owner-uk', 'owner-japan', 'owner-usa', 'owner-italy');
 
                 // Add selected class
                 if (this.selectedTerritory === territoryName) {
                     circle.classList.add('selected');
                 }
-                // Add ownership classes
-                else if (territory) {
+
+                if (territory) {
+                    // Add ownership indicator with player-specific color
+                    const ownerClass = 'owner-' + territory.owner.toLowerCase().replace(/\s+/g, '-');
+                    circle.classList.add(ownerClass);
+
+                    // Add unit presence indicator
+                    if (territory.unitCount > 0) {
+                        circle.classList.add('has-units');
+                        circle.setAttribute('data-unit-count', territory.unitCount);
+                    } else {
+                        circle.removeAttribute('data-unit-count');
+                    }
+
+                    // Add relationship classes for visibility
                     if (territory.owner === this.gameState.humanPlayer) {
                         circle.classList.add('friendly');
                     } else if (territory.owner === 'Neutral') {

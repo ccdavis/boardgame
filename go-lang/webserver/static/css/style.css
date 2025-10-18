@@ -364,6 +364,70 @@ body {
     stroke-width: 0.15;
 }
 
+/* Map Territory Indicators - Player Colors */
+/* Show filled dots for territories with units */
+.map-overlay circle.has-units {
+    fill: rgba(128, 128, 128, 0.4); /* Default gray */
+}
+
+/* Axis Powers - Red tones */
+.map-overlay circle.owner-germany.has-units {
+    fill: rgba(128, 128, 128, 0.6);
+    stroke: #2c2c2c;
+    stroke-width: 0.3;
+}
+
+.map-overlay circle.owner-japan.has-units {
+    fill: rgba(255, 255, 255, 0.7);
+    stroke: #ff0000;
+    stroke-width: 0.35;
+}
+
+.map-overlay circle.owner-italy.has-units {
+    fill: rgba(0, 128, 0, 0.6);
+    stroke: #006400;
+    stroke-width: 0.3;
+}
+
+/* Allied Powers - Blue/Green tones */
+.map-overlay circle.owner-ussr.has-units {
+    fill: rgba(139, 0, 0, 0.6);
+    stroke: #8b0000;
+    stroke-width: 0.3;
+}
+
+.map-overlay circle.owner-uk.has-units {
+    fill: rgba(210, 180, 140, 0.6);
+    stroke: #8b7355;
+    stroke-width: 0.3;
+}
+
+.map-overlay circle.owner-usa.has-units {
+    fill: rgba(0, 100, 0, 0.6);
+    stroke: #006400;
+    stroke-width: 0.3;
+}
+
+/* Neutral territories with units (rare but possible) */
+.map-overlay circle.owner-neutral.has-units {
+    fill: rgba(160, 160, 160, 0.5);
+    stroke: #888888;
+    stroke-width: 0.25;
+}
+
+/* Hover effects for territories with units */
+.map-overlay circle.has-units:hover {
+    fill-opacity: 0.8;
+    stroke-width: 0.5;
+}
+
+/* Selected territory with units */
+.map-overlay circle.selected.has-units {
+    stroke: #ffd700;
+    stroke-width: 0.6;
+    fill-opacity: 0.7;
+}
+
 /* Action Sidebar */
 .action-sidebar {
     background: white;
