@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Axis & Allies 1942</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <!-- Vue.js 3 from CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Loading Screen -->
+        <div v-if="!gameStarted" class="setup-screen">
+            <h1>Axis & Allies 1942</h1>
+            <div class="setup-form">
+                <h2>Start New Game</h2>
+                <form @submit.prevent="startGame">
+                    <div class="form-group">
+                        <label for="gdfPath">Game File Path:</label>
+                        <input type="text" id="gdfPath" v-model="setup.gdfPath"
+                               placeholder="../aaa.gdf" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="playerName">Select Your Nation:</label>
+                        <select id="playerName" v-model="setup.playerName" required>
+                            <option value="Germany">Germany (Axis)</option>
+                            <option value="USSR">USSR (Allies)</option>
+                            <option value="UK">United Kingdom (Allies)</option>
+                            <option value="Japan">Japan (Axis)</option>
+                            <option value="USA">United States (Allies)</option>
+                            <option value="Italy">Italy (Axis)</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Start Game</button>
+                    <div v-if="error" class="error-message">{{ error }}</div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Game Screen -->
+        <div v-else class="game-screen">
+            <!-- Header -->
+            <header class="game-header">
+                <h1>Axis & Allies 1942</h1>
+                <div class="game-info">
+                    <span class="turn-info">Turn {{ gameState.turn }}</span>
+                    <span class="phase-info">{{ gameState.currentPhase }}</span>
+                    <span class="player-info" :class="{'your-turn': gameState.isHumanTurn}">
+                        {{ gameState.currentPower }}
+                        <span v-if="gameState.isHumanTurn" class="your-turn-indicator">★ YOUR TURN</span>
+                    </span>
+                </div>
+                <div class="victory-cities">
+                    <span class="axis-vc">Axis: {{ gameState.victoryCities.axis }} VC</span>
+                    <span class="allies-vc">Allies: {{ gameState.victoryCities.allies }} VC</span>
+                </div>
+            </header>
+
+            <!-- Phase Guidance Modal -->
+            <dialog id="phaseModal" class="phase-modal" :open="showPhaseGuidance">
+                <div class="modal-content">
+                    <h2>{{ gameState.currentPhase }}</h2>
+                    <div v-html="phaseGuidance"></div>
+                    <div class="modal-actions">
+                        <button @click="closePhaseGuidance" class="btn btn-primary">
+                            Got it!
+                        </button>
+                    </div>
+                </div>
+            </dialog>
+
+            <!-- Main Content Area -->
+            <main class="game-main">
+                <!-- Left Sidebar: Map and Territory List -->
+                <aside class="territory-sidebar" role="navigation" aria-label="Territory Navigation">
+                    <h2>Territories</h2>
+                    <div class="territory-controls">
+                        <input type="text" v-model="territoryFilter"
+                               placeholder="Search territories..."
+                               aria-label="Filter territories">
+                    </div>
+                    <ul class="territory-list" role="list">
+                        <li v-for="territory in filteredTerritories"
+                            :key="territory.name"
+                            :class="{'selected': selectedTerritory === territory.name}">
+                            <button @click="selectTerritory(territory.name)"
+                                    class="territory-button"
+                                    :aria-pressed="selectedTerritory === territory.name">
+                                <span class="territory-name">{{ territory.name }}</span>
+                                <span class="territory-owner" :class="'owner-' + territory.owner.toLowerCase()">
+                                    {{ territory.owner }}
+                                </span>
+                                <span v-if="territory.isVictoryCity" class="victory-star" aria-label="Victory City">
+                                    ★
+                                </span>
+                                <span class="unit-count">{{ territory.unitCount }} units</span>
+                            </button>
+                        </li>
+                    </ul>
+                </aside>
+
+                <!-- Center: Map Placeholder -->
+                <section class="map-container" role="region" aria-label="Game Map">
+                    <div class="map-placeholder">
+                        <p>Interactive map will be displayed here</p>
+                        <p class="map-instruction">Use the territory list on the left or keyboard navigation</p>
+                        <!-- Map will be added later -->
+                    </div>
+                </section>
+
+                <!-- Right Sidebar: Territory Details and Actions -->
+                <aside class="action-sidebar" role="complementary" aria-label="Territory Details and Actions">
+                    <div v-if="selectedTerritory">
+                        <h2>{{ selectedTerritory }}</h2>
+                        <div v-if="territoryDetails" class="territory-details">
+                            <div class="detail-section">
+                                <h3>Information</h3>
+                                <dl>
+                                    <dt>Owner:</dt>
+                                    <dd :class="'owner-' + territoryDetails.owner.toLowerCase()">
+                                        {{ territoryDetails.owner }}
+                                    </dd>
+                                    <dt>Terrain:</dt>
+                                    <dd>{{ territoryDetails.terrain }}</dd>
+                                    <dt>Production:</dt>
+                                    <dd>{{ territoryDetails.production }}</dd>
+                                    <div v-if="territoryDetails.icDamage > 0">
+                                        <dt>IC Damage:</dt>
+                                        <dd class="damage">{{ territoryDetails.icDamage }}</dd>
+                                    </div>
+                                </dl>
+                            </div>
+
+                            <!-- Units in Territory -->
+                            <div v-if="territoryDetails.units && territoryDetails.units.length > 0" class="detail-section">
+                                <h3>Units ({{ territoryDetails.units.length }})</h3>
+                                <ul class="unit-list">
+                                    <li v-for="unit in territoryDetails.units" :key="unit.id" class="unit-item">
+                                        <div class="unit-info">
+                                            <strong>{{ unit.name }}</strong> (ID: {{ unit.id }})
+                                            <span class="unit-stats">
+                                                A:{{ unit.attack }} D:{{ unit.defend }} M:{{ unit.movement }}
+                                            </span>
+                                        </div>
+                                        <div v-if="canInteractWithUnit(unit)" class="unit-actions">
+                                            <button @click="moveUnit(unit)" class="btn btn-sm"
+                                                    v-if="unit.canMove && (gameState.currentPhase === 'Combat Move' || gameState.currentPhase === 'Noncombat Move')">
+                                                Move
+                                            </button>
+                                        </div>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            <!-- Connected Territories -->
+                            <div v-if="territoryDetails.connectedTerritories" class="detail-section">
+                                <h3>Connected To</h3>
+                                <ul class="connected-list">
+                                    <li v-for="conn in territoryDetails.connectedTerritories" :key="conn.name">
+                                        <button @click="selectTerritory(conn.name)" class="territory-link">
+                                            {{ conn.name }}
+                                            <span class="conn-owner" :class="'owner-' + conn.owner.toLowerCase()">
+                                                ({{ conn.owner }})
+                                            </span>
+                                            <span v-if="conn.canAttack" class="can-attack">⚔️ Can Attack</span>
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="no-selection">
+                        <p>Select a territory to view details and available actions</p>
+                    </div>
+                </aside>
+            </main>
+
+            <!-- Bottom Action Bar -->
+            <footer class="action-bar">
+                <div class="phase-actions">
+                    <!-- Purchase Phase -->
+                    <div v-if="gameState.currentPhase === 'Purchase Units' && gameState.isHumanTurn">
+                        <button @click="openPurchaseModal" class="btn btn-action">
+                            Buy Units ({{ currentPlayer.ipcs }} IPCs)
+                        </button>
+                        <button @click="advancePhase" class="btn btn-advance">
+                            Done Purchasing →
+                        </button>
+                    </div>
+
+                    <!-- Combat Move Phase -->
+                    <div v-else-if="gameState.currentPhase === 'Combat Move' && gameState.isHumanTurn">
+                        <span class="moves-count">{{ plannedMoves.length }} moves planned</span>
+                        <button @click="showPlannedMoves" class="btn btn-action" v-if="plannedMoves.length > 0">
+                            Review Moves
+                        </button>
+                        <button @click="advancePhase" class="btn btn-advance">
+                            Execute Moves →
+                        </button>
+                    </div>
+
+                    <!-- Conduct Combat Phase -->
+                    <div v-else-if="gameState.currentPhase === 'Conduct Combat' && gameState.isHumanTurn">
+                        <span class="battles-count" v-if="pendingBattles.length > 0">
+                            {{ pendingBattles.length }} battles pending
+                        </span>
+                        <button @click="autoResolveBattles" class="btn btn-action" v-if="pendingBattles.length > 0">
+                            Auto-Resolve All Battles
+                        </button>
+                        <button @click="advancePhase" class="btn btn-advance" v-if="pendingBattles.length === 0">
+                            Done with Combat →
+                        </button>
+                    </div>
+
+                    <!-- Noncombat Move Phase -->
+                    <div v-else-if="gameState.currentPhase === 'Noncombat Move' && gameState.isHumanTurn">
+                        <span class="moves-count">{{ plannedMoves.length }} moves planned</span>
+                        <button @click="advancePhase" class="btn btn-advance">
+                            Execute Moves →
+                        </button>
+                    </div>
+
+                    <!-- Mobilize Phase -->
+                    <div v-else-if="gameState.currentPhase === 'Mobilize New Units' && gameState.isHumanTurn">
+                        <span class="units-count" v-if="purchasedUnits.length > 0">
+                            {{ purchasedUnits.length }} units to place
+                        </span>
+                        <button @click="advancePhase" class="btn btn-advance">
+                            Done Placing →
+                        </button>
+                    </div>
+
+                    <!-- Collect Income Phase -->
+                    <div v-else-if="gameState.currentPhase === 'Collect Income' && gameState.isHumanTurn">
+                        <button @click="advancePhase" class="btn btn-advance">
+                            Collect Income & End Turn →
+                        </button>
+                    </div>
+
+                    <!-- NPC Turn -->
+                    <div v-else-if="!gameState.isHumanTurn">
+                        <span class="npc-turn-info">{{ gameState.currentPower }}'s turn (Computer)</span>
+                        <button @click="executeNPCTurn" class="btn btn-action">
+                            Watch NPC Turn →
+                        </button>
+                    </div>
+                </div>
+            </footer>
+        </div>
+
+        <!-- Purchase Modal -->
+        <dialog id="purchaseModal" class="modal">
+            <div class="modal-content">
+                <h2>Purchase Units</h2>
+                <p>Available IPCs: {{ currentPlayer.ipcs }}</p>
+                <div v-if="availableUnits" class="unit-purchase-list">
+                    <div v-for="unit in availableUnits" :key="unit.type" class="unit-purchase-item">
+                        <div class="unit-purchase-info">
+                            <strong>{{ unit.type }}</strong>
+                            <span class="unit-cost">Cost: {{ unit.cost }} IPCs</span>
+                            <span class="unit-purchase-stats">A:{{ unit.attack }} D:{{ unit.defend }} M:{{ unit.movement }}</span>
+                        </div>
+                        <div class="unit-purchase-controls">
+                            <button @click="purchaseUnit(unit.type)" :disabled="!unit.available" class="btn btn-sm">
+                                Buy
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <button @click="closePurchaseModal" class="btn btn-secondary">Close</button>
+            </div>
+        </dialog>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
