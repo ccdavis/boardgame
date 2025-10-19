@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Territory Coordinate Mapper</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #2c3e50;
+            color: #ecf0f1;
+        }
+        .container {
+            max-width: 100%;
+            display: flex;
+            gap: 20px;
+        }
+        .map-container {
+            flex: 1;
+            position: relative;
+            background: #000;
+            border: 3px solid #3498db;
+        }
+        .map-image {
+            display: block;
+            width: 100%;
+            height: auto;
+            cursor: crosshair;
+        }
+        .marker {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: #e74c3c;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            transform: translate(-6px, -6px);
+            pointer-events: none;
+            box-shadow: 0 0 10px rgba(231, 76, 60, 0.8);
+        }
+        .marker-label {
+            position: absolute;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            white-space: nowrap;
+            pointer-events: none;
+            transform: translate(8px, -20px);
+        }
+        .sidebar {
+            width: 400px;
+            background: #34495e;
+            padding: 20px;
+            border-radius: 8px;
+            height: fit-content;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        h1 {
+            margin-top: 0;
+            color: #3498db;
+            font-size: 24px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], select {
+            width: 100%;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 10px 20px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #2980b9;
+        }
+        button.danger {
+            background: #e74c3c;
+        }
+        button.danger:hover {
+            background: #c0392b;
+        }
+        .coordinates-list {
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            background: #2c3e50;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .coord-item {
+            padding: 5px;
+            margin: 2px 0;
+            background: #1a252f;
+            border-radius: 3px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .coord-item button {
+            padding: 2px 8px;
+            font-size: 10px;
+            margin: 0;
+        }
+        .stats {
+            background: #2c3e50;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            padding: 8px;
+            border-radius: 4px;
+            border: none;
+            font-family: monospace;
+            font-size: 11px;
+            box-sizing: border-box;
+        }
+        .instructions {
+            background: #16a085;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="map-container" id="mapContainer">
+            <img src="/images/map.jpg" alt="Axis & Allies Map" class="map-image" id="mapImage">
+            <div id="markers"></div>
+        </div>
+
+        <div class="sidebar">
+            <h1>Territory Coordinate Mapper</h1>
+
+            <div class="instructions">
+                <strong>Instructions:</strong><br>
+                1. Select a territory from the dropdown<br>
+                2. Click on its center on the map<br>
+                3. Repeat for all territories<br>
+                4. Export when done
+            </div>
+
+            <div class="stats">
+                <strong>Progress:</strong> <span id="progress">0/0</span><br>
+                <strong>Image Size:</strong> <span id="imageSize">-</span><br>
+                <strong>Last Click:</strong> <span id="lastClick">-</span>
+            </div>
+
+            <div class="input-group">
+                <label for="territorySelect">Current Territory:</label>
+                <select id="territorySelect">
+                    <option value="">-- Select Territory --</option>
+                </select>
+            </div>
+
+            <div class="input-group">
+                <label for="customName">Or Enter Custom Name:</label>
+                <input type="text" id="customName" placeholder="Territory name...">
+            </div>
+
+            <button onclick="undoLast()">↶ Undo Last</button>
+            <button onclick="clearAll()" class="danger">Clear All</button>
+
+            <div class="coordinates-list" id="coordsList"></div>
+
+            <div class="input-group" style="margin-top: 20px;">
+                <label>Export JavaScript:</label>
+                <textarea id="exportOutput" readonly></textarea>
+            </div>
+
+            <button onclick="copyToClipboard()">📋 Copy to Clipboard</button>
+            <button onclick="downloadFile()">💾 Download File</button>
+        </div>
+    </div>
+
+    <script>
+        // Territory names from the game
+        const TERRITORY_NAMES = [
+            "Germany", "Britain", "Western Europe", "Southern Europe", "Spain", "Eastern Europe",
+            "Ukraine", "Norway Finland", "Karelia", "Russia", "Caucases", "Kazakstan",
+            "Novosibirsk", "Evenki", "Yakutsk SSR", "Soviet Far East", "Manchuria", "Mongolia",
+            "Jehol", "Kwangtung", "Kiangsu", "French Indo China", "Burma", "India", "Persia",
+            "Syria Iraq", "Egypt", "Libya", "Algeria Morocco", "Anglo Egypt Sudan",
+            "Belgian Congo", "South Africa", "Madagascar", "East Africa", "Italian East Africa",
+            "Turkey", "Afghanistan", "Sinkiang", "West Russia", "Archangel",
+            "Japan", "Okinawa", "Iwo Jima", "Wake Island", "Midway", "Hawaii", "Alaska",
+            "Western Canada", "Western United States", "Central United States",
+            "Eastern United States", "Mexico", "Central America", "West Indies",
+            "Venezuela", "Brazil", "Peru Chile", "Argentina Chile", "Panama",
+            "New Guinea", "East Indies", "Borneo Celebes", "Philippine Islands", "French Madagascar",
+            "Gibraltar Sea Zone", "North Atlantic", "South Atlantic", "Mediterranean Sea",
+            "Black Sea", "Baltic Sea", "Barents Sea", "Norwegian Sea",
+            "North Sea", "English Channel", "Bay of Biscay", "North West Pacific",
+            "North Pacific", "Central Pacific", "South Pacific", "Indian Ocean",
+            "Red Sea", "Arabian Sea", "South West Indian Ocean", "North West Indian Ocean",
+            "Mozambique Channel", "North East Pacific", "West Atlantic", "Gulf of Mexico",
+            "Caribbean Sea", "South America", "Greenland", "Iceland",
+            "Morocco", "Rio de Oro", "French West Africa", "French Equatorial Africa",
+            "Angola", "Rhodesia", "Trans Jordan", "Saudi Arabia", "North West Europe",
+            "Finland", "Balkans", "Scandinavia", "London", "Berlin", "Paris",
+            "Rome", "Stalingrad", "Leningrad", "Moscow", "Washington", "Los Angeles",
+            "San Francisco", "Seattle", "Chicago", "New York", "Tokyo", "Osaka",
+            "Manila", "Shanghai", "Hong Kong", "Calcutta", "New Delhi", "Bombay",
+            "Karachi", "Tehran", "Baghdad", "Damascus", "Jerusalem", "Cairo",
+            "Alexandria", "Tripoli", "Tunis", "Casablanca", "Dakar", "Lagos",
+            "Leopoldville", "Nairobi", "Khartoum", "Addis Ababa", "Mogadishu"
+        ];
+
+        const coordinates = {};
+        const mapImage = document.getElementById('mapImage');
+        const mapContainer = document.getElementById('mapContainer');
+        const territorySelect = document.getElementById('territorySelect');
+        const customNameInput = document.getElementById('customName');
+
+        // Populate territory dropdown
+        TERRITORY_NAMES.forEach(name => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            territorySelect.appendChild(option);
+        });
+
+        // Update image size display
+        mapImage.onload = function() {
+            document.getElementById('imageSize').textContent =
+                `${mapImage.naturalWidth}x${mapImage.naturalHeight}`;
+            updateProgress();
+        };
+
+        // Handle map clicks
+        mapImage.addEventListener('click', function(e) {
+            const territoryName = customNameInput.value.trim() || territorySelect.value;
+
+            if (!territoryName) {
+                alert('Please select or enter a territory name first!');
+                return;
+            }
+
+            const rect = mapImage.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            // Convert to image coordinates
+            const scaleX = mapImage.naturalWidth / rect.width;
+            const scaleY = mapImage.naturalHeight / rect.height;
+            const pixelX = Math.round(x * scaleX);
+            const pixelY = Math.round(y * scaleY);
+
+            // Calculate percentage
+            const pctX = (pixelX / mapImage.naturalWidth * 100).toFixed(2);
+            const pctY = (pixelY / mapImage.naturalHeight * 100).toFixed(2);
+
+            // Store coordinates
+            coordinates[territoryName] = {
+                x: parseFloat(pctX),
+                y: parseFloat(pctY),
+                pixel_x: pixelX,
+                pixel_y: pixelY
+            };
+
+            // Add marker
+            addMarker(x, y, territoryName);
+
+            // Update displays
+            updateCoordsList();
+            updateExport();
+            updateProgress();
+            document.getElementById('lastClick').textContent =
+                `${territoryName} at (${pixelX}, ${pixelY})`;
+
+            // Auto-advance to next territory
+            if (territorySelect.value) {
+                const currentIndex = TERRITORY_NAMES.indexOf(territorySelect.value);
+                if (currentIndex >= 0 && currentIndex < TERRITORY_NAMES.length - 1) {
+                    territorySelect.value = TERRITORY_NAMES[currentIndex + 1];
+                }
+            }
+            customNameInput.value = '';
+        });
+
+        function addMarker(x, y, label) {
+            const marker = document.createElement('div');
+            marker.className = 'marker';
+            marker.style.left = x + 'px';
+            marker.style.top = y + 'px';
+            marker.setAttribute('data-territory', label);
+
+            const markerLabel = document.createElement('div');
+            markerLabel.className = 'marker-label';
+            markerLabel.textContent = label;
+            markerLabel.style.left = x + 'px';
+            markerLabel.style.top = y + 'px';
+            markerLabel.setAttribute('data-territory', label);
+
+            document.getElementById('markers').appendChild(marker);
+            document.getElementById('markers').appendChild(markerLabel);
+        }
+
+        function updateCoordsList() {
+            const list = document.getElementById('coordsList');
+            list.innerHTML = '';
+
+            Object.keys(coordinates).sort().forEach(name => {
+                const item = document.createElement('div');
+                item.className = 'coord-item';
+                const coords = coordinates[name];
+                item.innerHTML = `
+                    <span>${name}: (${coords.x}%, ${coords.y}%)</span>
+                    <button onclick="removeTerritory('${name}')">✕</button>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        function removeTerritory(name) {
+            delete coordinates[name];
+            // Remove markers
+            document.querySelectorAll(`[data-territory="${name}"]`).forEach(el => el.remove());
+            updateCoordsList();
+            updateExport();
+            updateProgress();
+        }
+
+        function undoLast() {
+            const keys = Object.keys(coordinates);
+            if (keys.length > 0) {
+                removeTerritory(keys[keys.length - 1]);
+            }
+        }
+
+        function clearAll() {
+            if (confirm('Clear all coordinates?')) {
+                Object.keys(coordinates).forEach(name => {
+                    delete coordinates[name];
+                });
+                document.getElementById('markers').innerHTML = '';
+                updateCoordsList();
+                updateExport();
+                updateProgress();
+            }
+        }
+
+        function updateProgress() {
+            const total = TERRITORY_NAMES.length;
+            const mapped = Object.keys(coordinates).length;
+            document.getElementById('progress').textContent = `${mapped}/${total}`;
+        }
+
+        function updateExport() {
+            let output = `/**\n * Territory coordinates for Axis & Allies map\n`;
+            output += ` * Image dimensions: ${mapImage.naturalWidth}x${mapImage.naturalHeight}\n`;
+            output += ` * Mapped ${Object.keys(coordinates).length} territories\n`;
+            output += ` */\n\nconst TERRITORY_COORDS = {\n`;
+
+            Object.keys(coordinates).sort().forEach(name => {
+                const c = coordinates[name];
+                const radius = Math.min(4.0, Math.max(1.5, name.length * 0.15)).toFixed(1);
+                output += `    "${name}": { x: ${c.x}, y: ${c.y}, radius: ${radius} },\n`;
+            });
+
+            output += `};\n\nif (typeof window !== 'undefined') {\n    window.TERRITORY_COORDS = TERRITORY_COORDS;\n}\n`;
+
+            document.getElementById('exportOutput').value = output;
+        }
+
+        function copyToClipboard() {
+            const output = document.getElementById('exportOutput');
+            output.select();
+            document.execCommand('copy');
+            alert('Copied to clipboard!');
+        }
+
+        function downloadFile() {
+            const output = document.getElementById('exportOutput').value;
+            const blob = new Blob([output], { type: 'text/javascript' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'territory-coords.js';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
