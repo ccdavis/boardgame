@@ -231,18 +231,42 @@ func TestControllerLoadUnit(t *testing.T) {
 	}
 }
 
-func TestControllerLoadUnitWrongPhase(t *testing.T) {
+// Loading is legal in either movement phase.
+//
+// This test used to assert the opposite for the combat-move phase, which made
+// an amphibious assault impossible: the rules have a transport load, sail and
+// land within combat movement, so a landing force could never get aboard.
+func TestControllerLoadUnitDuringCombatMove(t *testing.T) {
 	game, infantryID, transportID := setupTransportTest()
 
 	game.PlayerOrder = []string{"Germany", "UK"}
 	game.CurrentPower = "Germany"
-	game.CurrentPhase = models.CombatMovePhase // Wrong phase
+	game.CurrentPhase = models.CombatMovePhase
 
 	gc := NewGameController(game)
 
-	err := gc.LoadUnit(transportID, infantryID)
-	if err == nil {
-		t.Error("Should not be able to load during combat move phase")
+	if err := gc.LoadUnit(transportID, infantryID); err != nil {
+		t.Errorf("loading during combat movement should be allowed: %v", err)
+	}
+}
+
+// Outside a movement phase there is no loading at all.
+func TestControllerLoadUnitOutsideMovement(t *testing.T) {
+	for _, phase := range []models.Phase{
+		models.PurchasePhase,
+		models.ConductCombatPhase,
+		models.MobilizePhase,
+		models.CollectIncomePhase,
+	} {
+		game, infantryID, transportID := setupTransportTest()
+		game.PlayerOrder = []string{"Germany", "UK"}
+		game.CurrentPower = "Germany"
+		game.CurrentPhase = phase
+
+		gc := NewGameController(game)
+		if err := gc.LoadUnit(transportID, infantryID); err == nil {
+			t.Errorf("loading should be refused during %s", phase)
+		}
 	}
 }
 

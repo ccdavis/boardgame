@@ -352,6 +352,27 @@ func canTraverseTerritory(game *models.Game, territory, destination *models.Terr
 			return true // Can move to own territory
 		}
 
+		// Open water is open. Sea zones carry an owner in the board file, but
+		// that is a starting marker rather than territory -- nobody holds an
+		// ocean. What stops a fleet is another fleet, so a sea zone is a legal
+		// noncombat destination if no enemy ships are in it.
+		//
+		// Without this a convoy could not sail into any sea zone nominally
+		// marked as somebody else's, which is most of them, and an amphibious
+		// crossing was impossible.
+		if territory.Terrain == models.Water {
+			for _, pieceID := range territory.Pieces {
+				occupant := game.Pieces[pieceID]
+				if occupant == nil || occupant.Owner == nil {
+					continue
+				}
+				if occupant.Owner != currentPlayer && !areAllies(occupant.Owner, currentPlayer) {
+					return false // an enemy fleet is here; entering is combat
+				}
+			}
+			return true
+		}
+
 		// Noncombat moves can target:
 		// 1. Territories we own
 		if territory.Owner == currentPlayer {

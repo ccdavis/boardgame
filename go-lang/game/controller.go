@@ -10,6 +10,12 @@ type GameController struct {
 	Game           *models.Game
 	MoveTracker    *MovementTracker
 	PendingBattles map[string]*Battle // Territory name -> Battle
+
+	// Plans are the computer players' standing intentions, which outlive a
+	// turn. They live here rather than on the AI because an NPCAIPlayer is
+	// rebuilt for each turn in some paths -- the web server constructs one per
+	// request -- so state held on the AI would be thrown away between turns.
+	Plans *PlanBook
 }
 
 // NewGameController creates a new controller for a game
@@ -22,6 +28,7 @@ func NewGameController(game *models.Game) *GameController {
 		Game:           game,
 		MoveTracker:    NewMovementTracker(),
 		PendingBattles: make(map[string]*Battle),
+		Plans:          NewPlanBook(),
 	}
 }
 
@@ -771,9 +778,12 @@ func (gc *GameController) removePieceFromBoard(piece *models.Piece, territoryNam
 
 // LoadUnit loads a unit onto a transport during noncombat move phase
 func (gc *GameController) LoadUnit(transportID, pieceID int) error {
-	// Can only load during noncombat move phase
-	if gc.Game.CurrentPhase != models.NoncombatMovePhase {
-		return fmt.Errorf("can only load units during Noncombat Move phase")
+	// Loading happens during either movement phase. Restricting it to noncombat
+	// movement made an amphibious assault impossible: the rules have a transport
+	// load, sail and land within the combat-move phase, so a landing force could
+	// never get aboard.
+	if !gc.inMovementPhase() {
+		return fmt.Errorf("can only load units during a movement phase")
 	}
 
 	player, err := gc.GetCurrentPlayer()
@@ -798,9 +808,10 @@ func (gc *GameController) LoadUnit(transportID, pieceID int) error {
 
 // UnloadUnit unloads a unit from a transport during noncombat move phase
 func (gc *GameController) UnloadUnit(transportID, pieceID int, destinationName string) error {
-	// Can only unload during noncombat move phase
-	if gc.Game.CurrentPhase != models.NoncombatMovePhase {
-		return fmt.Errorf("can only unload units during Noncombat Move phase")
+	// Unloading into a hostile territory is an attack, so it belongs to the
+	// combat-move phase; unloading onto friendly ground is a noncombat move.
+	if !gc.inMovementPhase() {
+		return fmt.Errorf("can only unload units during a movement phase")
 	}
 
 	// Validate the unload operation
@@ -816,6 +827,12 @@ func (gc *GameController) UnloadUnit(transportID, pieceID int, destinationName s
 	}
 
 	return nil
+}
+
+// inMovementPhase reports whether units may currently be moved.
+func (gc *GameController) inMovementPhase() bool {
+	return gc.Game.CurrentPhase == models.CombatMovePhase ||
+		gc.Game.CurrentPhase == models.NoncombatMovePhase
 }
 
 // GetTransportCargo returns the piece IDs held by a transport

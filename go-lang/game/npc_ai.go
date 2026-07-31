@@ -55,6 +55,11 @@ func (npc *NPCAIPlayer) TakeTurn(controller *GameController, transcript *GameTra
 
 	transcript.LogPhaseStart(player.Name, controller.Game.CurrentPhase)
 
+	// Bring standing plans up to date before deciding anything. This is what
+	// makes the computer players non-stateless: a plan formed several turns ago
+	// tells this turn what to buy, where to march, and when to sail.
+	npc.ReviewPlans(controller, player, transcript)
+
 	// Phase 1: Purchase
 	err = npc.PurchasePhase(controller, transcript)
 	if err != nil {
@@ -154,6 +159,28 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	spentOn := make(map[string]int)
 	unaffordable := make(map[string]bool)
 
+	// Standing plans get first call on the budget. An invasion that is short of
+	// shipping stays short forever if production is decided without reference to
+	// it -- which is why no transport was ever built.
+	for unitType, count := range npc.PlanPurchases(controller, player) {
+		template, exists := game.GlobalPieceTemplates[unitType]
+		if !exists {
+			continue
+		}
+		for i := 0; i < count; i++ {
+			cost := int(template.Cost)
+			if spent+cost > budget {
+				break
+			}
+			if err := controller.PurchaseUnit(unitType, 1); err != nil {
+				break
+			}
+			spent += cost
+			spentOn[unitType] += cost
+			purchases[unitType]++
+		}
+	}
+
 	for spent < budget {
 		// Pick a unit type to buy.
 		//
@@ -225,7 +252,7 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 	attacksPlanned := 0
 	for _, target := range targets {
 		// Find our adjacent territories that can attack this target
-		attackers := npc.findAttackersFor(game, player, target)
+		attackers := npc.findAttackersFor(controller, player, target)
 
 		// Collect all available attacking pieces
 		var allAttackers []*models.Piece
@@ -330,13 +357,24 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 		}
 	}
 
+	// Launch any plan whose force is assembled. Loading, sailing and landing
+	// all happen in this phase, so an operation that has been forming for
+	// several turns executes here in one go.
+	launched := npc.ExecuteReadyPlans(controller, player, transcript)
+
 	// Execute all combat moves
 	err := controller.ExecuteCombatMoves()
 	if err != nil {
 		return err
 	}
 
-	if movesMade == 0 {
+	// The convoys have arrived; put the troops ashore. This has to follow the
+	// move, not precede it, or the transports would still be at the port.
+	if launched > 0 {
+		controller.LandAssaultTroops(player.Name, transcript)
+	}
+
+	if movesMade == 0 && launched == 0 {
 		transcript.LogAction(player.Name, "No combat moves made")
 	}
 
@@ -399,13 +437,36 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 }
 
 // NoncombatMovePhase consolidates forces after combat
+
+// uncommittedPieces returns the units in a territory that are free to be moved
+// by the ordinary movement logic.
+//
+// Units reserved by a standing plan are held back. They are massing for an
+// operation, and general movement would otherwise walk them off the quayside
+// again every turn -- which it did, so no invasion force ever assembled.
+func (npc *NPCAIPlayer) uncommittedPieces(controller *GameController, player *models.Player, territoryName string) []*models.Piece {
+	all := controller.Game.GetPiecesInTerritory(territoryName)
+	free := make([]*models.Piece, 0, len(all))
+	for _, piece := range all {
+		if controller.Plans.Committed(player.Name, piece.ID) {
+			continue
+		}
+		free = append(free, piece)
+	}
+	return free
+}
+
 func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcript *GameTranscript) error {
 	player, _ := controller.GetCurrentPlayer()
 	game := controller.Game
 
 	transcript.LogPhaseStart(player.Name, models.NoncombatMovePhase)
 
-	movesMade := 0
+	// Gathering comes first: units committed to a plan walk to their port and
+	// shipping sails to meet them. Doing this before general movement stops the
+	// ordinary logic scattering an invasion force that has been assembling for
+	// several turns.
+	movesMade := npc.GatherForPlans(controller, player, transcript)
 
 	// Identify strategic targets (victory cities)
 	strategicTargets := npc.identifyStrategicTargets(game, player)
@@ -436,7 +497,7 @@ func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcrip
 		}
 
 		for _, safe := range safeTerritories {
-			pieces := game.GetPiecesInTerritory(safe.Name)
+			pieces := npc.uncommittedPieces(controller, player, safe.Name)
 
 			if len(pieces) <= 2 {
 				continue // Don't leave empty
@@ -497,7 +558,7 @@ func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcrip
 					break
 				}
 
-				pieces := game.GetPiecesInTerritory(safe.Name)
+				pieces := npc.uncommittedPieces(controller, player, safe.Name)
 
 				if len(pieces) <= 2 {
 					continue
@@ -537,7 +598,7 @@ func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcrip
 				break
 			}
 
-			pieces := game.GetPiecesInTerritory(safeTerritory.Name)
+			pieces := npc.uncommittedPieces(controller, player, safeTerritory.Name)
 
 			if len(pieces) <= 2 {
 				continue
@@ -742,7 +803,8 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 }
 
 // findAttackersFor finds our pieces that can attack a target territory
-func (npc *NPCAIPlayer) findAttackersFor(game *models.Game, player *models.Player, target *models.Territory) map[string][]*models.Piece {
+func (npc *NPCAIPlayer) findAttackersFor(controller *GameController, player *models.Player, target *models.Territory) map[string][]*models.Piece {
+	game := controller.Game
 	attackers := make(map[string][]*models.Piece)
 
 	for _, ourTerritory := range player.Territories {
@@ -761,6 +823,12 @@ func (npc *NPCAIPlayer) findAttackersFor(game *models.Game, player *models.Playe
 			attackingPieces := make([]*models.Piece, 0)
 			for _, piece := range pieces {
 				caps := game.Units().For(piece)
+				// Units committed to a standing plan are left alone. Without
+				// this the ordinary movement logic walks an invasion force back
+				// off the quayside every turn, and the plan never assembles.
+				if controller.Plans.Committed(player.Name, piece.ID) {
+					continue
+				}
 				if piece.Movement > 0 && !caps.IsStructure && !caps.IsAA {
 					attackingPieces = append(attackingPieces, piece)
 				}
