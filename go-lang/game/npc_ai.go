@@ -13,15 +13,37 @@ type NPCAIPlayer struct {
 	Name       string
 	Difficulty string // "simple", "normal", "aggressive"
 	rng        *rand.Rand
+
+	// roller is the dice this player fights with. Combat used to build a fresh,
+	// time-seeded roller at the point of use, which meant a whole game could
+	// never be replayed -- and a bug found by running one was a bug you could
+	// not reproduce.
+	roller *DiceRoller
 }
 
-// NewNPCAIPlayer creates a new NPC AI player
+// NewNPCAIPlayer creates a new NPC AI player with unpredictable dice.
 func NewNPCAIPlayer(name string, difficulty string) *NPCAIPlayer {
+	return NewSeededNPCAIPlayer(name, difficulty, time.Now().UnixNano())
+}
+
+// NewSeededNPCAIPlayer creates an NPC whose decisions and dice follow from a
+// seed, so a game can be replayed exactly.
+func NewSeededNPCAIPlayer(name string, difficulty string, seed int64) *NPCAIPlayer {
 	return &NPCAIPlayer{
 		Name:       name,
 		Difficulty: difficulty,
-		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng:        rand.New(rand.NewSource(seed)),
+		roller:     NewSeededDiceRoller(seed),
 	}
+}
+
+// dice returns this player's roller, building one if the player was assembled
+// without going through a constructor.
+func (npc *NPCAIPlayer) dice() *DiceRoller {
+	if npc.roller == nil {
+		npc.roller = NewDiceRoller()
+	}
+	return npc.roller
 }
 
 // TakeTurn executes a complete turn for an NPC player
@@ -111,8 +133,25 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 		}
 	}
 
-	// Priority order: infantry (cheap), armor (strong), fighters (versatile)
-	unitPriorities := []string{"infantry", "armor", "fighter"}
+	// Target share of the budget for each unit type.
+	//
+	// This used to be a plain priority list walked from the top, and the top
+	// entry was the cheapest unit. Infantry is always affordable, so the loop
+	// bought infantry, broke, and started again at infantry -- for the whole
+	// game. A full game produced 1,075 infantry, zero armour and zero aircraft,
+	// while the code claimed to build a balanced force.
+	//
+	// Spending to a target share instead means each type is bought when it is
+	// furthest behind its share, so the mix holds at any income.
+	unitMix := []struct {
+		name  string
+		share float64
+	}{
+		{"infantry", 0.50},
+		{"armor", 0.30},
+		{"fighter", 0.20},
+	}
+	spentOn := make(map[string]int)
 	unaffordable := make(map[string]bool)
 
 	for spent < budget {
@@ -124,31 +163,37 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 		// reason unrelated to cost (chiefly being called outside the Purchase
 		// phase, which the web server does) the outer loop span forever and took
 		// the request with it.
+		// Choose the affordable type that is furthest behind its target share.
 		bought := false
-		for _, unitType := range unitPriorities {
-			template, exists := game.GlobalPieceTemplates[unitType]
-			if !exists {
+		best, bestDeficit := "", 0.0
+		for _, entry := range unitMix {
+			template, exists := game.GlobalPieceTemplates[entry.name]
+			if !exists || unaffordable[entry.name] {
 				continue
 			}
-			if unaffordable[unitType] {
-				continue
-			}
-
 			cost := int(template.Cost)
 			if spent+cost > budget {
 				continue
 			}
 
-			if err := controller.PurchaseUnit(unitType, 1); err != nil {
+			deficit := entry.share*float64(budget) - float64(spentOn[entry.name])
+			if best == "" || deficit > bestDeficit {
+				best, bestDeficit = entry.name, deficit
+			}
+		}
+
+		if best != "" {
+			cost := int(game.GlobalPieceTemplates[best].Cost)
+			if err := controller.PurchaseUnit(best, 1); err != nil {
 				// Not a budget problem: stop trying this unit type rather than
 				// asking again with the same arguments and the same answer.
-				unaffordable[unitType] = true
-				continue
+				unaffordable[best] = true
+			} else {
+				spent += cost
+				spentOn[best] += cost
+				purchases[best]++
+				bought = true
 			}
-			spent += cost
-			purchases[unitType]++
-			bought = true
-			break
 		}
 
 		if !bought {
@@ -304,7 +349,7 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 
 	transcript.LogPhaseStart(player.Name, models.ConductCombatPhase)
 
-	roller := NewDiceRoller()
+	roller := npc.dice()
 	battlesResolved := 0
 
 	// Resolve all pending battles with retreat logic

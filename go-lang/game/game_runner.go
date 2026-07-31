@@ -23,9 +23,19 @@ func NewGameRunner(game *models.Game, gameTitle string) *GameRunner {
 	}
 }
 
-// RegisterNPC registers an NPC player
+// RegisterNPC registers an NPC player with unpredictable dice.
 func (gr *GameRunner) RegisterNPC(playerName string, difficulty string) {
-	npc := NewNPCAIPlayer(playerName, difficulty)
+	gr.registerNPCPlayer(playerName, NewNPCAIPlayer(playerName, difficulty))
+}
+
+// RegisterSeededNPC registers an NPC whose play follows from a seed, so a whole
+// game can be replayed. Each player is given a distinct seed derived from the
+// one supplied, or they would all roll identically.
+func (gr *GameRunner) RegisterSeededNPC(playerName string, difficulty string, seed int64) {
+	gr.registerNPCPlayer(playerName, NewSeededNPCAIPlayer(playerName, difficulty, seed))
+}
+
+func (gr *GameRunner) registerNPCPlayer(playerName string, npc *NPCAIPlayer) {
 	gr.NPCPlayers[playerName] = npc
 
 	// Mark player as NPC in the game
