@@ -17,6 +17,7 @@ package engine
 
 import (
 	"fmt"
+	"sort"
 
 	"boardgame/game"
 	"boardgame/models"
@@ -300,6 +301,9 @@ func (d *Driver) ResolveAllBattles() ([]*game.BattleResult, error) {
 	for territory := range d.Controller.PendingBattles {
 		territories = append(territories, territory)
 	}
+	// Fixed order: map order varies run to run, and battle order decides which
+	// battle consumes which dice rolls.
+	sort.Strings(territories)
 
 	results := make([]*game.BattleResult, 0, len(territories))
 	for _, territory := range territories {

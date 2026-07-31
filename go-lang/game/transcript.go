@@ -67,9 +67,11 @@ func (t *GameTranscript) LogPhaseStart(player string, phase models.Phase) {
 
 // LogPurchase logs unit purchases
 func (t *GameTranscript) LogPurchase(player string, purchases map[string]int, totalCost int) {
-	items := make([]string, 0)
-	for unitType, count := range purchases {
-		items = append(items, fmt.Sprintf("%dx %s", count, unitType))
+	// Sorted so the same purchases always read the same way; map order would
+	// make two identical games produce different transcripts.
+	items := make([]string, 0, len(purchases))
+	for _, unitType := range sortedWants(purchases) {
+		items = append(items, fmt.Sprintf("%dx %s", purchases[unitType], unitType))
 	}
 	action := fmt.Sprintf("Purchased: %s (Cost: %d IPCs)", strings.Join(items, ", "), totalCost)
 	t.Log(0, player, models.PurchasePhase, action)

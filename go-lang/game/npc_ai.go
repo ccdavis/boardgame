@@ -358,8 +358,17 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 			continue // Skip this target
 		}
 
-		// Move units to attack (don't leave territories completely empty or vulnerable)
-		for territoryName, pieces := range attackers {
+		// Move units to attack (don't leave territories completely empty or
+		// vulnerable). Source territories are visited in a fixed order: map
+		// iteration order varies between runs, which broke seeded replay.
+		sourceNames := make([]string, 0, len(attackers))
+		for territoryName := range attackers {
+			sourceNames = append(sourceNames, territoryName)
+		}
+		sort.Strings(sourceNames)
+
+		for _, territoryName := range sourceNames {
+			pieces := attackers[territoryName]
 			sourceTerritory := game.Board[territoryName]
 
 			// Calculate how many to move based on success probability
@@ -451,8 +460,18 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 	roller := npc.dice()
 	battlesResolved := 0
 
-	// Resolve all pending battles with retreat logic
+	// Resolve battles in a fixed order. Ranging the map resolved them in
+	// whatever order Go's map iteration produced, and with one shared dice
+	// roller that meant each battle consumed different rolls on different runs
+	// -- so the same seed produced different games, and "replay with
+	// GAME_SEED=N" was a promise the code did not keep.
+	pending := make([]string, 0, len(controller.PendingBattles))
 	for territoryName := range controller.PendingBattles {
+		pending = append(pending, territoryName)
+	}
+	sort.Strings(pending)
+
+	for _, territoryName := range pending {
 		transcript.LogBattleStart(territoryName)
 
 		// Create retreat decider based on NPC difficulty
@@ -716,13 +735,11 @@ func (npc *NPCAIPlayer) MobilizePhase(controller *GameController, transcript *Ga
 
 	transcript.LogPhaseStart(player.Name, models.MobilizePhase)
 
-	// Find all territories with industrial complexes (called "factory" in aaa.gdf)
+	// Find all territories with industrial complexes (called "factory" in
+	// aaa.gdf), in a fixed order -- ranging the board map placed new units at a
+	// different factory on every run, which broke seeded replay.
 	icTerritories := make([]*models.Territory, 0)
-	for _, territory := range game.Board {
-		if territory.Owner != player {
-			continue
-		}
-
+	for _, territory := range sortedTerritories(player) {
 		for _, pieceID := range territory.Pieces {
 			piece := game.Pieces[pieceID]
 			if game.Units().For(piece).IsStructure {
@@ -1122,14 +1139,14 @@ func (npc *NPCAIPlayer) identifyStrategicTargets(game *models.Game, player *mode
 		}
 	}
 
-	// Sort by production value (higher first)
-	for i := 0; i < len(targets); i++ {
-		for j := i + 1; j < len(targets); j++ {
-			if targets[i].Production < targets[j].Production {
-				targets[i], targets[j] = targets[j], targets[i]
-			}
+	// Sort by production value (higher first), then by name: the candidates come
+	// out of a map, so without a total order the list differs between runs.
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Production != targets[j].Production {
+			return targets[i].Production > targets[j].Production
 		}
-	}
+		return targets[i].Name < targets[j].Name
+	})
 
 	return targets
 }
