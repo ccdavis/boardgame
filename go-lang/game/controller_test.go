@@ -990,3 +990,85 @@ func TestCapitals_CaptureSeizesTreasuryAndStopsIncome(t *testing.T) {
 		t.Error("USSR collected nothing with its capital back in allied hands")
 	}
 }
+
+// Sustained victory: the threshold (Axis 9, Allies 10) held across a full
+// round of play wins the game. Without this, evenly matched computer games
+// could never end -- the stable split was 8-6 and the immediate threshold 13.
+func TestVictory_SustainedThresholdHeldForAFullRound(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+	controller.StartGame()
+
+	// Axis at exactly 9 cities (has Germany + Tokyo; add 7).
+	for i := 0; i < 7; i++ {
+		name := fmt.Sprintf("AxisCity%d", i)
+		game.AddTerritory(name, models.Land, "Germany", 1)
+		game.Board[name].IsVictoryCity = true
+	}
+
+	// At the threshold, but not yet held: potential, not victory.
+	if winner, won, _ := controller.CheckVictoryCondition(); won || winner != "Axis" {
+		t.Fatalf("want potential Axis victory, got winner=%q won=%v", winner, won)
+	}
+
+	// One round boundary: noted, still not a win.
+	playRound := func() {
+		start := game.Turn
+		for game.Turn == start {
+			if err := controller.AdvanceTurn(); err != nil {
+				t.Fatalf("advancing: %v", err)
+			}
+		}
+	}
+	playRound()
+	if _, won, _ := controller.CheckVictoryCondition(); won {
+		t.Fatal("won after a single round boundary; the cities must be HELD for a round")
+	}
+
+	// A second boundary with the cities still held: the war is over.
+	playRound()
+	if winner, won, _ := controller.CheckVictoryCondition(); !won || winner != "Axis" {
+		t.Errorf("threshold held for a full round: want Axis win, got winner=%q won=%v", winner, won)
+	}
+}
+
+// Losing a city below the threshold resets the hold.
+func TestVictory_HoldResetsWhenTheThresholdIsLost(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+	controller.StartGame()
+
+	for i := 0; i < 7; i++ {
+		name := fmt.Sprintf("AxisCity%d", i)
+		game.AddTerritory(name, models.Land, "Germany", 1)
+		game.Board[name].IsVictoryCity = true
+	}
+
+	playRound := func() {
+		start := game.Turn
+		for game.Turn == start {
+			if err := controller.AdvanceTurn(); err != nil {
+				t.Fatalf("advancing: %v", err)
+			}
+		}
+	}
+	playRound() // hold noted at 9
+
+	// The Allies retake a city before the round completes.
+	models.ChangeOwnership(game.Board["AxisCity0"], game.Players["UK"])
+	playRound()
+	if _, won, _ := controller.CheckVictoryCondition(); won {
+		t.Fatal("victory declared although the threshold was lost mid-hold")
+	}
+
+	// Retaken and held again: the clock starts over, needing two boundaries.
+	models.ChangeOwnership(game.Board["AxisCity0"], game.Players["Germany"])
+	playRound()
+	if _, won, _ := controller.CheckVictoryCondition(); won {
+		t.Fatal("victory after one boundary of the new hold; the reset did not take")
+	}
+	playRound()
+	if winner, won, _ := controller.CheckVictoryCondition(); !won || winner != "Axis" {
+		t.Errorf("want Axis win after a fresh full-round hold, got winner=%q won=%v", winner, won)
+	}
+}

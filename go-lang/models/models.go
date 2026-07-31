@@ -208,6 +208,13 @@ type Game struct {
 	// this only controls whether holding them ends the game.
 	VictoryCitiesEnabled bool
 
+	// VictoryHoldSide and VictoryHoldRounds track sustained victory: the side
+	// currently at or above its city threshold (Axis 9, Allies 10) and how
+	// many consecutive round boundaries it has held it. Two boundaries means
+	// the threshold was held for a full round of play, which wins the game.
+	VictoryHoldSide   string
+	VictoryHoldRounds int
+
 	// unitRegistry is derived from GlobalPieceTemplates on first use.
 	unitRegistry *UnitRegistry
 }

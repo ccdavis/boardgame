@@ -104,6 +104,7 @@ func (gc *GameController) AdvanceTurn() error {
 	// Wrapping past the end of the order means a new round.
 	if nextIndex <= currentIndex {
 		gc.Game.Turn++
+		gc.recordVictoryHold()
 	}
 
 	gc.Game.CurrentPower = gc.Game.PlayerOrder[nextIndex]
@@ -197,17 +198,56 @@ func (gc *GameController) CheckVictoryCondition() (string, bool, error) {
 		return "Allies", true, nil
 	}
 
-	// Sustained victory: Axis 9+, Allies 10+
-	// (Note: Tracking "for a full round" requires additional state -
-	// for now we'll just report these thresholds)
+	// Sustained victory: the threshold held across a full round of play.
+	// recordVictoryHold counts round boundaries; two consecutive boundaries at
+	// or above the threshold means every power had its turn and the cities
+	// were still held. This was a comment for a long time ("requires
+	// additional state") -- and without it, games between evenly matched
+	// computer players could not end at all: the observed stable split was
+	// 8-6, the immediate threshold 13, and every game ran to the turn cap.
+	if gc.Game.VictoryHoldRounds >= 2 {
+		return gc.Game.VictoryHoldSide, true, nil
+	}
+
+	// Potential victory: at the threshold but not yet held for a full round.
 	if axisCities >= 9 {
-		return "Axis", false, nil // Potential victory
+		return "Axis", false, nil
 	}
 	if alliedCities >= 10 {
-		return "Allies", false, nil // Potential victory
+		return "Allies", false, nil
 	}
 
 	return "", false, nil
+}
+
+// recordVictoryHold notes, at a round boundary, whether a side stands at or
+// above its sustained-victory threshold, and for how many consecutive
+// boundaries it has done so.
+func (gc *GameController) recordVictoryHold() {
+	if !gc.Game.VictoryCitiesEnabled {
+		gc.Game.VictoryHoldSide, gc.Game.VictoryHoldRounds = "", 0
+		return
+	}
+
+	axis, allies := gc.Game.CountVictoryCities()
+	side := ""
+	switch {
+	case axis >= 9:
+		side = "Axis"
+	case allies >= 10:
+		side = "Allies"
+	}
+
+	if side == "" || side != gc.Game.VictoryHoldSide {
+		gc.Game.VictoryHoldSide = side
+		if side == "" {
+			gc.Game.VictoryHoldRounds = 0
+		} else {
+			gc.Game.VictoryHoldRounds = 1
+		}
+		return
+	}
+	gc.Game.VictoryHoldRounds++
 }
 
 // GetVictoryCityCounts returns the number of victory cities each side controls.
