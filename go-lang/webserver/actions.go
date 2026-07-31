@@ -343,6 +343,14 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 			continue // not actually reachable under the movement rules
 		}
 
+		// An aircraft can fly to any sea zone; whether it may STOP there is a
+		// carrier-slot question the pathfinder defers to the controller.
+		if piece.Terrain == models.Air && moveType == game.NoncombatMove &&
+			territory.Terrain == models.Water &&
+			!session.Controller.CarrierSlotFree(piece, territory, player) {
+			continue
+		}
+
 		isAttack := false
 		if currentPhase == models.CombatMovePhase && territory.Owner.Name != player.Name {
 			isAttack = len(territory.Pieces) > 0

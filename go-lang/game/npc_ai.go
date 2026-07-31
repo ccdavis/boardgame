@@ -837,6 +837,16 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 					continue // Skip allies
 				}
 
+				// Policy, not rule: the AI does not violate strict neutrals.
+				// The rules allow it -- 3 IPCs to the bank, the country raises
+				// a garrison, and every other strict neutral turns hostile --
+				// but that diplomatic price is invisible to this scoring, so a
+				// dumb attacker would hand the whole neutral bloc to its enemy
+				// for a 4-IPC province.
+				if neighbor.Owner.Name == "Neutral" && neighbor.NeutralType == models.StrictNeutral {
+					continue
+				}
+
 				// Calculate strategic score
 				score := neighbor.Production
 

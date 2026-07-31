@@ -332,13 +332,22 @@ func canTraverseTerritory(game *models.Game, piece *models.Piece, territory, des
 	// If this is the destination territory
 	if territory == destination {
 		// Where an aircraft may finish a noncombat move is a landing question,
-		// not an ownership question: friendly ground, or a carrier with room.
+		// not an ownership question: friendly ground, or a carrier slot.
 		//
 		// The general rules below got aircraft wrong in both directions -- a
 		// fighter could "land" in any sea zone and live there indefinitely, and
 		// (via the waypoint rules) could not fly *over* an enemy army at all.
+		//
+		// Ground is decided here; a sea landing is deliberately not. Whether a
+		// slot exists depends on planned state -- carriers sailing away or
+		// arriving, other aircraft already booked -- which only the controller
+		// can see. The pathfinder answers "can it fly there"; PlanMove's slot
+		// accounting answers "may it stop there".
 		if piece != nil && piece.Terrain == models.Air && moveType == NoncombatMove {
-			return canLandAt(game, piece, territory, currentPlayer)
+			if territory.Terrain == models.Land {
+				return territory.Owner == currentPlayer || areAllies(territory.Owner, currentPlayer)
+			}
+			return true
 		}
 
 		// Combat moves can target enemy territories
@@ -438,37 +447,10 @@ func canTraverseTerritory(game *models.Game, piece *models.Piece, territory, des
 	return true
 }
 
-// canLandAt reports whether an aircraft may end its move in a territory:
-// friendly land, or a sea zone holding a friendly carrier with room for it.
-//
-// The room check is per-carrier-slot at planning time; it does not account for
-// other aircraft planned onto the same carrier this phase, so two fighters can
-// both be promised the last slot. That is an over-permission, not a crash --
-// and far closer to the rules than no landing requirement at all.
-func canLandAt(game *models.Game, piece *models.Piece, territory *models.Territory, player *models.Player) bool {
-	if territory.Terrain == models.Land {
-		return territory.Owner == player || areAllies(territory.Owner, player)
-	}
-
-	for _, id := range territory.Pieces {
-		ship := game.Pieces[id]
-		if ship == nil || ship.Owner == nil {
-			continue
-		}
-		if ship.Owner != player && !areAllies(ship.Owner, player) {
-			continue
-		}
-		if len(ship.Holding) >= int(ship.Capacity) {
-			continue
-		}
-		for _, kind := range ship.CanCarry {
-			if kind == piece.Name {
-				return true
-			}
-		}
-	}
-	return false
-}
+// NeutralViolationCost is what an attacker pays the bank to violate a strict
+// neutral's territory. Paid once per neutral violated, when the first attacker
+// crosses the border.
+const NeutralViolationCost = 3
 
 // canAttackNeutral checks if a player can attack a neutral territory
 func canAttackNeutral(territory *models.Territory, attacker *models.Player) bool {
@@ -477,9 +459,12 @@ func canAttackNeutral(territory *models.Territory, attacker *models.Player) bool
 		return true // Normal attack rules apply
 	}
 
-	// Strict neutrals cannot be attacked
+	// Violating a strict neutral is allowed but not free: it costs 3 IPCs paid
+	// to the bank, the neutral raises a defending garrison, and every other
+	// strict neutral turns hostile. The attack was previously forbidden
+	// outright, which also made the chain-reaction rule unreachable dead code.
 	if territory.NeutralType == models.StrictNeutral {
-		return false
+		return attacker.IPCs >= NeutralViolationCost
 	}
 
 	// Pro-Allied neutrals can be attacked by Axis, but they will defend

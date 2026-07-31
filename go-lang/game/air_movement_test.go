@@ -126,3 +126,103 @@ func TestAir_RefusesAFullCarrier(t *testing.T) {
 		t.Fatal("a fighter was allowed to land on a carrier with no room")
 	}
 }
+
+// One free slot cannot be promised to two fighters in the same phase.
+func TestAir_CarrierSlotCannotBeDoubleBooked(t *testing.T) {
+	g, gc := airBoard(t)
+	g.CurrentPhase = models.NoncombatMovePhase
+	germany := g.Players["Germany"]
+
+	// A carrier with ONE free slot (the other already taken by parked cargo).
+	g.PlacePieces("Coast Sea", "carrier", 1)
+	var carrierID int
+	for _, id := range g.Board["Coast Sea"].Pieces {
+		if g.Pieces[id].Name == "carrier" {
+			carrierID = id
+			g.Pieces[id].Owner = germany
+		}
+	}
+	g.Pieces[carrierID].Holding = []int{9001}
+
+	// Two fighters at base.
+	g.PlacePieces("Base", "fighter", 1)
+	var fighters []int
+	for _, id := range g.Board["Base"].Pieces {
+		if g.Pieces[id].Name == "fighter" {
+			fighters = append(fighters, id)
+		}
+	}
+	if len(fighters) != 2 {
+		t.Fatalf("expected 2 fighters, got %d", len(fighters))
+	}
+
+	if err := gc.PlanMove(fighters[0], "Base", "Coast Sea"); err != nil {
+		t.Fatalf("first fighter refused the free slot: %v", err)
+	}
+	if err := gc.PlanMove(fighters[1], "Base", "Coast Sea"); err == nil {
+		t.Fatal("the last carrier slot was promised to two fighters in one phase")
+	}
+
+	// Cancelling the first booking frees the slot for the second.
+	if err := gc.CancelMove(fighters[0]); err != nil {
+		t.Fatalf("cancelling: %v", err)
+	}
+	if err := gc.PlanMove(fighters[1], "Base", "Coast Sea"); err != nil {
+		t.Errorf("slot not freed by cancelling its booking: %v", err)
+	}
+}
+
+// A carrier planned to sail away takes its slots with it.
+func TestAir_CarrierPlannedToLeaveTakesItsSlots(t *testing.T) {
+	g, gc := airBoard(t)
+	g.CurrentPhase = models.NoncombatMovePhase
+	germany := g.Players["Germany"]
+
+	g.AddTerritory("Far Sea", models.Water, "Neutral", 0)
+	g.ConnectTerritories("Coast Sea", "Far Sea")
+
+	g.PlacePieces("Coast Sea", "carrier", 1)
+	var carrierID int
+	for _, id := range g.Board["Coast Sea"].Pieces {
+		if g.Pieces[id].Name == "carrier" {
+			carrierID = id
+			g.Pieces[id].Owner = germany
+		}
+	}
+
+	if err := gc.PlanMove(carrierID, "Coast Sea", "Far Sea"); err != nil {
+		t.Fatalf("sailing the carrier: %v", err)
+	}
+	fighter := fighterAt(t, g, "Base")
+	if err := gc.PlanMove(fighter, "Base", "Coast Sea"); err == nil {
+		t.Fatal("a fighter was promised a slot on a carrier that is planned to sail away")
+	}
+}
+
+// A carrier planned to arrive brings its slots along: the fighter may land
+// where the flight deck will be when the moves execute.
+func TestAir_CarrierPlannedToArriveBringsItsSlots(t *testing.T) {
+	g, gc := airBoard(t)
+	g.CurrentPhase = models.NoncombatMovePhase
+	germany := g.Players["Germany"]
+
+	g.AddTerritory("Far Sea", models.Water, "Neutral", 0)
+	g.ConnectTerritories("Coast Sea", "Far Sea")
+
+	g.PlacePieces("Far Sea", "carrier", 1)
+	var carrierID int
+	for _, id := range g.Board["Far Sea"].Pieces {
+		if g.Pieces[id].Name == "carrier" {
+			carrierID = id
+			g.Pieces[id].Owner = germany
+		}
+	}
+
+	if err := gc.PlanMove(carrierID, "Far Sea", "Coast Sea"); err != nil {
+		t.Fatalf("sailing the carrier in: %v", err)
+	}
+	fighter := fighterAt(t, g, "Base")
+	if err := gc.PlanMove(fighter, "Base", "Coast Sea"); err != nil {
+		t.Errorf("fighter refused a slot on the carrier arriving this phase: %v", err)
+	}
+}

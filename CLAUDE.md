@@ -115,14 +115,20 @@ Located in `game/movement.go`:
 - Amphibious assault: Land units load on transports, move, then attack coastal territory
 - Air units overfly enemy territory and units freely; what limits them is range
 - Air unit landing: a noncombat air move must end in friendly territory or on a
-  friendly carrier with room (checked per carrier slot at planning time; two
-  aircraft planned onto the same last slot in one phase are not yet caught)
+  friendly carrier with a free slot, counting every move already planned this
+  phase -- aircraft booked onto the same carrier, carriers planned to sail
+  away, carriers planned to arrive
 
 ### Neutral Territory Rules
 
 Located in `models/models.go` and `game/movement.go`:
-- **Strict Neutrals** (Turkey, Afghanistan, Syria, Mongolia): Cannot be attacked. If any strict neutral is attacked, all become hostile with defending infantry.
-- **Pro-Allied Neutrals** (South America, some Middle East): Allied powers can peacefully activate during noncombat move, gaining free infantry. Axis can attack.
+- **Strict Neutrals** (Turkey, Switzerland, Afghanistan, Mongolia): May be
+  attacked, at a price: the attacker pays 3 IPCs to the bank, the violated
+  country raises a garrison (one infantry per point of production, minimum
+  one), and every *other* strict neutral immediately turns hostile, joining
+  the opposing side with garrisons of its own. The NPC AI never violates
+  neutrals as a matter of policy.
+- **Pro-Allied Neutrals** (South America, some Middle East): Allied powers can peacefully activate during noncombat move, gaining free infantry. Axis can attack, but the country raises a defending garrison when the first attacker crosses the border.
 - **Pro-Axis Neutrals**: Axis powers can peacefully activate during noncombat move. Allies can attack.
 - **Water Territories**: Owned by "Neutral" but freely traversable (NotNeutral type)
 

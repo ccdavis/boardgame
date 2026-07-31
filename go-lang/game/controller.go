@@ -444,6 +444,19 @@ func (gc *GameController) PlanMove(pieceID int, from, to string) error {
 			piece.Name, to, from, distance, remaining)
 	}
 
+	// An aircraft landing at sea needs a carrier slot that is still free once
+	// every already-planned move is counted -- aircraft planned onto the same
+	// carrier, carriers planned to sail away, carriers planned to arrive. The
+	// static per-slot check in pathfinding cannot see the tracker, so two
+	// fighters could both be promised the last slot in one phase.
+	if piece.Terrain == models.Air && moveType == NoncombatMove {
+		if dest := gc.Game.Board[to]; dest != nil && dest.Terrain == models.Water {
+			if !gc.CarrierSlotFree(piece, dest, player) {
+				return fmt.Errorf("no carrier slot left in %s once planned moves are counted", to)
+			}
+		}
+	}
+
 	// Record any territory this move blitzes through, so execution can take it.
 	blitzed := BlitzedTerritories(gc.Game, piece, path, player)
 
@@ -459,6 +472,75 @@ func (gc *GameController) PlanMove(pieceID int, from, to string) error {
 // CancelMove cancels a planned move
 func (gc *GameController) CancelMove(pieceID int) error {
 	return gc.MoveTracker.RemoveMove(pieceID)
+}
+
+// CarrierSlotFree reports whether a sea zone will still have a carrier slot
+// for this aircraft after every planned move this phase is accounted for.
+//
+// Slots come from friendly carriers that will be in the zone when moves
+// execute: those already there and not planned to leave, plus those planned to
+// arrive. Occupants are the friendly aircraft already parked there plus every
+// aircraft already planned to land there. Cancelling a planned move frees its
+// slot again automatically, because this recounts from the tracker each time.
+func (gc *GameController) CarrierSlotFree(aircraft *models.Piece, zone *models.Territory, player *models.Player) bool {
+	leaving := make(map[int]bool)
+	arriving := make(map[int]bool)
+	bookings := 0
+	for _, move := range gc.MoveTracker.Moves {
+		mover := gc.Game.Pieces[move.PieceID]
+		if mover == nil || mover.Owner == nil {
+			continue
+		}
+		friendly := mover.Owner == player || areAllies(mover.Owner, player)
+		if !friendly {
+			continue
+		}
+		switch {
+		case mover.Terrain == models.Water && move.From == zone.Name:
+			leaving[move.PieceID] = true
+		case mover.Terrain == models.Water && move.To == zone.Name:
+			arriving[move.PieceID] = true
+		case mover.Terrain == models.Air && move.To == zone.Name:
+			bookings++
+		}
+	}
+
+	slotsOn := func(ship *models.Piece) int {
+		if ship == nil || ship.Owner == nil {
+			return 0
+		}
+		if ship.Owner != player && !areAllies(ship.Owner, player) {
+			return 0
+		}
+		for _, kind := range ship.CanCarry {
+			if kind == aircraft.Name {
+				return int(ship.Capacity) - len(ship.Holding)
+			}
+		}
+		return 0
+	}
+
+	slots := 0
+	occupants := 0
+	for _, id := range zone.Pieces {
+		occupant := gc.Game.Pieces[id]
+		if occupant == nil {
+			continue
+		}
+		if !leaving[id] {
+			slots += slotsOn(occupant)
+		}
+		// Friendly aircraft already in the zone are parked on those carriers.
+		if occupant.Terrain == models.Air && occupant.Owner != nil &&
+			(occupant.Owner == player || areAllies(occupant.Owner, player)) {
+			occupants++
+		}
+	}
+	for id := range arriving {
+		slots += slotsOn(gc.Game.Pieces[id])
+	}
+
+	return occupants+bookings < slots
 }
 
 // ExecuteCombatMoves executes all combat moves and sets up battles
@@ -477,6 +559,9 @@ func (gc *GameController) ExecuteCombatMoves() error {
 
 	// Track if any strict neutral is being attacked
 	strictNeutralAttacked := false
+	// Neutrals whose defence has already been raised this phase, so a second
+	// attacker arriving does not levy the toll or the garrison twice.
+	violated := make(map[string]bool)
 
 	// Execute each move
 	for _, move := range combatMoves {
@@ -497,9 +582,30 @@ func (gc *GameController) ExecuteCombatMoves() error {
 		// Check if move creates a battle
 		toTerritory := gc.Game.Board[move.To]
 		if toTerritory.Owner.Name != player.Name {
-			// Check if attacking a strict neutral
-			if toTerritory.Owner.Name == "Neutral" && toTerritory.NeutralType == models.StrictNeutral {
-				strictNeutralAttacked = true
+			// A neutral under attack defends itself. When the first attacker
+			// crosses the border the country mobilises: a garrison of standing
+			// infantry, one per point of production. Violating a *strict*
+			// neutral additionally costs the attacker 3 IPCs paid to the bank
+			// and turns every other strict neutral hostile.
+			if toTerritory.Owner.Name == "Neutral" && toTerritory.Terrain == models.Land &&
+				toTerritory.NeutralType != models.NotNeutral && !violated[move.To] {
+				violated[move.To] = true
+
+				if toTerritory.NeutralType == models.StrictNeutral {
+					strictNeutralAttacked = true
+					player.IPCs -= NeutralViolationCost
+					if player.IPCs < 0 {
+						player.IPCs = 0 // gated at planning time; never overdraw
+					}
+				}
+
+				garrison := toTerritory.Production
+				if garrison < 1 {
+					garrison = 1
+				}
+				if defender := bestDefenderName(gc.Game); defender != "" {
+					gc.Game.PlacePieces(move.To, defender, garrison)
+				}
 			}
 
 			// Moving into hostile territory - create battle
@@ -934,10 +1040,16 @@ func (gc *GameController) TriggerStrictNeutralChainReaction(attacker *models.Pla
 	}
 
 	// Convert all strict neutrals to hostile (give them to the enemy power
-	// with defenders), in a fixed order for replayability.
+	// with defenders), in a fixed order for replayability. Neutrals currently
+	// being fought over are left out: the violated country is defending itself
+	// under its own flag, and flipping its ownership mid-battle would hand the
+	// battle a different defender than the one it was declared against.
 	defender := bestDefenderName(gc.Game)
 	for _, name := range sortedTerritoryNames(gc.Game) {
 		territory := gc.Game.Board[name]
+		if _, underAttack := gc.PendingBattles[name]; underAttack {
+			continue
+		}
 		if territory.Owner.Name == "Neutral" && territory.NeutralType == models.StrictNeutral {
 			models.ChangeOwnership(territory, enemyPower)
 
