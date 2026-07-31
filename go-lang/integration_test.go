@@ -35,21 +35,67 @@ func TestGameLoader(t *testing.T) {
 		t.Error("Expected at least one piece to be placed")
 	}
 
-	// Verify specific counts from aaa.gdf
-	if len(game.Players) != 6 {
-		t.Errorf("Expected 6 players, got %d", len(game.Players))
+	// Invariants rather than exact counts.
+	//
+	// These used to assert 6 players / 127 territories / 298 pieces. Those
+	// numbers describe one particular board, so every edit to aaa.gdf broke the
+	// test without anything actually being wrong -- and a test that has to be
+	// updated whenever the data changes stops being read. What matters is that
+	// the parsed board is internally consistent.
+	if len(game.Players) < 2 {
+		t.Errorf("expected at least two powers, got %d", len(game.Players))
 	}
 
-	if len(game.Board) != 127 {
-		t.Errorf("Expected 127 territories, got %d", len(game.Board))
+	if len(game.Board) < 50 {
+		t.Errorf("expected a full board, got only %d territories", len(game.Board))
 	}
 
-	if len(game.GlobalPieceTemplates) != 10 {
-		t.Errorf("Expected 10 unit types, got %d", len(game.GlobalPieceTemplates))
+	if len(game.GlobalPieceTemplates) < 5 {
+		t.Errorf("expected the unit roster, got %d types", len(game.GlobalPieceTemplates))
 	}
 
-	if len(game.Pieces) != 298 {
-		t.Errorf("Expected 298 pieces, got %d", len(game.Pieces))
+	// Every placed piece must be a declared unit type.
+	for id, piece := range game.Pieces {
+		if _, ok := game.GlobalPieceTemplates[piece.Name]; !ok {
+			t.Errorf("piece %d is a %q, which is not a declared unit type", id, piece.Name)
+		}
+	}
+
+	// Every piece must sit in exactly one territory. A piece in none of them is
+	// leaked and will never be seen again; a piece in two is double-counted.
+	holdings := make(map[int]string)
+	for name, territory := range game.Board {
+		for _, id := range territory.Pieces {
+			if previous, seen := holdings[id]; seen {
+				t.Errorf("piece %d is in both %q and %q", id, previous, name)
+			}
+			holdings[id] = name
+		}
+	}
+	for id := range game.Pieces {
+		if _, placed := holdings[id]; !placed {
+			// Cargo legitimately lives inside a transport rather than on the board.
+			carried := false
+			for _, other := range game.Pieces {
+				for _, heldID := range other.Holding {
+					if heldID == id {
+						carried = true
+					}
+				}
+			}
+			if !carried {
+				t.Errorf("piece %d (%s) is in no territory and is carried by nothing",
+					id, game.Pieces[id].Name)
+			}
+		}
+	}
+
+	// The adjacency graph must be symmetric, connected and simple.
+	if problems := game.ValidateGraph(); len(problems) > 0 {
+		t.Errorf("board graph has %d problem(s):", len(problems))
+		for _, p := range problems {
+			t.Errorf("  %s", p)
+		}
 	}
 
 	// Verify territories are connected

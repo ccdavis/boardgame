@@ -67,6 +67,29 @@ func (p *Parser) parseTerritoryName() (string, error) {
 }
 
 // Parse parses the entire game definition file
+// atSectionKeyword reports whether the next token starts a new top-level
+// section.
+//
+// Each section loop used to stop at one specific following keyword --
+// parseTerritories stopped at MAP, parseUnits at CONTAINERS or PLACEMENT, and
+// so on. That silently assumed a fixed section order and broke the moment a new
+// section was added between them. Terminating on any keyword removes the
+// assumption, so sections can appear in any order and new ones cost nothing.
+func (p *Parser) atSectionKeyword() bool {
+	switch p.peek() {
+	case scanner.PLAYERS, scanner.TURN, scanner.TERRITORIES, scanner.MAP,
+		scanner.UNITS, scanner.CONTAINERS, scanner.PLACEMENT,
+		scanner.SIDES, scanner.CAPITALS, scanner.VICTORYCITIES, scanner.NEUTRALITY:
+		return true
+	}
+	return false
+}
+
+// atSectionEnd is true at a section boundary or end of input.
+func (p *Parser) atSectionEnd() bool {
+	return p.atSectionKeyword() || p.peek() == scanner.EOF
+}
+
 func (p *Parser) Parse() (*models.Game, error) {
 	for p.peek() != scanner.EOF {
 		switch p.peek() {
@@ -96,6 +119,22 @@ func (p *Parser) Parse() (*models.Game, error) {
 			}
 		case scanner.PLACEMENT:
 			if err := p.parsePlacement(); err != nil {
+				return nil, err
+			}
+		case scanner.SIDES:
+			if err := p.parseSides(); err != nil {
+				return nil, err
+			}
+		case scanner.CAPITALS:
+			if err := p.parseCapitals(); err != nil {
+				return nil, err
+			}
+		case scanner.VICTORYCITIES:
+			if err := p.parseVictoryCities(); err != nil {
+				return nil, err
+			}
+		case scanner.NEUTRALITY:
+			if err := p.parseNeutrality(); err != nil {
 				return nil, err
 			}
 		default:
@@ -164,7 +203,7 @@ func (p *Parser) parseTerritories() error {
 		return err
 	}
 
-	for p.peek() != scanner.MAP && p.peek() != scanner.EOF {
+	for !p.atSectionEnd() {
 		if p.peek() != scanner.IDENTIFIER {
 			break
 		}
@@ -233,7 +272,7 @@ func (p *Parser) parseMap() error {
 		return err
 	}
 
-	for p.peek() != scanner.UNITS && p.peek() != scanner.EOF {
+	for !p.atSectionEnd() {
 		if p.peek() != scanner.IDENTIFIER {
 			break
 		}
@@ -281,8 +320,7 @@ func (p *Parser) parseUnits() error {
 		return err
 	}
 
-	for p.peek() != scanner.CONTAINERS && p.peek() != scanner.PLACEMENT &&
-		p.peek() != scanner.EOF {
+	for !p.atSectionEnd() {
 
 		if p.peek() != scanner.IDENTIFIER {
 			break
@@ -370,7 +408,7 @@ func (p *Parser) parseContainers() error {
 		return err
 	}
 
-	for p.peek() != scanner.PLACEMENT && p.peek() != scanner.EOF {
+	for !p.atSectionEnd() {
 		if p.peek() != scanner.IDENTIFIER {
 			break
 		}
@@ -430,7 +468,7 @@ func (p *Parser) parsePlacement() error {
 		return err
 	}
 
-	for p.peek() != scanner.EOF {
+	for !p.atSectionEnd() {
 		if p.peek() != scanner.IDENTIFIER {
 			break
 		}
@@ -474,5 +512,191 @@ func (p *Parser) parsePlacement() error {
 		}
 	}
 
+	return nil
+}
+
+// parseSides parses the Sides section.
+//
+//	Sides
+//	  Axis: Germany, Japan, Italy;
+//	  Allies: USA, USSR, UK;
+//
+// Membership here is what makes a power playable: it sets Side (used for
+// alliance checks) and TakesTurns. A power absent from every side -- Neutral --
+// owns territory but never takes a turn.
+func (p *Parser) parseSides() error {
+	if err := p.match(scanner.SIDES); err != nil {
+		return err
+	}
+
+	for !p.atSectionEnd() {
+		if p.peek() != scanner.IDENTIFIER {
+			break
+		}
+		side := p.lookahead.Content
+		if err := p.match(scanner.IDENTIFIER); err != nil {
+			return err
+		}
+		if err := p.match(scanner.COLON); err != nil {
+			return err
+		}
+
+		for p.peek() != scanner.SEMICOLON && p.peek() != scanner.EOF {
+			if p.peek() != scanner.IDENTIFIER {
+				return p.error("expected a power name in the Sides section")
+			}
+			name := p.lookahead.Content
+			p.match(scanner.IDENTIFIER)
+
+			player, ok := p.game.Players[name]
+			if !ok {
+				return p.error(fmt.Sprintf("side %q names unknown power %q", side, name))
+			}
+			player.Side = side
+			player.TakesTurns = true
+
+			if p.peek() == scanner.COMMA {
+				p.match(scanner.COMMA)
+			}
+		}
+		if err := p.match(scanner.SEMICOLON); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// parseCapitals parses the Capitals section.
+//
+//	Capitals
+//	  Germany: Germany;  USSR: Russia;
+//
+// A power's capital is where its treasury sits: capturing it transfers the
+// defender's remaining IPCs.
+func (p *Parser) parseCapitals() error {
+	if err := p.match(scanner.CAPITALS); err != nil {
+		return err
+	}
+
+	for !p.atSectionEnd() {
+		if p.peek() != scanner.IDENTIFIER {
+			break
+		}
+		powerName := p.lookahead.Content
+		if err := p.match(scanner.IDENTIFIER); err != nil {
+			return err
+		}
+		if err := p.match(scanner.COLON); err != nil {
+			return err
+		}
+
+		territoryName, err := p.parseTerritoryName()
+		if err != nil {
+			return err
+		}
+		if err := p.match(scanner.SEMICOLON); err != nil {
+			return err
+		}
+
+		player, ok := p.game.Players[powerName]
+		if !ok {
+			return p.error(fmt.Sprintf("capital declared for unknown power %q", powerName))
+		}
+		if _, ok := p.game.Board[territoryName]; !ok {
+			return p.error(fmt.Sprintf("capital of %q is unknown territory %q",
+				powerName, territoryName))
+		}
+		player.Capital = territoryName
+	}
+	return nil
+}
+
+// parseVictoryCities parses the VictoryCities section.
+//
+//	VictoryCities
+//	  Germany, Russia, Britain, Japan;
+//
+// Names are separated by commas and the list ends with a semicolon. Territory
+// names may be several words, so a name ends at a comma or semicolon.
+func (p *Parser) parseVictoryCities() error {
+	if err := p.match(scanner.VICTORYCITIES); err != nil {
+		return err
+	}
+
+	for !p.atSectionEnd() {
+		if p.peek() != scanner.IDENTIFIER {
+			break
+		}
+
+		for p.peek() != scanner.SEMICOLON && p.peek() != scanner.EOF {
+			name, err := p.parseTerritoryName()
+			if err != nil {
+				return err
+			}
+			territory, ok := p.game.Board[name]
+			if !ok {
+				return p.error(fmt.Sprintf("victory city %q is not a territory", name))
+			}
+			territory.IsVictoryCity = true
+
+			if p.peek() == scanner.COMMA {
+				p.match(scanner.COMMA)
+			}
+		}
+		if err := p.match(scanner.SEMICOLON); err != nil {
+			return err
+		}
+	}
+
+	// Present in the data means available; a game may still switch the win
+	// condition off.
+	p.game.VictoryCitiesEnabled = true
+	return nil
+}
+
+// parseNeutrality parses the Neutrality section.
+//
+//	Neutrality
+//	  Turkey: strict;  Spain: proaxis;  Colombia: proallied;
+//
+// The values are single words on purpose. Reserved words are matched without
+// regard to case, so a value like "neutral" would collide with the owner name
+// used throughout the Territories section.
+func (p *Parser) parseNeutrality() error {
+	if err := p.match(scanner.NEUTRALITY); err != nil {
+		return err
+	}
+
+	for !p.atSectionEnd() {
+		if p.peek() != scanner.IDENTIFIER {
+			break
+		}
+		territoryName, err := p.parseTerritoryName()
+		if err != nil {
+			return err
+		}
+		if err := p.match(scanner.COLON); err != nil {
+			return err
+		}
+		if p.peek() != scanner.IDENTIFIER {
+			return p.error("expected a neutrality kind")
+		}
+		kindStr := p.lookahead.Content
+		p.match(scanner.IDENTIFIER)
+		if err := p.match(scanner.SEMICOLON); err != nil {
+			return err
+		}
+
+		territory, ok := p.game.Board[territoryName]
+		if !ok {
+			return p.error(fmt.Sprintf("neutrality declared for unknown territory %q",
+				territoryName))
+		}
+		kind, err := models.ParseNeutralType(kindStr)
+		if err != nil {
+			return p.error(fmt.Sprintf("territory %q: %v", territoryName, err))
+		}
+		territory.NeutralType = kind
+	}
 	return nil
 }

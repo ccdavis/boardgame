@@ -186,8 +186,10 @@ func (s *Scanner) scanIdentifier() *Token {
 	var sb strings.Builder
 	startLine := s.line
 
-	// Read letters and digits only (like C++ version)
-	for (isLetter(s.lastChar) || isDigit(s.lastChar)) && !s.eof {
+	// Letters, digits and underscore. The C++ original allowed only letters and
+	// digits, which meant an identifier like industrial_complex could not be
+	// lexed at all -- it came through as two tokens with the underscore dropped.
+	for (isLetter(s.lastChar) || isDigit(s.lastChar) || s.lastChar == '_') && !s.eof {
 		sb.WriteRune(s.lastChar)
 		s.nextChar()
 	}

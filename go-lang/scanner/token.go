@@ -38,6 +38,10 @@ const (
 	CONTAINERS
 	PLACEMENT
 	MAP
+	SIDES
+	CAPITALS
+	VICTORYCITIES
+	NEUTRALITY
 )
 
 var tokenNames = map[TokenType]string{
@@ -72,6 +76,10 @@ var tokenNames = map[TokenType]string{
 	CONTAINERS:    "containers",
 	PLACEMENT:     "placement",
 	MAP:           "map",
+	SIDES:         "sides",
+	CAPITALS:      "capitals",
+	VICTORYCITIES: "victorycities",
+	NEUTRALITY:    "neutrality",
 }
 
 var reservedWords = map[string]TokenType{
@@ -82,6 +90,15 @@ var reservedWords = map[string]TokenType{
 	"containers":  CONTAINERS,
 	"placement":   PLACEMENT,
 	"map":         MAP,
+	// Board metadata sections. These are new keywords, so they must not collide
+	// with any identifier already used in a .gdf. Note in particular that
+	// "neutral" is NOT reserved: aaa.gdf uses Neutral as a territory owner, and
+	// reserved words are matched case-insensitively, so reserving it would break
+	// every neutral territory line on the board.
+	"sides":         SIDES,
+	"capitals":      CAPITALS,
+	"victorycities": VICTORYCITIES,
+	"neutrality":    NEUTRALITY,
 }
 
 func (t TokenType) String() string {

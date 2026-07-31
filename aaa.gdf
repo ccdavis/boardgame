@@ -1,18 +1,23 @@
 Players  
-Germany, USA, USSR, UK, Japan, Neutral;  # also defines turn order
+Germany, USA, USSR, UK, Japan, Italy, Neutral;  # also defines turn order
 
 Turn 1;
 
 Territories
 	Germany :land, Germany, 10;
-	Norway Finland :land, Germany, 3;
+	Norway :land, Germany, 2;
+	Finland :land, Germany, 1;
+	Sweden :land, Neutral, 2;
 	Karelia :land, USSR, 3;
 	Russia :land, USSR, 8;
 	Britain :land, UK, 12;
 	Western Europe :land, Germany, 8;
-	Southern Europe :land, Germany, 8;
+	Southern Europe :land, Germany, 5;
+	Italy :land, Italy, 3;
 	Spain :land, Germany, 1;
-	Eastern Europe :land, Germany, 3;
+	Switzerland :land, Neutral, 0;
+	Eastern Europe :land, Germany, 2;
+	Byelorussia :land, USSR, 1;
 	Ukraine :land, Germany, 3;
 	Caucases :land, USSR, 3;
 	Kazakstan :land, USSR, 1;
@@ -55,6 +60,7 @@ Territories
 	Argentina :land, Neutral, 1;
 	West Indies :land, USA, 1;
 	Algeria :land, Germany, 1;
+	Morocco :land, Germany, 1;
 	Libya :land, Germany, 1;
 	Egypt :land, UK, 2;
 	Borneo :land, Japan, 2;
@@ -137,16 +143,18 @@ Territories
 
 Map
 
-Germany: Western Europe, Southern Europe, Eastern Europe, North Sea, Baltic Sea;
-Norway Finland: Karelia, North Sea, Baltic Sea;
-Karelia: Norway Finland, Russia, Eastern Europe, Ukraine, Caucases, Baltic Sea, Karelia Sea;
+Germany: Western Europe, Southern Europe, Italy, Switzerland, Eastern Europe, North Sea, Baltic Sea;
+Norway: Finland, Sweden, North Sea, Baltic Sea;
+Finland: Norway, Sweden, Karelia, Baltic Sea;
+Sweden: Norway, Finland, Baltic Sea;
+Karelia: Finland, Byelorussia, Russia, Eastern Europe, Ukraine, Caucases, Baltic Sea, Karelia Sea;
 Russia: Karelia, Caucases, Kazakstan, Evenki, Novosibirsk;
 Britain: North Sea;
-Western Europe: Germany, Southern Europe, Spain, North Sea, Eastern Atlantic, Western Mediteranian ;
-Southern Europe: Germany, Western Europe, Eastern Europe, Turkey, Western Mediteranian , Eastern Mediteranian;
+Western Europe: Germany, Italy, Switzerland, Spain, North Sea, Eastern Atlantic, Western Mediteranian ;
+Southern Europe: Germany, Italy, Eastern Europe, Turkey, Eastern Mediteranian;
 Spain: Western Europe, Eastern Atlantic, Western Mediteranian ;
-Eastern Europe: Germany, Karelia, Southern Europe, Ukraine, Baltic Sea, Black Sea;
-Ukraine: Karelia, Eastern Europe, Caucases, Black Sea;
+Eastern Europe: Germany, Byelorussia, Southern Europe, Ukraine, Baltic Sea, Black Sea;
+Ukraine: Karelia, Byelorussia, Eastern Europe, Caucases, Black Sea;
 Caucases: Karelia, Russia, Ukraine, Turkey, Iran, Black Sea;
 Kazakstan: Russia, Novosibirsk, Afghanistan, Sinkiang Western China, Iran;
 Yakutsk SSR: Evenki, Novosibirsk, Mongolia, Manchuria, Soviet Far East;
@@ -160,9 +168,9 @@ Kwantung Eastern China: Manchuria, Central China, Burma and South East Asia , Ea
 Central China: Mongolia, Manchuria, Sinkiang Western China, Kwantung Eastern China, Burma and South East Asia ;
 Soviet Far East: Yakutsk SSR, Manchuria, North West Pacific;
 Japan: Sea of Japan;
-New Zealand Sea: New Zealand, South Australian Ocean, East Australia Sea, Solomon Island Sea, South Pacific;
+New Zealand Sea: New Zealand, South Australian Ocean, East Australia Sea, Solomon Island Sea, South Pacific, Central Pacific;
 Burma and South East Asia : Sinkiang Western China, Kwantung Eastern China, Central China, India, Bay of Bengal, South China Sea;
-India: Afghanistan, Sinkiang Western China, Burma and South East Asia , Iran, Indian Ocean;
+India: Afghanistan, Sinkiang Western China, Burma and South East Asia , Iran, Indian Ocean, North Central Indian Ocean, Bay of Bengal;
 East Indies : East Indies Ocean;
 Philipines : Philipines Sea;
 New Guinea: New Guinea Sea;
@@ -173,46 +181,46 @@ Solomon Islands: Solomon Island Sea;
 Hawaii: Hawaian Sea;
 Wake Island: Wake Island Sea;
 Midway Island: Midway Island sea;
-Alaska: Western Canada, Alaskan Pacific ;
-Western Canada: Alaska, Eastern Canada, Western US, Canadian Pacific;
+Alaska: Western Canada, Alaskan Pacific, Canadian Pacific;
+Western Canada: Alaska, Eastern Canada, Western US, Canadian Pacific, Western US Pacific;
 Eastern Canada: Western Canada, Eastern US, Canadian Atlantic;
 Western US: Western Canada, Eastern US, Mexico, Western US Pacific, Eastern USA Atlantic;
 Eastern US: Eastern Canada, Western US, Eastern USA Atlantic;
 Mexico: Western US, Central America, Eastern USA Atlantic, Mexican Pacific;
 Central America: Mexico, Colombia, Carribean Sea, Mexican Pacific;
-Colombia: Central America, Venezuela, Brazil, Peru, Mexican Pacific;
+Colombia: Central America, Venezuela, Brazil, Peru, Mexican Pacific, Carribean Sea;
 Venezuela: Colombia, Brazil, Carribean Sea;
 Brazil: Colombia, Venezuela, Peru, Argentina, East Brazil Atlantic, North Eastern Brazil Atlantic;
 Peru: Colombia, Brazil, Chile, South East Pacific;
 Chile: Peru, Argentina, South Argentinian Antarctic Ocean, South East Pacific;
 Argentina: Brazil, Chile, South Argentinian Antarctic Ocean, Argentine Atlantic;
 West Indies: Carribean Sea;
-Algeria: Libya, French West Africa, French East Africa, Eastern Atlantic, Western Mediteranian ;
+Algeria: Libya, Morocco, French West Africa, French East Africa, Eastern Atlantic, Western Mediteranian ;
 Libya: Algeria, Egypt, French East Africa, Eastern Mediteranian;
 Egypt: Libya, Palestine, French East Africa, Ethiopia, Kenya, Congo, Eastern Mediteranian, Red Sea;
 Borneo: Borneo Sea;
 
-Turkey: Southern Europe, Caucases, Syria, Iraq, Eastern Mediteranian, Black Sea;
+Turkey: Southern Europe, Caucases, Syria, Iraq, Eastern Mediteranian, Black Sea, Iran;
 Palestine: Egypt, Syria, Iraq,  Arabia, Eastern Mediteranian, Red Sea;
 Syria : Palestine, Turkey, Iraq,Eastern Mediteranian; 
 Iraq : Palestine, Turkey, Syria, Arabia,Iran,Indian Ocean;
-Iran: Caucases, Kazakstan, Afghanistan, India, Iraq, Arabia, Indian Ocean;
+Iran: Caucases, Kazakstan, Afghanistan, India, Iraq, Arabia, Indian Ocean, Turkey;
 Arabia: Palestine, Iraq, Iran, Red Sea, Indian Ocean;
 
-French West Africa: Algeria, French East Africa, West African Atlantic;
+French West Africa: Algeria, Morocco, French East Africa, West African Atlantic;
 French East Africa: Algeria, Libya, Egypt, French West Africa, Congo, Southern West African Atlantic;
 Ethiopia: Egypt, Kenya, Red Sea;
 Kenya: Egypt, Ethiopia, Congo, South Africa, Western Indian Ocean, Mozambique, Angola;
 Congo: Egypt, French East Africa, Kenya, Southern West African Atlantic, Angola;
 South Africa: Kenya, South West African Atlantic, South West Indian Ocean, Mozambique, Angola;
 Madagascar: Madagascar Sea;
-Madagascar Sea : South West Indian Ocean, Western Indian Ocean, Central Indian Ocean, Southern Indian Ocean;
+Madagascar Sea : Madagascar, South West Indian Ocean, Western Indian Ocean, Central Indian Ocean, Southern Indian Ocean;
 
-North Sea: Germany, Norway Finland, Britain, Western Europe, Baltic Sea, Eastern Atlantic, Canadian Atlantic, Karelia Sea;
-Baltic Sea: Germany, Norway Finland, Karelia, Eastern Europe, North Sea;
-Eastern Atlantic: Western Europe, Spain, Algeria, North Sea, Western Mediteranian , North Central Atlantic, West African Atlantic, Canadian Atlantic;
-Western Mediteranian : Western Europe, Southern Europe, Spain, Algeria, Eastern Atlantic, Eastern Mediteranian;
-Eastern Mediteranian: Southern Europe, Libya, Egypt, Turkey, Palestine, Western Mediteranian , Black Sea;
+North Sea: Germany, Norway, Britain, Western Europe, Baltic Sea, Eastern Atlantic, Canadian Atlantic, Karelia Sea;
+Baltic Sea: Germany, Finland, Sweden, Karelia, Eastern Europe, North Sea, Norway;
+Eastern Atlantic: Western Europe, Spain, Algeria, Morocco, North Sea, Western Mediteranian , North Central Atlantic, West African Atlantic, Canadian Atlantic;
+Western Mediteranian : Western Europe, Italy, Spain, Algeria, Eastern Atlantic, Eastern Mediteranian;
+Eastern Mediteranian: Southern Europe, Italy, Libya, Egypt, Turkey, Palestine, Syria, Western Mediteranian , Black Sea, Red Sea;
 Black Sea: Eastern Europe, Ukraine, Caucases, Turkey, Eastern Mediteranian;
 North Central Atlantic: Eastern Atlantic, West African Atlantic, Canadian Atlantic, Carribean Sea, North Eastern Brazil Atlantic, 
 Eastern USA Atlantic;
@@ -220,61 +228,65 @@ Central south Atlantic: South West African Atlantic, Southern West African Atlan
 East Brazil Atlantic;
 South West African Atlantic: South Africa, Central south Atlantic, Southern West African Atlantic, Antarctic Ocean, South West 
 Indian Ocean, Angola;
-West African Atlantic: French West Africa, Eastern Atlantic, North Central Atlantic, Southern West African Atlantic, East Brazil Atlantic, North Eastern Brazil Atlantic;
+West African Atlantic: French West Africa, Eastern Atlantic, North Central Atlantic, Southern West African Atlantic, East Brazil Atlantic, North Eastern Brazil Atlantic, Morocco;
 Southern West African Atlantic: French East Africa, Congo, Central south Atlantic, South West African Atlantic, West African 
-Atlantic, East Brazil Atlantic;
+Atlantic, East Brazil Atlantic, Antarctic Ocean;
 South Argentinian Antarctic Ocean: Chile, Argentina, Antarctic Ocean, Argentine Atlantic, South East Pacific;
-Antarctic Ocean: Central south Atlantic, South West African Atlantic, South Argentinian Antarctic Ocean;
-Argentine Atlantic: Argentina, Central south Atlantic, South Argentinian Antarctic Ocean, East Brazil Atlantic;
+Antarctic Ocean: Central south Atlantic, South West African Atlantic, South Argentinian Antarctic Ocean, Southern West African Atlantic, Argentine Atlantic;
+Argentine Atlantic: Argentina, Central south Atlantic, South Argentinian Antarctic Ocean, East Brazil Atlantic, Antarctic Ocean;
 East Brazil Atlantic: Brazil, Central south Atlantic, West African Atlantic, Southern West African Atlantic, Argentine Atlantic, North Eastern Brazil Atlantic;
-South West Indian Ocean: South Africa, Madagascar, South West African Atlantic, Western Indian Ocean, Southern Indian Ocean;
-Western Indian Ocean: Kenya, Madagascar, South West Indian Ocean, Red Sea, Central Indian Ocean, Mozambique, North Central Indian Ocean;
-Red Sea: Egypt, Palestine, Arabia, Ethiopia, Western Indian Ocean, North Central Indian Ocean, Indian Ocean;
-Central Indian Ocean: Madagascar, Western Indian Ocean, Southern Indian Ocean, North Central Indian Ocean, Eastern Indian Ocean;
+South West Indian Ocean: South Africa, Madagascar Sea, South West African Atlantic, Western Indian Ocean, Southern Indian Ocean;
+Western Indian Ocean: Kenya, Madagascar Sea, South West Indian Ocean, Red Sea, Central Indian Ocean, Mozambique, North Central Indian Ocean, Southern Indian Ocean;
+Red Sea: Egypt, Palestine, Arabia, Ethiopia, Western Indian Ocean, North Central Indian Ocean, Indian Ocean, Eastern Mediteranian;
+Central Indian Ocean: Madagascar Sea, Western Indian Ocean, Southern Indian Ocean, North Central Indian Ocean, Eastern Indian Ocean, North East Indian Ocean;
 Canadian Atlantic: Eastern Canada, North Sea, Eastern Atlantic, North Central Atlantic, Eastern USA Atlantic;
 Karelia Sea: Karelia, North Sea;
 
 Mozambique: Kenya, South Africa, Western Indian Ocean;
 Angola: Kenya, Congo, South Africa, South West African Atlantic;
-Southern Indian Ocean: Madagascar, South West Indian Ocean, Central Indian Ocean, Antarctic Ocean southwest of Australia;
-North Central Indian Ocean: Western Indian Ocean, Red Sea, Central Indian Ocean, Indian Ocean, North East Indian Ocean;
-Indian Ocean: India, Iran, Arabia, Red Sea, North Central Indian Ocean, North East Indian Ocean, Bay of Bengal, East Indies Ocean;
-North East Indian Ocean: North Central Indian Ocean, Indian Ocean, Eastern Indian Ocean, East Indies Ocean;
-Bay of Bengal: Burma and South East Asia , Indian Ocean, East Indies Ocean;
+Southern Indian Ocean: Madagascar Sea, South West Indian Ocean, Central Indian Ocean, Antarctic Ocean southwest of Australia, Eastern Indian Ocean, Western Indian Ocean;
+North Central Indian Ocean: Western Indian Ocean, Red Sea, Central Indian Ocean, Indian Ocean, North East Indian Ocean, India, Bay of Bengal, East Indies Ocean;
+Indian Ocean: India, Iran, Iraq, Arabia, Red Sea, North Central Indian Ocean, North East Indian Ocean, Bay of Bengal, East Indies Ocean;
+North East Indian Ocean: North Central Indian Ocean, Indian Ocean, Eastern Indian Ocean, East Indies Ocean, Central Indian Ocean, Western Australian Ocean;
+Bay of Bengal: Burma and South East Asia , Indian Ocean, East Indies Ocean, India, North Central Indian Ocean;
 Antarctic Ocean southwest of Australia: Southern Indian Ocean, South Australian Ocean, Eastern Indian Ocean;
-South Australian Ocean: New Zealand Sea, Australia, Antarctic Ocean southwest of Australia, Western Australian Ocean, East Australia Sea;
-Eastern Indian Ocean: Central Indian Ocean, North East Indian Ocean, Antarctic Ocean southwest of Australia, Western Australian Ocean;
-Western Australian Ocean: Australia, South Australian Ocean, Eastern Indian Ocean, East Indies Ocean, Borneo Sea;
-East Indies Ocean: East Indies , Indian Ocean, North East Indian Ocean, Bay of Bengal, Western Australian Ocean, South China Sea, Borneo Sea;
-South China Sea: Burma and South East Asia , East Indies Ocean, Borneo Sea, East China Sea ;
-Borneo Sea: Borneo, Western Australian Ocean, East Indies Ocean, South China Sea, New Guinea Sea, Caroline Islands Sea, Philipines Sea;
+South Australian Ocean: New Zealand Sea, Australia, Antarctic Ocean southwest of Australia, Western Australian Ocean, East Australia Sea, Eastern Indian Ocean;
+Eastern Indian Ocean: Central Indian Ocean, North East Indian Ocean, Antarctic Ocean southwest of Australia, Western Australian Ocean, Southern Indian Ocean, South Australian Ocean;
+Western Australian Ocean: Australia, South Australian Ocean, Eastern Indian Ocean, East Indies Ocean, Borneo Sea, North East Indian Ocean;
+East Indies Ocean: East Indies , Indian Ocean, North East Indian Ocean, Bay of Bengal, Western Australian Ocean, South China Sea, Borneo Sea, North Central Indian Ocean, East Australia Sea;
+South China Sea: Burma and South East Asia , East Indies Ocean, Borneo Sea, East China Sea, Philipines Sea;
+Borneo Sea: Borneo, Western Australian Ocean, East Indies Ocean, South China Sea, New Guinea Sea, Caroline Islands Sea, Philipines Sea, East Australia Sea;
 
-East Australia Sea: New Zealand Sea, Australia, South Australian Ocean, New Guinea Sea, Solomon Island Sea;
+East Australia Sea: New Zealand Sea, Australia, South Australian Ocean, New Guinea Sea, Solomon Island Sea, Borneo Sea, East Indies Ocean;
 New Guinea Sea: New Guinea, Borneo Sea, East Australia Sea, Solomon Island Sea, Caroline Islands Sea;
 Solomon Island Sea: New Zealand Sea, Solomon Islands, East Australia Sea, New Guinea Sea, Wake Island Sea, Caroline Islands Sea, Central Pacific, Hawaian Sea;
 Wake Island Sea: Wake Island, Solomon Island Sea, Caroline Islands Sea, Okinawa Sea, Sea of Japan, North Central Pacific, Hawaian Sea;
 
 Caroline Islands Sea: Caroline Islands, Borneo Sea, New Guinea Sea, Solomon Island Sea, Wake Island Sea, Okinawa Sea, Philipines Sea;
 Okinawa Sea: Wake Island Sea, Caroline Islands Sea, Philipines Sea, Sea of Japan, Okinawa;
-Philipines Sea: Philipines , Borneo Sea, Caroline Islands Sea, Okinawa Sea, East China Sea , Sea of Japan;
+Philipines Sea: Philipines , Borneo Sea, Caroline Islands Sea, Okinawa Sea, East China Sea , Sea of Japan, South China Sea;
 East China Sea : Kwantung Eastern China, South China Sea, Philipines Sea, Sea of Japan;
 Sea of Japan: Manchuria, Japan, Wake Island Sea, Okinawa Sea, Philipines Sea, East China Sea , North Central Pacific, North West Pacific;
-North Central Pacific: Wake Island Sea, Sea of Japan, Alaskan Pacific , Midway Island sea;
-Central Pacific: Solomon Island Sea, South Pacific, Hawaian Sea, Mexican Pacific, South East Pacific;
+North Central Pacific: Wake Island Sea, Sea of Japan, Alaskan Pacific , Midway Island sea, Hawaian Sea, North West Pacific;
+Central Pacific: Solomon Island Sea, South Pacific, Hawaian Sea, Mexican Pacific, South East Pacific, New Zealand Sea;
 Okinawa: Okinawa Sea;
-Western US Pacific: Western US, Canadian Pacific, Midway Island sea, Hawaian Sea, Mexican Pacific;
-Canadian Pacific: Western Canada, Western US Pacific, Alaskan Pacific , Midway Island sea;
+Western US Pacific: Western US, Canadian Pacific, Midway Island sea, Hawaian Sea, Mexican Pacific, Western Canada;
+Canadian Pacific: Western Canada, Western US Pacific, Alaskan Pacific , Midway Island sea, Alaska;
 Alaskan Pacific : Alaska, North Central Pacific, Canadian Pacific, North West Pacific, Midway Island sea;
-North West Pacific: Soviet Far East, Sea of Japan, Alaskan Pacific ;
+North West Pacific: Soviet Far East, Sea of Japan, Alaskan Pacific, North Central Pacific;
 Midway Island sea: Midway Island, North Central Pacific, Western US Pacific, Canadian Pacific, Alaskan Pacific , Hawaian Sea;
-Carribean Sea: Central America, Venezuela, West Indies, North Central Atlantic, North Eastern Brazil Atlantic, Eastern USA Atlantic;
+Carribean Sea: Central America, Venezuela, West Indies, North Central Atlantic, North Eastern Brazil Atlantic, Eastern USA Atlantic, Colombia;
 North Eastern Brazil Atlantic: Brazil, North Central Atlantic, West African Atlantic, East Brazil Atlantic, Carribean Sea;
 	Eastern USA Atlantic: Western US, Eastern US, Mexico, North Central Atlantic, Canadian Atlantic, Carribean Sea;
-South Pacific: New Zealand Sea, Central Pacific, South East Pacific;
-Hawaian Sea: Hawaii, Solomon Island Sea, Wake Island Sea, Central Pacific, Western US Pacific, Midway Island sea, Mexican Pacific;
-Mexican Pacific: Mexico, Central America, Colombia, Central Pacific, Western US Pacific, Hawaian Sea, South East Pacific;
+South Pacific: New Zealand Sea, Central Pacific, South East Pacific, Mexican Pacific;
+Hawaian Sea: Hawaii, Solomon Island Sea, Wake Island Sea, Central Pacific, Western US Pacific, Midway Island sea, Mexican Pacific, North Central Pacific;
+Mexican Pacific: Mexico, Central America, Colombia, Central Pacific, Western US Pacific, Hawaian Sea, South East Pacific, South Pacific;
 South East Pacific: Peru, Chile, South Argentinian Antarctic Ocean, Central Pacific, South Pacific, Mexican Pacific;
 
+Italy: Germany, Western Europe, Switzerland, Southern Europe, Western Mediteranian , Eastern Mediteranian;
+Switzerland: Germany, Western Europe, Italy;
+Byelorussia: Karelia, Eastern Europe, Ukraine;
+Morocco: Algeria, French West Africa, Eastern Atlantic, West African Atlantic;
 
 # Units must have the following attributes:
 #
@@ -305,14 +317,18 @@ carrier: 4, fighter, bomber;
 Placement
 
 Germany: 5 infantry,4 armor,1 fighter,1 bomber,1 AAA,1 factory;
-Norway Finland: 2 infantry,2 armor,2 fighter;
+Norway: 1 infantry,1 armor,1 fighter;
+Finland: 1 infantry,1 armor,1 fighter;
+Sweden: 2 infantry;
 Karelia: 4 infantry,2 armor,1 fighter,1 AAA,1 factory;
 Russia: 5 infantry,3 armor,2 fighter,1 bomber,1 AAA,1 factory;
 Britain: 5 infantry,5 armor,3 fighter,2 bomber,1 AAA,1 factory;
 Western Europe: 3 infantry,2 armor,1 fighter,1 AAA;
-Southern Europe: 3 infantry,2 armor,1 AAA,1 factory;
+Southern Europe: 2 infantry,1 armor,1 AAA;
+Italy: 3 infantry,2 armor,1 fighter,1 AAA,1 factory;
 Spain: 1 infantry;
-Eastern Europe: 4 infantry,4 armor,1 fighter;
+Eastern Europe: 3 infantry,3 armor,1 fighter;
+Byelorussia: 1 infantry,1 armor;
 Ukraine: 4 infantry,3 armor,1 fighter;
 Caucases: 3 infantry,1 armor;
 Kazakstan: 1 infantry;
@@ -376,3 +392,53 @@ Okinawa: 3 infantry,2 armor,1 fighter;
 Western US Pacific: 1 fighter,1 carrier,1 battleship,1 transport,2 sub;
 Eastern USA Atlantic: 1 battleship,1 transport,1 sub;
 Hawaian Sea: 1 sub;
+Switzerland: 1 infantry;
+Morocco: 1 infantry;
+
+
+# Which powers play, and who fights alongside whom. A power named here takes
+# turns; Neutral is deliberately absent, so it owns territory without ever
+# taking a turn of its own.
+
+Sides
+  Axis: Germany, Japan, Italy;
+  Allies: USA, USSR, UK;
+
+# Capturing a capital transfers the defender's treasury.
+
+Capitals
+  Germany: Germany;
+  USSR: Russia;
+  UK: Britain;
+  USA: Eastern US;
+  Japan: Japan;
+  Italy: Italy;
+
+# Victory cities are always present in the board data. Whether holding them
+# ends the game is a play-time switch, not a property of the board.
+
+VictoryCities
+  Germany, Italy, Western Europe, Southern Europe, Karelia, Russia, Caucases,
+  Britain, Eastern US, Western US, Japan, Kwantung Eastern China, India,
+  Philipines;
+
+# How each neutral behaves. strict cannot be attacked without turning every
+# other strict neutral hostile; proallied and proaxis may be activated
+# peacefully by that side.
+
+Neutrality
+  Turkey: strict;
+  Switzerland: strict;
+  Afghanistan: strict;
+  Mongolia: strict;
+  Sweden: proaxis;
+  Syria: proaxis;
+  Iraq: proallied;
+  Arabia: proallied;
+  Colombia: proallied;
+  Venezuela: proallied;
+  Peru: proallied;
+  Chile: proallied;
+  Argentina: proallied;
+  Mozambique: proallied;
+  Angola: proallied;

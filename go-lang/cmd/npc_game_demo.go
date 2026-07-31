@@ -42,7 +42,7 @@ func main() {
 			player.Name, player.Side, player.IPCs, len(player.Territories))
 	}
 	fmt.Println()
-	fmt.Println("Starting game...\n")
+	fmt.Print("Starting game...\n\n")
 
 	// Run game to completion
 	winner, err := runner.RunToCompletion()
