@@ -403,7 +403,7 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 	// that merely grew raises the force to match while still liftable.
 	if p.State == PlanForming || p.State == PlanEmbarked {
 		defence := defenderStrength(g, p.Target)
-		if troopsNeeded(defence, nil) >= maxPlanTroops && defence > hopelessDefence {
+		if defence > hopelessDefence {
 			p.abandon(fmt.Sprintf("%s is too strongly held (defence %d)", p.Target, defence))
 			return false
 		}
@@ -619,15 +619,6 @@ func contains(haystack []int, needle int) bool {
 	return false
 }
 
-// seaRoute finds a path between two sea zones through water only.
-//
-// Recomputed every turn: this is the "recalculate the path in case of
-// obstacles" part, and it is why a plan can go back to forming when a fleet
-// blocks the strait it was counting on.
-func seaRoute(g *models.Game, from, to string) []string {
-	return seaRouteFor(g, from, to, nil)
-}
-
 // seaRouteFor finds a sea path, optionally avoiding zones held by enemy ships.
 //
 // A convoy sails during noncombat movement, and entering a sea zone occupied by
@@ -839,7 +830,9 @@ func adjacentSeaZones(g *models.Game, landName string) []string {
 }
 
 // defenderStrength is a rough measure of what is holding a territory, used to
-// decide how large a landing force to gather.
+// decide how large a landing force to gather. A neutral counts the garrison
+// it would mobilise when invaded, so a landing on an "empty" neutral is sized
+// against the army that will actually meet it on the beach.
 func defenderStrength(g *models.Game, territoryName string) int {
 	territory, ok := g.Board[territoryName]
 	if !ok {
@@ -847,9 +840,8 @@ func defenderStrength(g *models.Game, territoryName string) int {
 	}
 	units := g.Units()
 	strength := 0
-	for _, id := range territory.Pieces {
-		piece, ok := g.Pieces[id]
-		if !ok || units.For(piece).IsStructure {
+	for _, piece := range expectedDefenders(g, territory) {
+		if units.For(piece).IsStructure {
 			continue
 		}
 		strength += int(piece.Defend)

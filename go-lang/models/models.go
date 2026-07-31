@@ -155,7 +155,6 @@ type Piece struct {
 type Player struct {
 	Name           string
 	NPC            bool
-	Active         bool
 	IPCs           int // Industrial Production Certificates (money)
 	Territories    []*Territory
 	PieceTemplates map[string]*Piece
@@ -255,7 +254,6 @@ func (g *Game) GetOrCreatePlayer(name string) *Player {
 	player := &Player{
 		Name:           name,
 		NPC:            false,
-		Active:         true,
 		IPCs:           0,
 		Territories:    make([]*Territory, 0),
 		PieceTemplates: make(map[string]*Piece),

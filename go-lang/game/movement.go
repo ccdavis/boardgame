@@ -447,66 +447,6 @@ func canTraverseTerritory(game *models.Game, piece *models.Piece, territory, des
 	return true
 }
 
-// NeutralViolationCost is what an attacker pays the bank to violate a strict
-// neutral's territory. Paid once per neutral violated, when the first attacker
-// crosses the border.
-const NeutralViolationCost = 3
-
-// canAttackNeutral checks if a player can attack a neutral territory
-func canAttackNeutral(territory *models.Territory, attacker *models.Player) bool {
-	// Not a neutral territory
-	if territory.Owner.Name != "Neutral" {
-		return true // Normal attack rules apply
-	}
-
-	// Violating a strict neutral is allowed but not free: it costs 3 IPCs paid
-	// to the bank, the neutral raises a defending garrison, and every other
-	// strict neutral turns hostile. The attack was previously forbidden
-	// outright, which also made the chain-reaction rule unreachable dead code.
-	if territory.NeutralType == models.StrictNeutral {
-		return attacker.IPCs >= NeutralViolationCost
-	}
-
-	// Pro-Allied neutrals can be attacked by Axis, but they will defend
-	if territory.NeutralType == models.ProAlliedNeutral {
-		return attacker.Side == "Axis" // Only Axis can attack pro-Allied neutrals
-	}
-
-	// Pro-Axis neutrals can be attacked by Allies
-	if territory.NeutralType == models.ProAxisNeutral {
-		return attacker.Side == "Allies" // Only Allies can attack pro-Axis neutrals
-	}
-
-	return false
-}
-
-// CanActivateNeutral checks if a player can peacefully activate a neutral
-// territory during noncombat move phase. Exported so the web layer can tell
-// the client which neighbours are genuinely enterable, instead of guessing.
-func CanActivateNeutral(territory *models.Territory, activator *models.Player) bool {
-	// Not a neutral territory
-	if territory.Owner.Name != "Neutral" {
-		return false
-	}
-
-	// Cannot activate strict neutrals
-	if territory.NeutralType == models.StrictNeutral {
-		return false
-	}
-
-	// Pro-Allied neutrals can be activated by Allied powers
-	if territory.NeutralType == models.ProAlliedNeutral {
-		return activator.Side == "Allies"
-	}
-
-	// Pro-Axis neutrals can be activated by Axis powers
-	if territory.NeutralType == models.ProAxisNeutral {
-		return activator.Side == "Axis"
-	}
-
-	return false
-}
-
 // areAllies checks if two players are on the same side (Axis or Allies)
 func areAllies(player1, player2 *models.Player) bool {
 	if player1 == nil || player2 == nil {

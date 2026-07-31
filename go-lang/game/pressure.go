@@ -37,6 +37,39 @@ func productionOfSide(g *models.Game, side string) int {
 	return total
 }
 
+// outproducedAbove and favouredBelow are the dead band around an even race:
+// between them the clock says nothing. The band keeps a two-point production
+// lead from flipping a power's whole temperament back and forth.
+const (
+	outproducedAbove = 1.05
+	favouredBelow    = 0.95
+)
+
+// outproduced and raceFavours are the two ends of the clock, shared by every
+// decision that consults it.
+func outproduced(pressure float64) bool { return pressure > outproducedAbove }
+func raceFavours(pressure float64) bool { return pressure < favouredBelow }
+
+// Front margins: the favoured side (and an outproduced side with nothing to
+// hit) fortifies contact fronts past equality; a side spending its strength
+// on attacks holds the line at equality exactly.
+const (
+	fortifiedFrontMargin = 1.25
+	equalFrontMargin     = 1.0
+)
+
+// Threshold shaping: how far the clock bends the required attack odds.
+const (
+	// urgencyPerPressure converts excess pressure into discount on the
+	// required odds, capped at maxUrgencyDiscount; patience instead adds
+	// favouredPatienceBonus. desperationFloor is the lowest the bar goes --
+	// desperation is not an argument for suicide.
+	urgencyPerPressure    = 0.4
+	maxUrgencyDiscount    = 0.2
+	favouredPatienceBonus = 0.05
+	desperationFloor      = 0.35
+)
+
 // timePressure returns the enemy side's production rate over the player's
 // own side's. Above 1: we are being outproduced and time works against us.
 // Below 1: the race is ours and patience pays.
@@ -72,17 +105,17 @@ func timePressure(g *models.Game, player *models.Player) float64 {
 // patience will turn into a sure one.
 func pressureThreshold(base, pressure float64) float64 {
 	switch {
-	case pressure > 1.05:
-		urgency := (pressure - 1) * 0.4
-		if urgency > 0.2 {
-			urgency = 0.2
+	case outproduced(pressure):
+		urgency := (pressure - 1) * urgencyPerPressure
+		if urgency > maxUrgencyDiscount {
+			urgency = maxUrgencyDiscount
 		}
 		base -= urgency
-	case pressure < 0.95:
-		base += 0.05
+	case raceFavours(pressure):
+		base += favouredPatienceBonus
 	}
-	if base < 0.35 {
-		base = 0.35
+	if base < desperationFloor {
+		base = desperationFloor
 	}
 	return base
 }
@@ -94,10 +127,10 @@ func pressureThreshold(base, pressure float64) float64 {
 // as difficult as possible. The side losing the race holds at equality and
 // puts the difference into the attacks it cannot afford to postpone.
 func pressureFrontMargin(pressure float64) float64 {
-	if pressure < 0.95 {
-		return 1.25
+	if raceFavours(pressure) {
+		return fortifiedFrontMargin
 	}
-	return 1.0
+	return equalFrontMargin
 }
 
 // frontMargin is the strength multiplier this power holds its fronts to,
@@ -111,8 +144,8 @@ func pressureFrontMargin(pressure float64) float64 {
 func (npc *NPCAIPlayer) frontMargin(g *models.Game, player *models.Player) float64 {
 	pressure := timePressure(g, player)
 	margin := pressureFrontMargin(pressure)
-	if pressure > 1.05 && npc.attacksThisTurn == 0 {
-		margin = 1.25
+	if outproduced(pressure) && npc.attacksThisTurn == 0 {
+		margin = fortifiedFrontMargin
 	}
 	return margin
 }

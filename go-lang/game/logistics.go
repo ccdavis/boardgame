@@ -226,12 +226,16 @@ func (npc *NPCAIPlayer) DisperseToFronts(gc *GameController, player *models.Play
 	// Pass one: fill deficits, nearest willing source first, until each
 	// outnumbered front expects at least equality. Units en route count toward
 	// the front they are marching for, so a long column is not double-ordered.
+	// A source whose route to this front turns out to be blocked is set aside
+	// for the front, not drained -- one failed march used to consume the whole
+	// pile unit by unit, and none of it was left for pass two.
 	for _, f := range fronts {
+		blocked := make(map[*source]bool)
 		for f.deficit > 0 {
 			var best *source
 			bestDist := 0
 			for _, s := range sources {
-				if len(s.units) == 0 {
+				if len(s.units) == 0 || blocked[s] {
 					continue
 				}
 				d, reachable := f.distances[s.territory.Name]
@@ -246,10 +250,12 @@ func (npc *NPCAIPlayer) DisperseToFronts(gc *GameController, player *models.Play
 				break // nobody left who can march there
 			}
 			piece := best.units[len(best.units)-1]
-			best.units = best.units[:len(best.units)-1]
-			if march(piece, best.territory, f) {
-				f.deficit -= int(piece.Defend)
+			if !march(piece, best.territory, f) {
+				blocked[best] = true
+				continue
 			}
+			best.units = best.units[:len(best.units)-1]
+			f.deficit -= int(piece.Defend)
 		}
 	}
 
@@ -370,9 +376,18 @@ func (npc *NPCAIPlayer) FerrySurplus(gc *GameController, player *models.Player, 
 		}
 
 		// Empty: load stranded surplus if we are beside some, otherwise sail
-		// toward the nearest stranded pile.
+		// toward the nearest stranded pile. Piles are visited in sorted order;
+		// ranging the map here picked an arbitrary adjacent pile on each run,
+		// which broke seeded replay whenever a transport lay beside two.
+		var piles []string
+		for name := range stranded {
+			piles = append(piles, name)
+		}
+		sort.Strings(piles)
+
 		loadedAny := false
-		for name, units := range stranded {
+		for _, name := range piles {
+			units := stranded[name]
 			if !areConnected(at, g.Board[name]) {
 				continue
 			}
@@ -390,11 +405,6 @@ func (npc *NPCAIPlayer) FerrySurplus(gc *GameController, player *models.Player, 
 		if loadedAny {
 			continue
 		}
-		var piles []string
-		for name := range stranded {
-			piles = append(piles, name)
-		}
-		sort.Strings(piles)
 		if dest := nearestSeaZoneBy(g, player, at.Name, piles); dest != "" && dest != at.Name {
 			if step := nextStepTowards(g, transport, at.Name, dest, player, models.Water); step != "" {
 				if gc.PlanMove(transportID, at.Name, step) == nil {

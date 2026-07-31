@@ -89,7 +89,7 @@ func TestFullTurnWithCombatIntegration(t *testing.T) {
 
 		if len(tanks) >= 2 {
 			for i, tank := range tanks[:2] {
-				pieceID := findPieceID(game, tank)
+				pieceID := tank.ID
 				err := controller.PlanMove(pieceID, "Germany", "Poland")
 				if err != nil {
 					t.Errorf("Failed to plan tank move %d: %v", i, err)
@@ -102,7 +102,7 @@ func TestFullTurnWithCombatIntegration(t *testing.T) {
 		germanyPieces = game.GetPiecesInTerritory("Germany")
 		for _, piece := range germanyPieces {
 			if piece.Name == "bomber" {
-				pieceID := findPieceID(game, piece)
+				pieceID := piece.ID
 				err := controller.PlanMove(pieceID, "Germany", "USSR")
 				if err != nil {
 					t.Logf("Note: Could not plan bomber move (may not be adjacent): %v", err)
@@ -118,7 +118,7 @@ func TestFullTurnWithCombatIntegration(t *testing.T) {
 		northSeaPieces := game.GetPiecesInTerritory("North_Sea")
 		for _, piece := range northSeaPieces {
 			if piece.Name == "transport" {
-				pieceID := findPieceID(game, piece)
+				pieceID := piece.ID
 				// Plan to move to UK sea zone
 				err := controller.PlanMove(pieceID, "North_Sea", "UK_Sea")
 				if err != nil {
@@ -206,7 +206,7 @@ func TestFullTurnWithCombatIntegration(t *testing.T) {
 		movedUnits := 0
 		for _, piece := range germanyPieces {
 			if piece.Name == "infantry" && movedUnits < 2 {
-				pieceID := findPieceID(game, piece)
+				pieceID := piece.ID
 				// Try to move to Poland (if Germany won the battle)
 				err := controller.PlanMove(pieceID, "Germany", "Poland")
 				if err != nil {
@@ -435,7 +435,7 @@ func TestCombinedCombatScenarios(t *testing.T) {
 		for _, piece := range pieces {
 			// Move first suitable piece
 			if !movedOne {
-				pieceID := findPieceID(game, piece)
+				pieceID := piece.ID
 				err := controller.PlanMove(pieceID, scenario.attackFrom, scenario.attackTo)
 				if err == nil {
 					movedOne = true
@@ -612,4 +612,3 @@ func setupCombatScenarioGame() *models.Game {
 	return game
 }
 
-// findPieceID is now defined in npc_ai.go to avoid duplication

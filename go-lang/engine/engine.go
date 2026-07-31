@@ -336,7 +336,7 @@ func (d *Driver) RunNPCTurn(power string, transcript *game.GameTranscript) error
 		transcript = game.NewGameTranscript("NPC turn")
 	}
 
-	npc := game.NewNPCAIPlayer(power, "normal")
+	npc := game.NewNPCAIPlayer(power, game.DefaultDifficulty)
 	return npc.TakeTurn(d.Controller, transcript)
 }
 

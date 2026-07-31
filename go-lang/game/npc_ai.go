@@ -126,7 +126,7 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	// The split is what makes the computer players differ from one another:
 	// Germany presses and keeps a thin garrison, Italy garrisons and rarely
 	// sails, the United States and the Soviet Union build the largest forces.
-	budget := player.IPCs * 8 / 10
+	budget := player.IPCs * treasurySpendPercent / 100
 	posture := PostureFor(player.Name)
 	defenceBudget, _, offenceBudget := posture.Budget(budget)
 	spent := 0
@@ -140,10 +140,10 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	// any other spelling meant the AI could never build one.
 	factoryName, factoryTemplate, hasFactory := findStructureTemplate(game)
 
-	if hasFactory && player.IPCs >= int(factoryTemplate.Cost)+20 {
+	if hasFactory && player.IPCs >= int(factoryTemplate.Cost)+factoryCashCushion {
 		// Find high-value territories without factories
 		bestTerritory := npc.findBestTerritoryForFactory(game, player)
-		if bestTerritory != nil && bestTerritory.Production >= 3 {
+		if bestTerritory != nil && bestTerritory.Production >= factoryMinProduction {
 			// Buy one factory if we can afford it and still have money for units
 			err := controller.PurchaseUnit(factoryName, 1)
 			if err == nil {
@@ -338,34 +338,18 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 		// Calculate territory value
 		territoryValue := CalculateTerritoryValue(target, target.IsVictoryCity)
 
-		// Decision logic based on difficulty and situation
-		shouldAttack := false
-		minProbability := 0.6 // Default: need 60% success chance
-
-		// Adjust threshold based on difficulty
-		if npc.Difficulty == "aggressive" {
-			minProbability = 0.4 // More willing to take risks
-		} else if npc.Difficulty == "simple" {
-			minProbability = 0.7 // More conservative
+		// The required odds: the difficulty's base, bent by what the target is
+		// worth, how desperate we are, and the production race.
+		minProbability := DoctrineFor(npc.Difficulty).MinOdds
+		if territoryValue >= richTargetValue {
+			minProbability -= richTargetDiscount
 		}
-
-		// High-value targets (victory cities, high production) are worth more risk
-		if territoryValue >= 5 {
-			minProbability -= 0.15
+		if len(player.Territories) < desperationTerritories {
+			minProbability -= desperationDiscount
 		}
-
-		// If we're losing badly, be more desperate
-		playerTerritoryCount := len(player.Territories)
-		if playerTerritoryCount < 5 {
-			minProbability -= 0.2 // More desperate when losing
-		}
-
-		// The clock: outproduced lowers the bar (floored), winning raises it.
 		minProbability = pressureThreshold(minProbability, pressure)
 
-		shouldAttack = successProb >= minProbability
-
-		if !shouldAttack {
+		if successProb < minProbability {
 			continue // Skip this target
 		}
 
@@ -397,16 +381,16 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 			sourceTerritory := game.Board[territoryName]
 
 			// Calculate how many to move based on success probability
-			percentToMove := 0.5 // Default: move half
-			if successProb < 0.7 {
-				percentToMove = 0.7 // Move more if uncertain
+			percentToMove := commitDefault
+			if successProb < pressingOdds {
+				percentToMove = commitPressing // a marginal attack needs weight
 			}
-			if successProb > 0.85 {
-				percentToMove = 0.4 // Move less if very confident
+			if successProb > cautiousOdds {
+				percentToMove = commitCautious // a sure thing should not strip the source
 			}
 
 			numToMove := int(float64(len(pieces)) * percentToMove)
-			if numToMove == 0 && len(pieces) > 0 && successProb >= 0.5 {
+			if numToMove == 0 && len(pieces) > 0 && successProb >= minViableOdds {
 				numToMove = 1 // Move at least one if viable
 			}
 
@@ -421,9 +405,8 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 
 			// Extra caution for our own victory cities - never leave them undefended
 			if sourceTerritory.IsVictoryCity {
-				// Keep at least 3 units in victory cities
-				if len(pieces)-numToMove < 3 {
-					numToMove = len(pieces) - 3
+				if len(pieces)-numToMove < victoryCityGarrison {
+					numToMove = len(pieces) - victoryCityGarrison
 					if numToMove < 0 {
 						numToMove = 0
 					}
@@ -454,7 +437,7 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 		attacksPlanned++
 
 		// Limit number of attacks to keep things manageable
-		if attacksPlanned >= 5 {
+		if attacksPlanned >= maxAttacksPerTurn {
 			break
 		}
 	}
@@ -514,24 +497,16 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 	for _, territoryName := range pending {
 		transcript.LogBattleStart(territoryName)
 
-		// Create retreat decider based on NPC difficulty
+		// Retreat per the difficulty's doctrine: stubborn fighters break off
+		// only when losses are extreme and they are still losing; everyone
+		// else follows the general retreat evaluation.
+		doctrine := DoctrineFor(npc.Difficulty)
 		retreatDecider := func(initialAttackers, currentAttackers, initialDefenders, currentDefenders, round int) bool {
-			// Use the retreat evaluation logic
-			shouldRetreat := ShouldAttackerRetreat(initialAttackers, currentAttackers, initialDefenders, currentDefenders, round)
-
-			// Adjust based on difficulty
-			if npc.Difficulty == "aggressive" {
-				// Aggressive NPCs are less likely to retreat
-				// Only retreat if losses are extreme (>80% casualties and still losing)
-				attackerLossRatio := float64(initialAttackers-currentAttackers) / float64(initialAttackers)
-				return attackerLossRatio > 0.8 && currentDefenders > currentAttackers
-			} else if npc.Difficulty == "simple" {
-				// Simple NPCs retreat more readily
-				return shouldRetreat
+			if doctrine.Stubborn {
+				lossRatio := float64(initialAttackers-currentAttackers) / float64(initialAttackers)
+				return lossRatio > stubbornLossRatio && currentDefenders > currentAttackers
 			}
-
-			// Normal difficulty
-			return shouldRetreat
+			return ShouldAttackerRetreat(initialAttackers, currentAttackers, initialDefenders, currentDefenders, round)
 		}
 
 		result, err := controller.ResolveBattleWithRetreat(territoryName, roller, retreatDecider)
@@ -558,23 +533,6 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 
 // NoncombatMovePhase consolidates forces after combat
 
-// uncommittedPieces returns the units in a territory that are free to be moved
-// by the ordinary movement logic.
-//
-// Units reserved by a standing plan are held back. They are massing for an
-// operation, and general movement would otherwise walk them off the quayside
-// again every turn -- which it did, so no invasion force ever assembled.
-func (npc *NPCAIPlayer) uncommittedPieces(controller *GameController, player *models.Player, territoryName string) []*models.Piece {
-	all := controller.Game.GetPiecesInTerritory(territoryName)
-	free := make([]*models.Piece, 0, len(all))
-	for _, piece := range all {
-		if controller.Plans.Committed(player.Name, piece.ID) {
-			continue
-		}
-		free = append(free, piece)
-	}
-	return free
-}
 
 func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcript *GameTranscript) error {
 	player, _ := controller.GetCurrentPlayer()
@@ -741,69 +699,6 @@ func (npc *NPCAIPlayer) CollectIncomePhase(controller *GameController, transcrip
 	return nil
 }
 
-// latentDefenders returns the garrison a neutral territory WILL raise when
-// attacked, as phantom pieces for the success estimator.
-//
-// A neutral has no standing army until the first attacker crosses the border,
-// so estimating against what is visibly there priced Turkey as a walkover --
-// and the attack then met four mobilised infantry. The estimator must fight
-// the country that will exist, not the one on the board.
-func latentDefenders(g *models.Game, territory *models.Territory) []*models.Piece {
-	if territory == nil || territory.Owner == nil || territory.Owner.Name != "Neutral" ||
-		territory.Terrain != models.Land || territory.NeutralType == models.NotNeutral {
-		return nil
-	}
-	for _, id := range territory.Pieces {
-		if piece := g.Pieces[id]; piece != nil && piece.Owner == territory.Owner {
-			return nil // already mobilised; the real garrison is on the board
-		}
-	}
-
-	name := bestDefenderName(g)
-	template, ok := g.GlobalPieceTemplates[name]
-	if !ok {
-		return nil
-	}
-	count := territory.Production
-	if count < 1 {
-		count = 1
-	}
-	phantoms := make([]*models.Piece, count)
-	for i := range phantoms {
-		phantoms[i] = &models.Piece{
-			Name: template.Name, Terrain: template.Terrain,
-			Attack: template.Attack, Defend: template.Defend, Cost: template.Cost,
-		}
-	}
-	return phantoms
-}
-
-// expectedDefenders is what an attack on a territory would actually fight:
-// the pieces present, plus the garrison a neutral would mobilise.
-func expectedDefenders(g *models.Game, territory *models.Territory) []*models.Piece {
-	defenders := g.GetPiecesInTerritory(territory.Name)
-	return append(defenders, latentDefenders(g, territory)...)
-}
-
-// strictChainCost is the production the OTHER strict neutrals would hand the
-// enemy side if this one were violated -- the diplomatic price of the attack.
-// Once the chain has already fired there are no unflipped strict neutrals
-// left and the price is zero.
-func strictChainCost(g *models.Game, exclude string) int {
-	cost := 0
-	for _, name := range sortedTerritoryNames(g) {
-		if name == exclude {
-			continue
-		}
-		territory := g.Board[name]
-		if territory.Owner != nil && territory.Owner.Name == "Neutral" &&
-			territory.NeutralType == models.StrictNeutral {
-			cost += territory.Production
-		}
-	}
-	return cost
-}
-
 // findAttackTargets finds enemy territories that are adjacent to our territories
 // Prioritizes victory cities and high-value territories
 func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Player) []*models.Territory {
@@ -815,6 +710,11 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 	targetScores := make([]targetScore, 0)
 	seen := make(map[string]bool)
 	pressure := timePressure(game, player)
+
+	// The chain cost is a board-wide sum; price it once, not per neighbour.
+	// Excluding the violated territory itself is handled below by adding its
+	// own production back.
+	allStrictProduction := strictChainCost(game, "")
 
 	for _, ourTerritory := range player.Territories {
 		for _, neighbor := range ourTerritory.ConnectedTo {
@@ -838,10 +738,11 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 				// race twice, theirs down and ours up -- and a violation whose
 				// diplomacy costs more than it gains is skipped entirely.
 				if neighbor.Owner.Name == "Neutral" && neighbor.NeutralType == models.StrictNeutral {
-					if pressure <= 1.05 {
+					if !outproduced(pressure) {
 						continue // time is not against us; leave the neutrals alone
 					}
-					score = neighbor.Production - strictChainCost(game, neighbor.Name) - 1
+					chainCost := allStrictProduction - neighbor.Production
+					score = neighbor.Production - chainCost - 1
 					if score <= 0 {
 						continue // the chain would hand the enemy more than we gain
 					}
@@ -849,7 +750,7 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 
 				// Victory cities are MUCH more valuable
 				if neighbor.IsVictoryCity {
-					score += 15 // Massive bonus for victory cities
+					score += attackTargetVCBonus
 				}
 
 				// Bonus for territories that connect to more of our territories (easier to attack/defend)
@@ -868,8 +769,8 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 				for _, piece := range expectedDefenders(game, neighbor) {
 					defenseStrength += int(piece.Defend)
 				}
-				if defenseStrength > 10 {
-					score -= 2
+				if defenseStrength > defendedTargetStrength {
+					score -= defendedTargetPenalty
 				}
 
 				targetScores = append(targetScores, targetScore{
@@ -946,15 +847,6 @@ func (npc *NPCAIPlayer) findAttackersFor(controller *GameController, player *mod
 
 
 
-// findPieceID finds the piece ID for a given piece in the game
-func findPieceID(game *models.Game, piece *models.Piece) int {
-	if piece == nil {
-		return -1
-	}
-	// Pieces carry their own ID, so this no longer walks the whole board by
-	// pointer identity to answer a question the piece already knows.
-	return piece.ID
-}
 
 // findBestTerritoryForFactory finds the best territory to build a new factory
 // Returns nil if no suitable territory is found
@@ -1037,8 +929,8 @@ func (npc *NPCAIPlayer) wouldLeaveTerritoryVulnerable(game *models.Game, territo
 		}
 	}
 
-	// Vulnerable if remaining defense is less than 60% of max threat
-	return remainingDefense < int(float64(maxThreat)*0.6)
+	// Vulnerable if the remaining defence cannot stand up to the worst threat
+	return remainingDefense < int(float64(maxThreat)*vulnerableDefenceRatio)
 }
 
 
@@ -1102,19 +994,20 @@ func buildupMix(g *models.Game) []unitShare {
 		}
 		mix = append(mix, unitShare{name, share})
 	}
-	add(line, 0.50)
-	add(punch, 0.30)
-	add(air, 0.20)
+	add(line, lineShare)
+	add(punch, punchShare)
+	add(air, airShare)
 	return mix
 }
 
 // findStructureTemplate returns the board's buildable structure -- its factory
-// or industrial complex -- under whatever name the board gives it.
+// or industrial complex -- under whatever name the board gives it. Sorted
+// order, so a board with several structure types picks the same one every run.
 func findStructureTemplate(game *models.Game) (string, *models.Piece, bool) {
 	registry := game.Units()
-	for name, template := range game.GlobalPieceTemplates {
+	for _, name := range sortedTemplateNames(game) {
 		if registry.Of(name).IsStructure {
-			return name, template, true
+			return name, game.GlobalPieceTemplates[name], true
 		}
 	}
 	return "", nil, false

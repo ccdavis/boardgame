@@ -91,15 +91,15 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 	// target on the far side of the world loses to a decent one nearby, because
 	// every extra sea zone is another turn the convoy spends exposed.
 	//
-	// A power being outproduced discounts the defence penalty: an expedition at
+	// A power being outproduced halves the defence penalty: an expedition at
 	// somewhat unfavourable odds today beats the same expedition at hopeless
 	// odds after the enemy's factories have run for another five rounds.
-	defenceWeight := 2
-	if timePressure(g, player) > 1.05 {
-		defenceWeight = 1
+	defencePenalty := func(defence int) int { return defence }
+	if outproduced(timePressure(g, player)) {
+		defencePenalty = func(defence int) int { return defence / 2 }
 	}
 	score := func(c candidate) int {
-		return c.value*4 - c.crossing*3 - c.defence*defenceWeight/2
+		return c.value*planValueWeight - c.crossing*planCrossingWeight - defencePenalty(c.defence)
 	}
 	sort.Slice(options, func(i, j int) bool {
 		if score(options[i]) != score(options[j]) {
@@ -157,10 +157,18 @@ func troopsNeeded(defence int, rng *rand.Rand) int {
 // maxPlanTroops is the largest landing force a plan will assemble.
 const maxPlanTroops = 8
 
+// Plan scoring weights: what a point of production is worth against a sea
+// zone of exposure, and what a victory city adds to a target's value.
+const (
+	planValueWeight    = 4
+	planCrossingWeight = 3
+	planVCBonus        = 6
+)
+
 func territoryValue(territory *models.Territory) int {
 	value := territory.Production
 	if territory.IsVictoryCity {
-		value += 6
+		value += planVCBonus
 	}
 	return value
 }

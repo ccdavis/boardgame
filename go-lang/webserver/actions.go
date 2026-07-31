@@ -406,12 +406,3 @@ func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, se
 	s.sendJSON(w, response, http.StatusOK)
 }
 
-// Helper functions
-
-func countPurchasedCost(units []*models.PendingUnit) int {
-	total := 0
-	for _, unit := range units {
-		total += unit.Cost
-	}
-	return total
-}

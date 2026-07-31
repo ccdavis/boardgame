@@ -323,8 +323,8 @@ func TestPlanBook_CommittedUnitsAreReserved(t *testing.T) {
 	if !controller.Plans.Committed("Germany", committed) {
 		t.Error("a committed unit is not reported as reserved")
 	}
-	free := npc.uncommittedPieces(controller, player, "Home")
-	for _, piece := range free {
+	// The quartermaster's surplus must not include the committed unit.
+	for _, piece := range npc.surplusIn(controller, player, g.Board["Home"], 0) {
 		if piece.ID == committed {
 			t.Error("a committed unit was offered to general movement")
 		}
