@@ -281,9 +281,13 @@ func (npc *NPCAIPlayer) ReviewPlans(gc *GameController, player *models.Player, t
 	}
 
 	for _, plan := range gc.Plans.For(player.Name) {
-		before := plan.State
+		before, movedOn := plan.State, plan.LastProgress
 		plan.Review(gc)
-		if plan.State == before {
+
+		// Report a change of state, and also a force that merely grew. A plan can
+		// spend a dozen turns in Forming while a small power saves up for its
+		// shipping; logging state alone makes that look like nothing happening.
+		if plan.State == before && plan.LastProgress == movedOn {
 			continue
 		}
 		transcript.LogAction(player.Name, plan.Describe())
@@ -375,6 +379,39 @@ func (npc *NPCAIPlayer) PlanPurchases(gc *GameController, player *models.Player)
 		wanted[warship] += (short + perShip - 1) / perShip
 	}
 	return wanted
+}
+
+// planPurchaseOrder puts shipping ahead of everything else on a plan's list.
+//
+// Plain alphabetical order spends the expeditionary purse on escorts first --
+// "battleship" and "sub" sort before "transport" -- so a poor power bought cover
+// for a convoy it never had the lift to assemble. Escorts protect something;
+// buy the something first.
+func planPurchaseOrder(g *models.Game, wanted map[string]int) []string {
+	transport, _ := shippingNames(g)
+
+	order := make([]string, 0, len(wanted))
+	if wanted[transport] > 0 {
+		order = append(order, transport)
+	}
+	for _, name := range sortedWants(wanted) {
+		if name != transport {
+			order = append(order, name)
+		}
+	}
+	return order
+}
+
+// wantedCost totals what a shopping list would cost, which is the most a power
+// has any reason to save.
+func wantedCost(g *models.Game, wanted map[string]int) int {
+	total := 0
+	for name, count := range wanted {
+		if template, ok := g.GlobalPieceTemplates[name]; ok {
+			total += int(template.Cost) * count
+		}
+	}
+	return total
 }
 
 // bestWarshipFor picks what to buy as cover: the best fighting value per IPC

@@ -192,18 +192,23 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 		}
 	}
 
-	// Expeditionary work takes its own share. An invasion short of shipping
-	// stays short forever if production ignores it; one given the whole budget
-	// builds a fleet and no army to land.
-	planBudget := offenceBudget
+	// Expeditionary work takes its own share, and keeps what it cannot spend.
+	//
+	// An invasion short of shipping stays short forever if production ignores
+	// it; one given the whole budget builds a fleet and no army to land. But a
+	// share alone is not enough either, because a share smaller than the cheapest
+	// ship never buys one -- so the unspent part is carried to next turn instead
+	// of falling through to the general buildup.
+	wants := npc.PlanPurchases(controller, player)
+	planBudget := offenceBudget + controller.Plans.Reserve(player.Name)
 	planSpent := 0
 
-	for unitType, count := range npc.PlanPurchases(controller, player) {
+	for _, unitType := range planPurchaseOrder(game, wants) {
 		template, exists := game.GlobalPieceTemplates[unitType]
 		if !exists {
 			continue
 		}
-		for i := 0; i < count; i++ {
+		for i := 0; i < wants[unitType]; i++ {
 			cost := int(template.Cost)
 			if spent+cost > budget || planSpent+cost > planBudget {
 				break
@@ -218,7 +223,22 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 		}
 	}
 
-	for spent < budget {
+	// Save only against something actually wanted, and only money that is still
+	// in the treasury: a power with no operation under way puts everything into
+	// the army rather than hoarding for a plan it does not have.
+	held := planBudget - planSpent
+	if outstanding := wantedCost(game, wants) - planSpent; held > outstanding {
+		held = outstanding
+	}
+	if held > budget-spent {
+		held = budget - spent
+	}
+	if held < 0 {
+		held = 0
+	}
+	controller.Plans.SetReserve(player.Name, held)
+
+	for spent < budget-held {
 		// Pick a unit type to buy.
 		//
 		// A failed purchase must end the loop, not be swallowed. The previous
@@ -236,7 +256,7 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 				continue
 			}
 			cost := int(template.Cost)
-			if spent+cost > budget {
+			if spent+cost > budget-held {
 				continue
 			}
 

@@ -140,6 +140,7 @@ type PlanBook struct {
 	plans    map[string][]*AmphibiousPlan
 	defences map[string][]*DefencePlan
 	naval    map[string][]*NavalPlan
+	reserve  map[string]int
 	nextID   int
 }
 
@@ -149,8 +150,38 @@ func NewPlanBook() *PlanBook {
 		plans:    make(map[string][]*AmphibiousPlan),
 		defences: make(map[string][]*DefencePlan),
 		naval:    make(map[string][]*NavalPlan),
+		reserve:  make(map[string]int),
 		nextID:   1,
 	}
+}
+
+// Reserve is the money a power is holding back for expeditionary work it cannot
+// yet afford.
+//
+// A per-turn share of production is not enough on its own. Italy's offence share
+// of an eleven-IPC income is one IPC and a transport costs eight, so a plan that
+// needed shipping waited out its stall limit and was abandoned -- every game,
+// with the money going to infantry in the meantime. Saving the share instead of
+// surrendering it lets a small power accumulate a ship over several turns.
+func (pb *PlanBook) Reserve(power string) int {
+	if pb == nil {
+		return 0
+	}
+	return pb.reserve[power]
+}
+
+// SetReserve records what a power is holding back for its next ship.
+func (pb *PlanBook) SetReserve(power string, amount int) {
+	if pb == nil {
+		return
+	}
+	if pb.reserve == nil {
+		pb.reserve = make(map[string]int)
+	}
+	if amount < 0 {
+		amount = 0
+	}
+	pb.reserve[power] = amount
 }
 
 // Defences returns a power's garrison plans.

@@ -330,3 +330,113 @@ func TestPlanBook_CommittedUnitsAreReserved(t *testing.T) {
 		}
 	}
 }
+
+// A power too poor to buy a ship in one turn must save until it can.
+//
+// The expeditionary share of a small income is smaller than a transport, so
+// spending it or losing it each turn means the shipping is never bought and the
+// plan is abandoned for want of progress. Italy did this in every game.
+func TestPurchase_SavesTowardsShippingItCannotAffordYet(t *testing.T) {
+	g, controller := poorInvaderBoard(t)
+	player := g.Players["Italy"]
+
+	npc := NewSeededNPCAIPlayer("Italy", "normal", 1)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+	if len(controller.Plans.Active("Italy")) == 0 {
+		t.Fatal("no plan to buy shipping for")
+	}
+
+	// Ten turns of a ten-IPC income. One turn's expeditionary share is two IPCs
+	// against a transport at eight, so this only works if the share is saved
+	// instead of falling through to the infantry the general buildup would buy.
+	const income = 10
+	for turn := 1; turn <= 10; turn++ {
+		player.IPCs += income
+		if err := npc.PurchasePhase(controller, NewGameTranscript("t")); err != nil {
+			t.Fatalf("turn %d purchase phase: %v", turn, err)
+		}
+		if purchasedCount(g, "Italy", "transport") > 0 {
+			return
+		}
+		if saved := controller.Plans.Reserve("Italy"); player.IPCs < saved {
+			t.Fatalf("turn %d: held back %d IPCs but only %d remain in the treasury",
+				turn, saved, player.IPCs)
+		}
+	}
+	t.Errorf("ten turns of income never bought a transport: treasury %d, reserve %d, bought %d infantry",
+		player.IPCs, controller.Plans.Reserve("Italy"), purchasedCount(g, "Italy", "infantry"))
+}
+
+// With no plan wanting anything, nothing is held back -- the money belongs to
+// the army rather than to a purse for an operation that does not exist.
+func TestPurchase_HoldsNothingBackWithoutAPlan(t *testing.T) {
+	g, controller := poorInvaderBoard(t)
+	// Hand the island over so there is nothing left to invade.
+	models.ChangeOwnership(g.Board["Island"], g.Players["Italy"])
+	player := g.Players["Italy"]
+	player.IPCs = 30
+
+	npc := NewSeededNPCAIPlayer("Italy", "normal", 1)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+	if err := npc.PurchasePhase(controller, NewGameTranscript("t")); err != nil {
+		t.Fatalf("purchase phase: %v", err)
+	}
+	if saved := controller.Plans.Reserve("Italy"); saved != 0 {
+		t.Errorf("held back %d IPCs with no plan asking for anything", saved)
+	}
+}
+
+// poorInvaderBoard is an invasion that a small income has to save up for.
+//
+// Italy's posture puts a fifth of production into expeditions, and infantry
+// costs one IPC, so the general buildup can consume every last IPC left to it.
+// That is the situation the war chest exists for: without it the treasury never
+// grows and the transport is never affordable.
+func poorInvaderBoard(t *testing.T) (*models.Game, *GameController) {
+	t.Helper()
+
+	g := models.NewGame()
+	g.PlayerOrder = []string{"Italy", "UK"}
+	for _, name := range g.PlayerOrder {
+		player := g.GetOrCreatePlayer(name)
+		player.TakesTurns = true
+	}
+	g.Players["Italy"].Side = "Axis"
+	g.Players["UK"].Side = "Allies"
+
+	g.AddTerritory("Home", models.Land, "Italy", 2)
+	g.AddTerritory("Inland", models.Land, "Italy", 1)
+	g.AddTerritory("Island", models.Land, "UK", 6)
+	g.AddTerritory("Home Sea", models.Water, "Italy", 0)
+	g.AddTerritory("Island Sea", models.Water, "UK", 0)
+
+	g.ConnectTerritories("Home", "Inland")
+	g.ConnectTerritories("Home", "Home Sea")
+	g.ConnectTerritories("Home Sea", "Island Sea")
+	g.ConnectTerritories("Island Sea", "Island")
+
+	g.AddPieceTemplate("infantry", models.Land, 1, 1, 2, 1)
+	g.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
+	g.GlobalPieceTemplates["transport"].Capacity = 2
+	g.GlobalPieceTemplates["transport"].CanCarry = []string{"infantry"}
+
+	if err := g.PlacePieces("Home", "infantry", 8); err != nil {
+		t.Fatalf("placing troops: %v", err)
+	}
+
+	controller := NewGameController(g)
+	if err := controller.StartGame(); err != nil {
+		t.Fatalf("starting game: %v", err)
+	}
+	return g, controller
+}
+
+func purchasedCount(g *models.Game, power, unit string) int {
+	count := 0
+	for _, pending := range g.PurchasedUnits[power] {
+		if pending.Type == unit {
+			count++
+		}
+	}
+	return count
+}
