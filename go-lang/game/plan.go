@@ -334,10 +334,17 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 		return false
 	}
 
-	// A port we no longer hold cannot mount an invasion.
-	if staging, ok := g.Board[p.Staging]; !ok || staging.Owner == nil || staging.Owner.Name != p.Power {
-		p.abandon("lost the staging port " + p.Staging)
-		return false
+	// A port we no longer hold cannot mount an invasion -- but that only
+	// matters while the invasion is still mounting. A convoy already at sea
+	// carries everything it needs; abandoning it because the province behind
+	// it fell threw away a fully loaded operation mid-crossing (seen in game
+	// transcripts: eight troops and three transports scuttled on the news that
+	// Manchuria was lost).
+	if p.State == PlanForming {
+		if staging, ok := g.Board[p.Staging]; !ok || staging.Owner == nil || staging.Owner.Name != p.Power {
+			p.abandon("lost the staging port " + p.Staging)
+			return false
+		}
 	}
 
 	hadForce := len(p.allPieces()) > 0

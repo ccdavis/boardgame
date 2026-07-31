@@ -473,3 +473,66 @@ func TestPlan_RetiresWhenAnAllyTakesTheTarget(t *testing.T) {
 		t.Error("an ally's conquest is not this plan's success")
 	}
 }
+
+// A convoy already at sea is not scuttled by news from home.
+//
+// Losing the staging port used to abandon the plan in any state, which threw
+// away fully loaded operations mid-crossing. The port only matters while the
+// force is still assembling there.
+func TestPlan_SurvivesLosingThePortOnceAtSea(t *testing.T) {
+	g, controller := invasionBoard(t)
+	player := g.Players["Germany"]
+
+	if err := g.PlacePieces("Home", "infantry", 2); err != nil {
+		t.Fatalf("placing troops: %v", err)
+	}
+	if err := g.PlacePieces("Mid Sea", "transport", 1); err != nil {
+		t.Fatalf("placing transport: %v", err)
+	}
+	transportID := g.Board["Mid Sea"].Pieces[0]
+	g.Pieces[transportID].Owner = player
+
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+	plan := controller.Plans.Active("Germany")[0]
+
+	// Put a troop aboard by hand and let the plan notice it is embarked.
+	troopID := plan.Troops[0]
+	g.Board["Home"].Pieces = removeID(g.Board["Home"].Pieces, troopID)
+	g.Pieces[transportID].Holding = append(g.Pieces[transportID].Holding, troopID)
+	plan.Ships = []int{transportID}
+	plan.Review(controller)
+	if plan.State != PlanEmbarked {
+		t.Fatalf("state = %v, want at sea", plan.State)
+	}
+
+	// The home port falls while the convoy is mid-crossing.
+	models.ChangeOwnership(g.Board["Home"], g.Players["UK"])
+	if !plan.Review(controller) {
+		t.Fatalf("plan was retired: %v (%s)", plan.State, plan.Reason)
+	}
+	if plan.State == PlanAbandoned {
+		t.Errorf("a convoy at sea was abandoned because %s", plan.Reason)
+	}
+
+	// But a plan still forming, whose port falls, is rightly abandoned.
+	forming := &AmphibiousPlan{
+		Power: "Germany", Target: "Island", Staging: "Home",
+		Embark: "Home Sea", DropZone: "Island Sea", State: PlanForming,
+	}
+	controller.Plans.Add(forming)
+	forming.Review(controller)
+	if forming.State != PlanAbandoned {
+		t.Errorf("a forming plan kept a staging port the enemy holds (state %v)", forming.State)
+	}
+}
+
+func removeID(ids []int, drop int) []int {
+	out := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id != drop {
+			out = append(out, id)
+		}
+	}
+	return out
+}
