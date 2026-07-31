@@ -156,3 +156,34 @@ func TestGetTerritoriesByOwner(t *testing.T) {
 		t.Errorf("Expected nil for non-existent player")
 	}
 }
+
+// MovePiece must refuse rather than corrupt.
+//
+// It used to return nil for an unknown territory, and when the piece was not
+// in the source territory it appended it to the destination anyway -- the same
+// piece then stood in two territories at once.
+func TestMovePiece_RefusesBadMoves(t *testing.T) {
+	g := NewGame()
+	g.GetOrCreatePlayer("A")
+	g.AddTerritory("Here", Land, "A", 1)
+	g.AddTerritory("There", Land, "A", 1)
+	g.AddPieceTemplate("infantry", Land, 1, 1, 2, 3)
+	g.PlacePieces("Here", "infantry", 1)
+	id := g.Board["Here"].Pieces[0]
+
+	if err := g.MovePiece(id, "Nowhere", "There"); err == nil {
+		t.Error("moving from an unknown territory reported success")
+	}
+	if err := g.MovePiece(id, "Here", "Nowhere"); err == nil {
+		t.Error("moving to an unknown territory reported success")
+	}
+	if err := g.MovePiece(id, "There", "Here"); err == nil {
+		t.Error("moving a piece from a territory it is not in reported success")
+	}
+	if problems := g.Validate(); len(problems) > 0 {
+		t.Errorf("refused moves still corrupted the board: %v", problems)
+	}
+	if len(g.Board["Here"].Pieces) != 1 || len(g.Board["There"].Pieces) != 0 {
+		t.Error("refused moves changed piece positions")
+	}
+}

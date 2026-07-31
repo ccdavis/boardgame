@@ -29,20 +29,27 @@ func ChangeOwnership(territory *Territory, newOwner *Player) {
 	}
 }
 
-// MovePiece moves a piece from one territory to another
+// MovePiece moves a piece from one territory to another.
+//
+// Every failure is an error, never a silent no-op. This used to return nil for
+// an unknown territory, and -- worse -- when the piece was not actually in the
+// source territory it still appended it to the destination, leaving the same
+// piece listed in two places. Callers all check the error; they were being
+// told everything was fine.
 func (g *Game) MovePiece(pieceID int, fromTerritory, toTerritory string) error {
 	from, exists := g.Board[fromTerritory]
 	if !exists {
-		return nil
+		return fmt.Errorf("territory %q not found", fromTerritory)
 	}
 
 	to, exists := g.Board[toTerritory]
 	if !exists {
-		return nil
+		return fmt.Errorf("territory %q not found", toTerritory)
 	}
 
-	// Remove piece from source territory
-	newPieces := make([]int, 0, len(from.Pieces)-1)
+	// Remove piece from source territory. (Capacity is len, not len-1: an
+	// empty source made the old len-1 capacity negative, which panics.)
+	newPieces := make([]int, 0, len(from.Pieces))
 	found := false
 	for _, id := range from.Pieces {
 		if id == pieceID && !found {
@@ -50,6 +57,9 @@ func (g *Game) MovePiece(pieceID int, fromTerritory, toTerritory string) error {
 			continue
 		}
 		newPieces = append(newPieces, id)
+	}
+	if !found {
+		return fmt.Errorf("piece %d is not in %q", pieceID, fromTerritory)
 	}
 	from.Pieces = newPieces
 
