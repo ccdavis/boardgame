@@ -155,15 +155,10 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	// while the code claimed to build a balanced force.
 	//
 	// Spending to a target share instead means each type is bought when it is
-	// furthest behind its share, so the mix holds at any income.
-	unitMix := []struct {
-		name  string
-		share float64
-	}{
-		{"infantry", 0.50},
-		{"armor", 0.30},
-		{"fighter", 0.20},
-	}
+	// furthest behind its share, so the mix holds at any income. The roles are
+	// picked from the board's roster rather than hardcoded names, so a board
+	// that spells its units differently still gets an army.
+	unitMix := buildupMix(game)
 	spentOn := make(map[string]int)
 	unaffordable := make(map[string]bool)
 
@@ -1163,6 +1158,71 @@ func (npc *NPCAIPlayer) identifyStrategicTargets(game *models.Game, player *mode
 	return targets
 }
 
+
+// unitShare is one role in the general buildup and its slice of the budget.
+type unitShare struct {
+	name  string
+	share float64
+}
+
+// buildupMix picks the general army's composition from the board's roster:
+// a line unit (best defence per IPC), a punch unit (best attack per IPC), and
+// an air unit (best combat value per IPC). On aaa.gdf these come out as
+// infantry, armor and fighter -- the names the mix used to hardcode, which
+// bought nothing at all on a board that spelled them differently.
+func buildupMix(g *models.Game) []unitShare {
+	units := g.Units()
+
+	pickLand := func(value func(*models.Piece) int) string {
+		best, bestRatio := "", 0.0
+		for _, name := range sortedTemplateNames(g) {
+			template := g.GlobalPieceTemplates[name]
+			caps := units.Of(name)
+			if template.Terrain != models.Land || template.Cost <= 0 ||
+				caps.IsStructure || caps.IsAA || template.Movement <= 0 {
+				continue
+			}
+			if v := value(template); v > 0 {
+				if ratio := float64(v) / float64(template.Cost); ratio > bestRatio {
+					best, bestRatio = name, ratio
+				}
+			}
+		}
+		return best
+	}
+
+	line := pickLand(func(p *models.Piece) int { return int(p.Defend) })
+	punch := pickLand(func(p *models.Piece) int { return int(p.Attack) })
+
+	air, bestAir := "", 0.0
+	for _, name := range sortedTemplateNames(g) {
+		template := g.GlobalPieceTemplates[name]
+		if template.Terrain != models.Air || template.Cost <= 0 {
+			continue
+		}
+		if ratio := float64(template.Attack+template.Defend) / float64(template.Cost); ratio > bestAir {
+			air, bestAir = name, ratio
+		}
+	}
+
+	mix := make([]unitShare, 0, 3)
+	add := func(name string, share float64) {
+		if name == "" {
+			return
+		}
+		for i := range mix {
+			if mix[i].name == name {
+				mix[i].share += share // roles collapsed onto one unit type
+				return
+			}
+		}
+		mix = append(mix, unitShare{name, share})
+	}
+	add(line, 0.50)
+	add(punch, 0.30)
+	add(air, 0.20)
+	return mix
+}
 
 // findStructureTemplate returns the board's buildable structure -- its factory
 // or industrial complex -- under whatever name the board gives it.

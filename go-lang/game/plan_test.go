@@ -536,3 +536,40 @@ func removeID(ids []int, drop int) []int {
 	}
 	return out
 }
+
+// Troops come from the staging port's landmass, not from garrisons that can
+// never march to it.
+func TestAssignUnits_TakesTroopsOnlyFromTheStagingLandmass(t *testing.T) {
+	g, controller := invasionBoard(t)
+	player := g.Players["Germany"]
+
+	// A German-held island off on its own, with a garrison.
+	g.AddTerritory("Outpost", models.Land, "Germany", 1)
+	g.AddTerritory("Outpost Sea", models.Water, "Neutral", 0)
+	g.ConnectTerritories("Outpost", "Outpost Sea")
+	g.ConnectTerritories("Outpost Sea", "Home Sea")
+	if err := g.PlacePieces("Outpost", "infantry", 3); err != nil {
+		t.Fatalf("garrisoning outpost: %v", err)
+	}
+	if err := g.PlacePieces("Home", "infantry", 2); err != nil {
+		t.Fatalf("placing troops: %v", err)
+	}
+
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+	plans := controller.Plans.Active("Germany")
+	if len(plans) == 0 {
+		t.Fatal("no plan formed")
+	}
+	plan := plans[0]
+
+	outpost := g.Board["Outpost"]
+	for _, id := range plan.Troops {
+		for _, garrisoned := range outpost.Pieces {
+			if id == garrisoned {
+				t.Fatalf("plan staged at %s committed a troop from Outpost, an island its army cannot leave",
+					plan.Staging)
+			}
+		}
+	}
+}

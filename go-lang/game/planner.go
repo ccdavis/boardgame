@@ -315,9 +315,15 @@ func (npc *NPCAIPlayer) ReviewPlans(gc *GameController, player *models.Player, t
 }
 
 // assignUnits gives a plan any uncommitted units it still needs.
+//
+// Troops are taken only from the staging port's own landmass. Recruiting from
+// anywhere the power held committed island garrisons to armies they could
+// never march to join; the plan then counted them as progress and waited out
+// its stall limit on troops that were never coming.
 func (npc *NPCAIPlayer) assignUnits(gc *GameController, player *models.Player, plan *AmphibiousPlan) {
 	g := gc.Game
 	units := g.Units()
+	reachesPort := marchableTo(g, player, plan.Staging)
 
 	claim := func(pieceID int) bool { return !gc.Plans.Committed(player.Name, pieceID) }
 
@@ -330,7 +336,8 @@ func (npc *NPCAIPlayer) assignUnits(gc *GameController, player *models.Player, p
 			caps := units.For(piece)
 			switch {
 			case piece.Terrain == models.Land && !caps.IsStructure && !caps.IsAA &&
-				len(plan.Troops) < plan.WantTroops && piece.Movement > 0:
+				len(plan.Troops) < plan.WantTroops && piece.Movement > 0 &&
+				reachesPort[held.Name]:
 				plan.Troops = append(plan.Troops, id)
 			case piece.Terrain == models.Water && carriesLandUnits(g, piece) &&
 				len(plan.Ships) < plan.WantTransports:
@@ -344,6 +351,33 @@ func (npc *NPCAIPlayer) assignUnits(gc *GameController, player *models.Player, p
 			}
 		}
 	}
+}
+
+// marchableTo returns the friendly land territories from which an army can
+// walk to the given territory without crossing water.
+func marchableTo(g *models.Game, player *models.Player, to string) map[string]bool {
+	start, ok := g.Board[to]
+	if !ok || start.Terrain != models.Land {
+		return nil
+	}
+
+	reach := map[string]bool{to: true}
+	queue := []*models.Territory{start}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, neighbour := range current.ConnectedTo {
+			if neighbour.Terrain != models.Land || reach[neighbour.Name] {
+				continue
+			}
+			if neighbour.Owner != player && !areAllies(neighbour.Owner, player) {
+				continue
+			}
+			reach[neighbour.Name] = true
+			queue = append(queue, neighbour)
+		}
+	}
+	return reach
 }
 
 // PlanPurchases returns what the active plans still need to buy, so the plan

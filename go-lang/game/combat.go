@@ -551,11 +551,15 @@ func ApplyArtillerySupport(units []*models.Piece) map[*models.Piece]int16 {
 	artilleryCount := 0
 	infantryNeedingSupport := make([]*models.Piece, 0)
 
-	// Count artillery and infantry
+	// Count artillery and infantry. Both ends of the pairing come from the
+	// capability registry -- the artillery side always did, but the infantry
+	// side compared unit.Name against the literal "infantry", the exact
+	// spelling-dependence the registry exists to remove.
 	for _, unit := range units {
-		if models.CapabilitiesOf(unit).SupportsInfantry {
+		caps := models.CapabilitiesOf(unit)
+		if caps.SupportsInfantry {
 			artilleryCount++
-		} else if unit.Name == "infantry" && unit.Attack == 1 {
+		} else if caps.SupportedByArtillery && unit.Attack == 1 {
 			infantryNeedingSupport = append(infantryNeedingSupport, unit)
 		}
 	}

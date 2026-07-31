@@ -38,6 +38,10 @@ type UnitCapabilities struct {
 	// SupportsInfantry marks artillery, which raises paired infantry attack.
 	SupportsInfantry bool
 
+	// SupportedByArtillery marks infantry, the unit whose attack artillery
+	// raises when paired.
+	SupportedByArtillery bool
+
 	// CanBlitz marks a unit that may move through an empty enemy territory and
 	// keep going.
 	CanBlitz bool
@@ -89,6 +93,9 @@ func capabilitiesFor(template *Piece) UnitCapabilities {
 
 	case "artillery":
 		caps.SupportsInfantry = true
+
+	case "infantry", "inf":
+		caps.SupportedByArtillery = true
 
 	case "armor", "tank":
 		caps.CanBlitz = true
