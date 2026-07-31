@@ -579,3 +579,56 @@ func TestAssignUnits_TakesTroopsOnlyFromTheStagingLandmass(t *testing.T) {
 		}
 	}
 }
+
+// A plan re-reads the defence while its force assembles: a target that has
+// grown into a fortress ends the plan, and a defence that merely grew raises
+// the wanted force to match.
+//
+// WantTroops used to be fixed at proposal, so a plan drawn against a thin
+// coast in round one sailed ten rounds later with eight troops against what
+// had become a 159-unit fortress -- twelve such landings in six games, every
+// one annihilated.
+func TestPlan_ResizesAgainstAGrowingDefence(t *testing.T) {
+	g, controller := invasionBoard(t)
+	player := g.Players["Germany"]
+
+	if err := g.PlacePieces("Island", "infantry", 2); err != nil {
+		t.Fatalf("garrisoning island: %v", err)
+	}
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+	plan := controller.Plans.Active("Germany")[0]
+	firstWant := plan.WantTroops
+
+	// The defence doubles: the plan wants more troops, but stays alive.
+	g.PlacePieces("Island", "infantry", 3)
+	plan.Review(controller)
+	if plan.State == PlanAbandoned {
+		t.Fatalf("a beatable defence ended the plan: %s", plan.Reason)
+	}
+	if plan.WantTroops <= firstWant {
+		t.Errorf("defence grew but WantTroops stayed at %d", plan.WantTroops)
+	}
+
+	// The defence becomes hopeless: the plan is abandoned, releasing its units.
+	g.PlacePieces("Island", "infantry", 20)
+	if plan.Review(controller) {
+		t.Error("a plan against a fortress no landing can beat is still being worked")
+	}
+	if plan.State != PlanAbandoned {
+		t.Errorf("state = %v, want abandoned", plan.State)
+	}
+}
+
+// A fortress is not even proposed against.
+func TestProposePlan_SkipsHopelessTargets(t *testing.T) {
+	g, controller := invasionBoard(t)
+	if err := g.PlacePieces("Island", "infantry", 20); err != nil { // defence 40
+		t.Fatalf("garrisoning: %v", err)
+	}
+
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	if plan := npc.ProposePlan(controller, g.Players["Germany"]); plan != nil {
+		t.Errorf("proposed %q against defence %d", plan.Target, defenderStrength(g, plan.Target))
+	}
+}

@@ -394,9 +394,34 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 	p.Contested = contested
 	p.WantEscort = escortNeeded(g, p, power)
 
+	// Re-read the defence while the force assembles. WantTroops was set once
+	// at proposal, so a plan drawn against a thinly held coast in round one
+	// sailed ten rounds later with eight troops against what had become a
+	// 159-unit fortress -- twelve such landings at Eastern US across six
+	// games, every one annihilated, each abandonment starting the next. A
+	// defence the largest liftable force cannot beat ends the plan; a defence
+	// that merely grew raises the force to match while still liftable.
+	if p.State == PlanForming || p.State == PlanEmbarked {
+		defence := defenderStrength(g, p.Target)
+		if troopsNeeded(defence, nil) >= maxPlanTroops && defence > hopelessDefence {
+			p.abandon(fmt.Sprintf("%s is too strongly held (defence %d)", p.Target, defence))
+			return false
+		}
+		if want := troopsNeeded(defence, nil); want > p.WantTroops {
+			p.WantTroops = want
+			p.WantTransports = (want + transportCapacity - 1) / transportCapacity
+		}
+	}
+
 	p.advanceState(g)
 	return true
 }
+
+// hopelessDefence is the defensive strength beyond which no liftable landing
+// force can expect to win, whatever the escort. maxPlanTroops troops attack at
+// roughly one pip each; a defence several times that is not a target, it is a
+// deterrent.
+const hopelessDefence = 3 * maxPlanTroops
 
 // advanceState moves a plan along according to where its force actually is.
 func (p *AmphibiousPlan) advanceState(g *models.Game) {

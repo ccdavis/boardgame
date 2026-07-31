@@ -63,6 +63,11 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 			continue // landlocked and unreachable: nothing to plan
 		}
 
+		// A fortress the largest liftable force cannot beat is not a target.
+		if defenderStrength(g, name) > hopelessDefence {
+			continue
+		}
+
 		staging, embark, drop, crossing := bestApproach(g, player, name, targetSeas)
 		if staging == "" || crossing > maxCrossing {
 			continue
@@ -135,11 +140,14 @@ func troopsNeeded(defence int, rng *rand.Rand) int {
 	if needed < 2 {
 		needed = 2
 	}
-	if needed > 8 {
-		needed = 8 // beyond this the build-up never finishes
+	if needed > maxPlanTroops {
+		needed = maxPlanTroops // beyond this the build-up never finishes
 	}
 	return needed
 }
+
+// maxPlanTroops is the largest landing force a plan will assemble.
+const maxPlanTroops = 8
 
 func territoryValue(territory *models.Territory) int {
 	value := territory.Production
