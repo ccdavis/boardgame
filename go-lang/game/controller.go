@@ -3,6 +3,7 @@ package game
 import (
 	"boardgame/models"
 	"fmt"
+	"sort"
 )
 
 // GameController manages the game flow and turn sequence
@@ -124,13 +125,9 @@ func (gc *GameController) anyPowerTakesTurns() bool {
 	return false
 }
 
-// GetCurrentPlayer returns the player whose turn it is
+// GetCurrentPlayer returns the player whose turn it is.
 func (gc *GameController) GetCurrentPlayer() (*models.Player, error) {
-	player, exists := gc.Game.Players[gc.Game.CurrentPower]
-	if !exists {
-		return nil, fmt.Errorf("current player %s not found", gc.Game.CurrentPower)
-	}
-	return player, nil
+	return gc.Game.GetCurrentPlayer()
 }
 
 // CalculateIncome calculates a player's total income from territories
@@ -863,63 +860,56 @@ func (gc *GameController) GetTransportCargo(transportID int) ([]int, error) {
 	return transport.Holding, nil
 }
 
-// TriggerStrictNeutralChainReaction converts all strict neutrals to be hostile to the attacker
-// This is triggered when any strict neutral is attacked
+// TriggerStrictNeutralChainReaction converts all strict neutrals to be hostile
+// to the attacker. This is triggered when any strict neutral is attacked.
 func (gc *GameController) TriggerStrictNeutralChainReaction(attacker *models.Player) {
-	// Determine which side the attacker is on
-	var enemySide string
-	if attacker.Side == "Axis" {
-		enemySide = "Allies"
-	} else {
-		enemySide = "Axis"
-	}
-
-	// Find a major power on the enemy side to give strict neutrals to
+	// The neutrals join the attacker's enemies: the first opposing power in
+	// turn order takes custody. Turn order rather than the players map (which
+	// iterates differently on every run), and no hardcoded list of "major"
+	// powers -- the board decides who plays.
 	var enemyPower *models.Player
-	for _, player := range gc.Game.Players {
-		if player.Side == enemySide && player.Name != "Neutral" {
-			// Prefer major powers (USSR, USA, UK, Germany, Japan)
-			if player.Name == "USSR" || player.Name == "USA" || player.Name == "UK" ||
-				player.Name == "Germany" || player.Name == "Japan" {
-				enemyPower = player
-				break
-			}
+	for _, name := range gc.Game.PlayerOrder {
+		player := gc.Game.Players[name]
+		if player == nil || !player.TakesTurns || player.Side == "" {
+			continue
+		}
+		if player.Side != attacker.Side {
+			enemyPower = player
+			break
 		}
 	}
-
-	// If no major power found, use first enemy power found
-	if enemyPower == nil {
-		for _, player := range gc.Game.Players {
-			if player.Side == enemySide && player.Name != "Neutral" {
-				enemyPower = player
-				break
-			}
-		}
-	}
-
-	// If still no enemy power, something's wrong - just return
 	if enemyPower == nil {
 		return
 	}
 
-	// Convert all strict neutrals to hostile (give them to enemy power with infantry)
-	for _, territory := range gc.Game.Board {
+	// Convert all strict neutrals to hostile (give them to the enemy power
+	// with defenders), in a fixed order for replayability.
+	defender := bestDefenderName(gc.Game)
+	for _, name := range sortedTerritoryNames(gc.Game) {
+		territory := gc.Game.Board[name]
 		if territory.Owner.Name == "Neutral" && territory.NeutralType == models.StrictNeutral {
-			// Transfer ownership to enemy power
 			models.ChangeOwnership(territory, enemyPower)
 
-			// Add defending infantry (one per production value, minimum 1)
-			infantryCount := territory.Production
-			if infantryCount < 1 {
-				infantryCount = 1
+			// Add defenders (one per production value, minimum 1), using
+			// whatever this board's standing infantry is called.
+			count := territory.Production
+			if count < 1 {
+				count = 1
 			}
-
-			// Only add infantry if the template exists
-			if _, exists := gc.Game.GlobalPieceTemplates["infantry"]; exists {
-				gc.Game.PlacePieces(territory.Name, "infantry", infantryCount)
+			if defender != "" {
+				gc.Game.PlacePieces(territory.Name, defender, count)
 			}
 		}
 	}
+}
+
+func sortedTerritoryNames(g *models.Game) []string {
+	names := make([]string, 0, len(g.Board))
+	for name := range g.Board {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ActivateNeutralTerritory peacefully transfers a pro-Allied or pro-Axis neutral
@@ -955,15 +945,14 @@ func (gc *GameController) ActivateNeutralTerritory(territoryName, activatorName 
 	// Transfer ownership
 	models.ChangeOwnership(territory, activator)
 
-	// Add free infantry (based on production value)
-	infantryCount := territory.Production
-	if infantryCount < 1 {
-		infantryCount = 1
+	// Add free defenders (based on production value), using whatever this
+	// board's standing infantry is called rather than a hardcoded name.
+	count := territory.Production
+	if count < 1 {
+		count = 1
 	}
-
-	// Only add infantry if the template exists
-	if _, exists := gc.Game.GlobalPieceTemplates["infantry"]; exists {
-		gc.Game.PlacePieces(territory.Name, "infantry", infantryCount)
+	if defender := bestDefenderName(gc.Game); defender != "" {
+		gc.Game.PlacePieces(territory.Name, defender, count)
 	}
 
 	return nil

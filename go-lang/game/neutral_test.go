@@ -60,7 +60,10 @@ func TestCanActivateProAlliedNeutral(t *testing.T) {
 
 	// Create territories - Argentina is pro-Allied
 	game.AddTerritory("Brazil", models.Land, "USA", 3)
-	game.AddTerritory("Argentina", models.Land, "Neutral", 1) // This will be marked as ProAlliedNeutral
+	game.AddTerritory("Argentina", models.Land, "Neutral", 1)
+	// Declared, as the board's Neutrality section declares it. Neutral land
+	// defaults to strict until the data says otherwise.
+	game.Board["Argentina"].NeutralType = models.ProAlliedNeutral
 	game.ConnectTerritories("Brazil", "Argentina")
 	game.ConnectTerritories("Argentina", "Brazil")
 
@@ -117,7 +120,8 @@ func TestCannotActivateProAlliedNeutralAsAxis(t *testing.T) {
 
 	// Create territories
 	game.AddTerritory("Southern Europe", models.Land, "Germany", 2)
-	game.AddTerritory("Argentina", models.Land, "Neutral", 1) // Pro-Allied
+	game.AddTerritory("Argentina", models.Land, "Neutral", 1)
+	game.Board["Argentina"].NeutralType = models.ProAlliedNeutral
 	game.ConnectTerritories("Southern Europe", "Argentina")
 	game.ConnectTerritories("Argentina", "Southern Europe")
 
@@ -152,7 +156,8 @@ func TestAxisCanAttackProAlliedNeutral(t *testing.T) {
 
 	// Create territories
 	game.AddTerritory("Southern Europe", models.Land, "Germany", 2)
-	game.AddTerritory("Argentina", models.Land, "Neutral", 1) // Pro-Allied
+	game.AddTerritory("Argentina", models.Land, "Neutral", 1)
+	game.Board["Argentina"].NeutralType = models.ProAlliedNeutral
 	game.ConnectTerritories("Southern Europe", "Argentina")
 	game.ConnectTerritories("Argentina", "Southern Europe")
 
@@ -185,7 +190,11 @@ func TestStrictNeutralChainReaction(t *testing.T) {
 	usa := game.GetOrCreatePlayer("USA")
 	usa.Side = "Allies"
 
-	game.PlayerOrder = []string{"Germany"}
+	// Both powers play, as a parsed board would declare. The chain reaction
+	// hands the neutrals to the first opposing power in turn order.
+	game.PlayerOrder = []string{"Germany", "USA"}
+	germany.TakesTurns = true
+	usa.TakesTurns = true
 
 	// Create territories - multiple strict neutrals
 	game.AddTerritory("Southern Europe", models.Land, "Germany", 2)

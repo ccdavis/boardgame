@@ -626,18 +626,24 @@ func (mt *MovementTracker) AddMoveWithCost(pieceID int, from, to string, moveTyp
 	return nil
 }
 
-// RemoveMove cancels a planned move
+// RemoveMove cancels a planned move.
+//
+// Cancelling refunds exactly what the cancelled plans cost -- not the piece's
+// whole spend. Deleting the MovementSpent entry outright refunded movement the
+// piece had already *executed* in the combat phase, so cancelling a noncombat
+// plan restored a full allowance mid-turn.
 func (mt *MovementTracker) RemoveMove(pieceID int) error {
-	// Find and remove the move
 	found := false
+	refund := 0
 	newMoves := make([]*Move, 0, len(mt.Moves))
 
 	for _, move := range mt.Moves {
 		if move.PieceID != pieceID {
 			newMoves = append(newMoves, move)
-		} else {
-			found = true
+			continue
 		}
+		found = true
+		refund += move.DistanceCost
 	}
 
 	if !found {
@@ -646,13 +652,10 @@ func (mt *MovementTracker) RemoveMove(pieceID int) error {
 
 	mt.Moves = newMoves
 	delete(mt.PiecesMovedFrom, pieceID)
-	// Cancelling a move gives its movement back.
-	for _, move := range mt.Moves {
-		if move.PieceID == pieceID {
-			return nil // still has another planned move; leave the spend alone
-		}
+	mt.MovementSpent[pieceID] -= refund
+	if mt.MovementSpent[pieceID] <= 0 {
+		delete(mt.MovementSpent, pieceID)
 	}
-	delete(mt.MovementSpent, pieceID)
 
 	return nil
 }

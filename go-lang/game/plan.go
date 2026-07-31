@@ -427,11 +427,9 @@ func (p *AmphibiousPlan) advanceState(g *models.Game) {
 			p.State = PlanEmbarked
 			p.LastProgress = g.Turn
 		}
-	case p.forceAssembled(g) && len(p.Route) > 0:
-		// Assembled at the port but not yet aboard; loading happens in the
-		// noncombat phase.
-		p.State = PlanForming
 	default:
+		// Nothing loaded: still forming, whether or not the force is at the
+		// port -- loading happens in the noncombat phase.
 		p.State = PlanForming
 	}
 }
@@ -753,11 +751,7 @@ func enemyNavalStrength(g *models.Game, territory *models.Territory, power *mode
 // combatValue rates a unit's usefulness in a naval action. Aircraft aboard a
 // carrier count, which is why a carrier is a credible escort.
 func combatValue(piece *models.Piece) int {
-	value := int(piece.Attack) + int(piece.Defend)
-	for range piece.Holding {
-		value += 2
-	}
-	return value
+	return int(piece.Attack) + int(piece.Defend) + 2*len(piece.Holding)
 }
 
 // friendlyNavalStrength measures what a power has to fight with in a zone.

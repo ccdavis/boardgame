@@ -368,7 +368,7 @@ func (npc *NPCAIPlayer) PlanPurchases(gc *GameController, player *models.Player)
 		if short <= 0 {
 			continue
 		}
-		warship := bestWarshipFor(g, short)
+		warship := bestWarship(g)
 		if warship == "" {
 			continue
 		}
@@ -414,13 +414,13 @@ func wantedCost(g *models.Game, wanted map[string]int) int {
 	return total
 }
 
-// bestWarshipFor picks what to buy as cover: the best fighting value per IPC
+// bestWarship picks what to buy as cover: the best fighting value per IPC
 // among the ships this board offers.
 //
 // Any warship will do -- a battleship, a submarine, or a carrier, whose value
 // counts the aircraft it carries. What matters is that the convoy has something
 // to fight with, not which silhouette it is.
-func bestWarshipFor(g *models.Game, needed int) string {
+func bestWarship(g *models.Game) string {
 	units := g.Units()
 
 	names := make([]string, 0, len(g.GlobalPieceTemplates))

@@ -265,8 +265,15 @@ func (g *Game) AddTerritory(name string, terrain TerrainType, ownerName string, 
 
 	owner := g.GetOrCreatePlayer(ownerName)
 
-	// Determine neutral type based on owner and territory name
-	neutralType := determineNeutralType(ownerName, name, terrain)
+	// Neutral-owned land defaults to strict neutrality until the board's
+	// Neutrality section says otherwise; water is freely traversable whoever
+	// nominally owns it. There used to be a table of hardcoded territory names
+	// here (Syria strict, unknown neutrals pro-Allied) that contradicted the
+	// data the parser then wrote over it -- two sources of truth, one wrong.
+	neutralType := NotNeutral
+	if ownerName == "Neutral" && terrain != Water {
+		neutralType = StrictNeutral
+	}
 
 	territory := &Territory{
 		Name:          name,
@@ -283,52 +290,6 @@ func (g *Game) AddTerritory(name string, terrain TerrainType, ownerName string, 
 	g.Board[name] = territory
 	owner.Territories = append(owner.Territories, territory)
 	return nil
-}
-
-// determineNeutralType determines the default neutral type for a territory
-// based on its owner, name, and terrain type
-func determineNeutralType(ownerName, territoryName string, terrain TerrainType) NeutralType {
-	// Non-neutral territories
-	if ownerName != "Neutral" {
-		return NotNeutral
-	}
-
-	// Water territories are not subject to neutral rules
-	if terrain == Water {
-		return NotNeutral
-	}
-
-	// Strict neutral territories (historically neutral countries)
-	strictNeutrals := map[string]bool{
-		"Turkey":      true,
-		"Afghanistan": true,
-		"Syria":       true,
-		"Mongolia":    true, // Special case, but starts as strict
-	}
-
-	if strictNeutrals[territoryName] {
-		return StrictNeutral
-	}
-
-	// Pro-Allied neutrals (most South American countries, some Middle Eastern)
-	proAlliedNeutrals := map[string]bool{
-		"Colombia":   true,
-		"Venezuela":  true,
-		"Peru":       true,
-		"Chile":      true,
-		"Argentina":  true,
-		"Arabia":     true,
-		"Iraq":       true,
-		"Mozambique": true,
-		"Angola":     true,
-	}
-
-	if proAlliedNeutrals[territoryName] {
-		return ProAlliedNeutral
-	}
-
-	// Default for unknown neutrals: pro-allied (safer default)
-	return ProAlliedNeutral
 }
 
 // ConnectTerritories creates a connection between two territories.

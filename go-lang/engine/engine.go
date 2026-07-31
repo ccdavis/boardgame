@@ -147,7 +147,7 @@ func (d *Driver) Warnings() []string {
 				fmt.Sprintf("You have %d unspent IPCs", player.IPCs))
 		}
 	case models.CombatMovePhase:
-		if len(d.Controller.GetPlannedMoves()) == 0 {
+		if len(d.Controller.MoveTracker.GetMovesByType(game.CombatMove)) == 0 {
 			warnings = append(warnings,
 				"No combat moves planned - you won't attack any territories")
 		}

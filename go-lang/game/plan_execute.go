@@ -333,6 +333,7 @@ func (gc *GameController) LandAssaultTroops(power string, transcript *GameTransc
 	landed := 0
 
 	for _, plan := range gc.Plans.Active(power) {
+		landedHere := 0
 		if len(plan.pendingLanding) == 0 {
 			continue
 		}
@@ -363,14 +364,17 @@ func (gc *GameController) LandAssaultTroops(power string, transcript *GameTransc
 					continue
 				}
 				gc.registerAmphibiousAttacker(plan, troopID, target, power)
-				landed++
+				landedHere++
 			}
 		}
 		plan.pendingLanding = nil
+		landed += landedHere
 
-		if landed > 0 && transcript != nil {
+		// Per-plan count: with two landings in one turn, the second message
+		// used to report the running total rather than its own troops.
+		if landedHere > 0 && transcript != nil {
 			transcript.LogAction(power, fmt.Sprintf(
-				"%d troops landed in %s", landed, plan.Target))
+				"%d troops landed in %s", landedHere, plan.Target))
 		}
 	}
 	return landed

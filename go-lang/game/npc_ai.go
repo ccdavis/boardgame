@@ -166,13 +166,13 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	}
 	spentOn := make(map[string]int)
 	unaffordable := make(map[string]bool)
-	_ = posture
 
 	// Garrisons first: they are cheap, they are what a defensive power exists
 	// to buy, and an undefended factory loses the war quietly.
 	defenceSpent := 0
-	for _, unitType := range sortedWants(npc.DefencePurchases(controller, player)) {
-		count := npc.DefencePurchases(controller, player)[unitType]
+	defenceWants := npc.DefencePurchases(controller, player)
+	for _, unitType := range sortedWants(defenceWants) {
+		count := defenceWants[unitType]
 		template, exists := game.GlobalPieceTemplates[unitType]
 		if !exists {
 			continue
