@@ -316,10 +316,17 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 		return false
 	}
 
-	// Somebody may have taken the target already -- possibly us, by land.
+	// Somebody may have taken the target already -- possibly us, by land, or an
+	// ally by any route. An ally's conquest ends the plan too: pressing on
+	// would land troops against a friendly garrison, and attacking an ally is
+	// exactly what the rules forbid.
 	if target, ok := g.Board[p.Target]; ok {
 		if target.Owner != nil && target.Owner.Name == p.Power {
 			p.State = PlanSucceeded
+			return false
+		}
+		if power := g.Players[p.Power]; power != nil && areAllies(target.Owner, power) {
+			p.abandon("an ally holds " + p.Target)
 			return false
 		}
 	} else {

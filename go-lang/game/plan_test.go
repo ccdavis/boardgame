@@ -440,3 +440,36 @@ func purchasedCount(g *models.Game, power, unit string) int {
 	}
 	return count
 }
+
+// A plan whose target an ally has captured is over, not a new enemy.
+//
+// Review only retired a plan when its own power held the target, so if an
+// ally got there first the plan pressed on -- and the landing created a
+// battle against the ally, which the rules flatly forbid.
+func TestPlan_RetiresWhenAnAllyTakesTheTarget(t *testing.T) {
+	g, controller := invasionBoard(t)
+	player := g.Players["Germany"]
+
+	// A second Axis power that will capture the island first.
+	japan := g.GetOrCreatePlayer("Japan")
+	japan.Side = "Axis"
+	japan.TakesTurns = true
+
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+	active := controller.Plans.Active("Germany")
+	if len(active) == 0 {
+		t.Fatal("no plan formed")
+	}
+	plan := active[0]
+
+	models.ChangeOwnership(g.Board[plan.Target], japan)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+
+	if got := controller.Plans.Active("Germany"); len(got) > 0 && got[0].ID == plan.ID {
+		t.Errorf("plan %d still active against %s, which an ally now holds", plan.ID, plan.Target)
+	}
+	if plan.State == PlanSucceeded {
+		t.Error("an ally's conquest is not this plan's success")
+	}
+}

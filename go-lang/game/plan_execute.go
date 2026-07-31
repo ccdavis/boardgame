@@ -352,6 +352,15 @@ func (gc *GameController) LandAssaultTroops(power string, transcript *GameTransc
 			plan.pendingLanding = nil
 			continue
 		}
+		// Never put troops ashore against an ally. Review retires a plan whose
+		// target an ally has taken, but the landing must refuse on its own
+		// account too -- it is the last gate before a battle is created.
+		if attacker := g.Players[power]; attacker != nil &&
+			target.Owner != nil && target.Owner.Name != power &&
+			areAllies(target.Owner, attacker) {
+			plan.pendingLanding = nil
+			continue
+		}
 
 		for _, shipID := range plan.pendingLanding {
 			ship, ok := g.Pieces[shipID]
