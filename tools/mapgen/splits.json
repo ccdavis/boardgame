@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "Splitting one TripleA region into several aaa.gdf territories.",
+    "",
+    "Each entry maps a TripleA polygon name to a set of aaa.gdf names, each with",
+    "one or more anchor points in TripleA canvas coordinates (3500x2000, y down).",
+    "The region is partitioned by nearest anchor and the cells are unioned per",
+    "name, so a territory can claim several disjoint lobes by taking several",
+    "anchors, and thin strips (Chile) are produced by placing anchors along them.",
+    "",
+    "Anchors are authored against tools/mapgen/render_splits.py output. Adjust an",
+    "anchor and re-render; there are no cut lines to keep consistent."
+  ],
+
+  "Columbia": {
+    "Colombia":  [[150, 1290], [150, 1210]],
+    "Venezuela": [[330, 1225], [250, 1190]]
+  },
+
+  "Argentina-Chile": {
+    "Chile":     [[213, 1560], [207, 1640], [215, 1720], [224, 1795]],
+    "Argentina": [[345, 1560], [310, 1640], [258, 1720], [243, 1795]]
+  },
+
+  "Syria Jordan": {
+    "Syria":     [[1360, 835]],
+    "Palestine": [[1310, 930]],
+    "Iraq":      [[1425, 880]]
+  },
+
+  "Finland Norway": {
+    "Norway":  [[980, 300], [1050, 212], [1095, 132]],
+    "Finland": [[1165, 245], [1150, 175]]
+  },
+
+  "East Europe": {
+    "Byelorussia":    [[1258, 450]],
+    "Eastern Europe": [[1180, 560], [1210, 660], [1160, 340]]
+  },
+
+  "South Europe": {
+    "Italy":           [[1060, 700], [1070, 795], [980, 665]],
+    "Southern Europe": [[1170, 700], [1160, 655]]
+  },
+
+  "Indian Ocean Sea Zone": {
+    "Indian Ocean":               [[1680, 1060]],
+    "Bay of Bengal":              [[1900, 1060]],
+    "North Central Indian Ocean": [[1780, 1240]]
+  },
+
+  "West Compass Sea Zone": {
+    "Central Indian Ocean":  [[1600, 1400]],
+    "Southern Indian Ocean": [[1600, 1750]]
+  },
+
+  "East Compass Sea Zone": {
+    "North East Indian Ocean": [[1880, 1400]],
+    "Eastern Indian Ocean":    [[1880, 1750]]
+  }
+}
