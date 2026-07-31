@@ -1,3 +1,26 @@
+/* Power colours.
+ *
+ * The previous set had Japan #c41e3a, USSR #c8102e and USA #b22234 -- three
+ * near-identical crimsons. That is unreadable for everyone, not only for
+ * colour-vision-deficient viewers, and it was a worse problem than the map
+ * geometry it sat on top of. These span hue *and* lightness so they stay
+ * distinguishable under deuteranopia, protanopia and tritanopia. Colour is
+ * never the only signal: unit badges also carry the owner's initials.
+ */
+:root {
+    --power-germany: #6E7B8B;  /* slate grey-blue (traditionally grey)  */
+    --power-japan:   #E8A33D;  /* amber          (traditionally orange) */
+    --power-ussr:    #C0392B;  /* brick red                             */
+    --power-uk:      #7E5A9B;  /* purple                                */
+    --power-usa:     #4C8C4A;  /* green                                 */
+    --power-italy:   #2E8B96;  /* teal                                  */
+    --power-neutral: #D9CFBA;  /* bone                                  */
+
+    --sea:       #A8CBE0;
+    --sea-line:  #FFFFFF;
+    --land-line: #33302B;
+}
+
 /* Global Styles */
 * {
     box-sizing: border-box;
@@ -268,13 +291,15 @@ body {
     display: inline-block;
 }
 
-.owner-germany { background: #666; color: white; }
-.owner-japan { background: #c41e3a; color: white; }
-.owner-italy { background: #009246; color: white; }
-.owner-ussr { background: #c8102e; color: white; }
-.owner-uk { background: #012169; color: white; }
-.owner-usa { background: #b22234; color: white; }
-.owner-neutral { background: #999; color: white; }
+/* Sidebar owner chips use the same palette as the map, so the two never
+   disagree about which colour means which power. */
+.owner-germany { background: var(--power-germany); color: white; }
+.owner-japan   { background: var(--power-japan);   color: #2b1c00; }
+.owner-italy   { background: var(--power-italy);   color: white; }
+.owner-ussr    { background: var(--power-ussr);    color: white; }
+.owner-uk      { background: var(--power-uk);      color: white; }
+.owner-usa     { background: var(--power-usa);     color: white; }
+.owner-neutral { background: var(--power-neutral); color: #33302b; }
 
 .victory-star {
     color: #ffd700;
@@ -286,146 +311,144 @@ body {
     color: #666;
 }
 
-/* Map Container */
+/* Map -----------------------------------------------------------------
+   One inline SVG. Each territory path is fill, border and hit region at once,
+   so there is no overlay to keep aligned. */
 .map-container {
-    background: #1a1a1a;
-    padding: 1rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: auto;
-}
-
-.map-wrapper {
     position: relative;
-    display: inline-block;
-    max-width: 100%;
-    max-height: 100%;
+    background: #12222c;
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+    overflow: hidden;
 }
 
-.game-map-image {
-    display: block;
-    width: 100%;
-    height: auto;
-    border: 2px solid #333;
-    border-radius: 4px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.5);
-    image-rendering: -webkit-optimize-contrast;
-    image-rendering: crisp-edges;
-}
-
-.map-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
+.map-svg {
     width: 100%;
     height: 100%;
+    display: block;
+    touch-action: none;
+    cursor: grab;
+}
+.map-svg:active { cursor: grabbing; }
+
+.ocean-bg { fill: var(--sea); }
+
+/* Territories */
+.terr {
+    stroke: var(--land-line);
+    stroke-width: 0.6;
+    vector-effect: non-scaling-stroke;
+    cursor: pointer;
+    transition: fill 120ms ease, filter 120ms ease;
+}
+.terr.kind-sea {
+    fill: var(--sea);
+    stroke: var(--sea-line);
+    stroke-width: 0.4;
+}
+.terr:hover { filter: brightness(1.14); }
+.terr:focus-visible { outline: none; stroke: #ffd400; stroke-width: 2.5; }
+
+.terr.owner-germany { fill: var(--power-germany); }
+.terr.owner-japan   { fill: var(--power-japan); }
+.terr.owner-ussr    { fill: var(--power-ussr); }
+.terr.owner-uk      { fill: var(--power-uk); }
+.terr.owner-usa     { fill: var(--power-usa); }
+.terr.owner-italy   { fill: var(--power-italy); }
+.terr.owner-neutral { fill: var(--power-neutral); }
+
+/* Sea zones always read as water, whatever the .gdf says about who "owns"
+   them. Every sea zone in aaa.gdf carries an owner, but it is a starting
+   marker rather than territory: colouring oceans by power turns the map into
+   blocks of flat colour and destroys the land/sea read. Naval presence is
+   shown by the unit badges instead. This rule comes after the owner rules on
+   purpose -- same specificity, later wins. */
+.terr.kind-sea,
+.terr.kind-sea[class*="owner-"] {
+    fill: var(--sea);
+}
+
+/* Selection is drawn as a heavy stroke rather than a fill change, so the
+   owner's colour stays readable while a territory is selected. */
+.terr.selected {
+    stroke: #ffd400;
+    stroke-width: 2.6;
+    vector-effect: non-scaling-stroke;
+}
+
+/* Connections with no shared border: the map seam, and adjacencies where the
+   board graph abstracts away the coastline. */
+.terr-link {
+    stroke: #ffd400;
+    stroke-width: 1.6;
+    stroke-dasharray: 4 3;
+    opacity: 0.85;
+    vector-effect: non-scaling-stroke;
+}
+
+/* Labels */
+.terr-label {
+    font-family: "Helvetica Neue", Arial, sans-serif;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: rgba(255,255,255,0.65);
+    stroke-width: 2.4px;
+    vector-effect: non-scaling-stroke;
+}
+.terr-label.land { font-size: 7px; fill: #1a1410; }
+.terr-label.sea  {
+    font-size: 5.5px;
+    fill: #24505f;
+    font-style: italic;
+    letter-spacing: 0.4px;
+    stroke: rgba(255,255,255,0.4);
+}
+
+/* Unit count badges */
+.unit-badge {
+    stroke: #12222c;
+    stroke-width: 0.8;
+    vector-effect: non-scaling-stroke;
+}
+.unit-badge-count {
+    font-family: "Helvetica Neue", Arial, sans-serif;
+    font-size: 6.5px;
+    font-weight: 700;
+    fill: #fff;
+    text-anchor: middle;
     pointer-events: none;
 }
 
-.map-overlay circle,
-.map-overlay polygon {
-    pointer-events: all;
+/* Toolbar */
+.map-toolbar {
+    position: absolute;
+    left: 0.75rem;
+    bottom: 0.75rem;
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+    background: rgba(10, 26, 34, 0.82);
+    padding: 0.35rem 0.5rem;
+    border-radius: 6px;
+}
+.map-toolbar button {
+    background: #1f3d4d;
+    color: #e8f2f7;
+    border: 1px solid #35606f;
+    border-radius: 4px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.8rem;
     cursor: pointer;
-    fill: transparent;
-    stroke: transparent;
-    transition: all 0.2s;
 }
-
-.map-overlay circle:hover,
-.map-overlay polygon:hover {
-    fill: rgba(255, 255, 255, 0.2);
-    stroke: #ffff00;
-    stroke-width: 0.3;
-}
-
-.map-overlay circle.selected,
-.map-overlay polygon.selected {
-    fill: rgba(255, 215, 0, 0.3);
-    stroke: #ffd700;
-    stroke-width: 0.4;
-}
-
-.map-overlay circle.friendly,
-.map-overlay polygon.friendly {
-    stroke: #00ff00;
-    stroke-width: 0.2;
-}
-
-.map-overlay circle.enemy,
-.map-overlay polygon.enemy {
-    stroke: #ff0000;
-    stroke-width: 0.2;
-}
-
-.map-overlay circle.neutral,
-.map-overlay polygon.neutral {
-    stroke: #888888;
-    stroke-width: 0.15;
-}
-
-/* Map Territory Indicators - Player Colors */
-/* Show filled dots for territories with units */
-.map-overlay circle.has-units {
-    fill: rgba(128, 128, 128, 0.4); /* Default gray */
-}
-
-/* Axis Powers - Red tones */
-.map-overlay circle.owner-germany.has-units {
-    fill: rgba(128, 128, 128, 0.6);
-    stroke: #2c2c2c;
-    stroke-width: 0.3;
-}
-
-.map-overlay circle.owner-japan.has-units {
-    fill: rgba(255, 255, 255, 0.7);
-    stroke: #ff0000;
-    stroke-width: 0.35;
-}
-
-.map-overlay circle.owner-italy.has-units {
-    fill: rgba(0, 128, 0, 0.6);
-    stroke: #006400;
-    stroke-width: 0.3;
-}
-
-/* Allied Powers - Blue/Green tones */
-.map-overlay circle.owner-ussr.has-units {
-    fill: rgba(139, 0, 0, 0.6);
-    stroke: #8b0000;
-    stroke-width: 0.3;
-}
-
-.map-overlay circle.owner-uk.has-units {
-    fill: rgba(210, 180, 140, 0.6);
-    stroke: #8b7355;
-    stroke-width: 0.3;
-}
-
-.map-overlay circle.owner-usa.has-units {
-    fill: rgba(0, 100, 0, 0.6);
-    stroke: #006400;
-    stroke-width: 0.3;
-}
-
-/* Neutral territories with units (rare but possible) */
-.map-overlay circle.owner-neutral.has-units {
-    fill: rgba(160, 160, 160, 0.5);
-    stroke: #888888;
-    stroke-width: 0.25;
-}
-
-/* Hover effects for territories with units */
-.map-overlay circle.has-units:hover {
-    fill-opacity: 0.8;
-    stroke-width: 0.5;
-}
-
-/* Selected territory with units */
-.map-overlay circle.selected.has-units {
-    stroke: #ffd700;
-    stroke-width: 0.6;
-    fill-opacity: 0.7;
+.map-toolbar button:hover:not(:disabled) { background: #2b5468; }
+.map-toolbar button:disabled { opacity: 0.45; cursor: default; }
+.map-hint {
+    color: #8fb3c2;
+    font-size: 0.72rem;
+    margin-left: 0.3rem;
 }
 
 /* Action Sidebar */
@@ -733,6 +756,17 @@ dialog::backdrop {
 
 .phase-modal {
     max-width: 500px;
+    /* The map is a full-bleed SVG that captures pointer events across the whole
+       centre column. Without an explicit stacking context the guidance dialog
+       renders underneath it and its dismiss button cannot be clicked at all. */
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1000;
+    border: none;
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 /* Unit Purchase List */

@@ -4,6 +4,66 @@
 
 const { createApp } = Vue;
 
+/**
+ * Map geometry, held outside Vue's reactivity on purpose.
+ *
+ * The layout is ~130 territories of coordinate arrays. Putting it in data()
+ * would have Vue deep-proxy every ring and re-diff the lot on each 2-second
+ * poll, for data that never changes during a game. SVG path strings are built
+ * once here at load; only ownership and unit counts stay reactive.
+ */
+const MAP = {
+    byName: {},
+    all: [],
+    landShapes: [],
+    seaShapes: [],
+    links: []
+};
+
+function ownerClass(owner) {
+    return 'owner-' + String(owner || 'neutral').toLowerCase().replace(/\s+/g, '-');
+}
+
+/** Build an SVG path from the layout's polygons/rings/points structure. */
+function pathFromPolygons(polygons) {
+    let d = '';
+    for (const rings of polygons) {
+        for (const ring of rings) {
+            if (!ring.length) continue;
+            d += 'M' + ring.map(p => p[0] + ' ' + p[1]).join('L') + 'Z';
+        }
+    }
+    return d;
+}
+
+function ingestLayout(layout) {
+    MAP.byName = {};
+    MAP.all = [];
+    MAP.landShapes = [];
+    MAP.seaShapes = [];
+    MAP.links = layout.links || [];
+
+    for (const [name, t] of Object.entries(layout.territories)) {
+        const isSea = t.kind === 'sea';
+        const entry = Object.freeze({
+            name,
+            isSea,
+            d: pathFromPolygons(t.polygons),
+            labelX: t.label.x,
+            labelY: t.label.y,
+            r: t.label.r || 0,
+            markerX: t.marker ? t.marker.x : t.label.x,
+            markerY: t.marker ? t.marker.y : t.label.y
+        });
+        MAP.byName[name] = entry;
+        MAP.all.push(entry);
+        (isSea ? MAP.seaShapes : MAP.landShapes).push(entry);
+    }
+    Object.freeze(MAP.all);
+    Object.freeze(MAP.landShapes);
+    Object.freeze(MAP.seaShapes);
+}
+
 const app = createApp({
     data() {
         return {
@@ -34,6 +94,15 @@ const app = createApp({
             territoryDetails: null,
             territoryFilter: '',
 
+            // Map. The geometry itself is deliberately NOT here: ~130 regions of
+            // coordinate arrays would be deep-proxied by Vue and re-diffed on
+            // every poll. It is held in a frozen module-level object instead
+            // (see loadLayout), and only these small reactive bits live here.
+            mapReady: false,
+            hoveredTerritory: null,
+            view: { x: 0, y: 0, w: 1000, h: 600 },
+            mapSize: { w: 1000, h: 600 },
+
             // Actions
             availableUnits: [],
             purchasedUnits: [],
@@ -53,6 +122,78 @@ const app = createApp({
     computed: {
         currentPlayer() {
             return this.gameState.players.find(p => p.name === this.gameState.humanPlayer) || { ipcs: 0 };
+        },
+
+        viewBoxStr() {
+            const v = this.view;
+            return `${v.x} ${v.y} ${v.w} ${v.h}`;
+        },
+
+        /** Zoom factor relative to the whole map, used to hide labels that no longer fit. */
+        zoom() {
+            return this.mapSize.w / this.view.w;
+        },
+
+        landShapes() { return MAP.landShapes; },
+        seaShapes() { return MAP.seaShapes; },
+
+        /**
+         * Labels are dropped when the territory is too small to hold the text at
+         * the current zoom. `r` is the inscribed-circle radius at the anchor, so
+         * this is a real fit test rather than a guess from area.
+         */
+        visibleLabels() {
+            const out = [];
+            for (const t of MAP.all) {
+                const half = (t.name.length * (t.isSea ? 1.5 : 1.9)) / 2;
+                const fits = t.r * this.zoom >= half * 0.55;
+                if (!fits && this.selectedTerritory !== t.name && this.hoveredTerritory !== t.name) {
+                    continue;
+                }
+                out.push({
+                    name: t.name, x: t.labelX, y: t.labelY,
+                    cls: t.isSea ? 'terr-label sea' : 'terr-label land'
+                });
+            }
+            return out;
+        },
+
+        unitMarkers() {
+            const out = [];
+            for (const terr of this.territories) {
+                if (!terr.unitCount) continue;
+                const geo = MAP.byName[terr.name];
+                if (!geo) continue;
+                out.push({
+                    name: terr.name, x: geo.markerX, y: geo.markerY,
+                    r: Math.max(4, Math.min(9, 3 + Math.sqrt(terr.unitCount) * 1.9)),
+                    count: terr.unitCount,
+                    cls: 'unit-badge ' + ownerClass(terr.owner)
+                });
+            }
+            return out;
+        },
+
+        /**
+         * Connectors for adjacencies with no shared border. Only drawn for the
+         * selected territory, otherwise they are visual noise across the map.
+         */
+        visibleLinks() {
+            if (!this.selectedTerritory) return [];
+            const out = [];
+            for (const link of MAP.links) {
+                const other = link.a === this.selectedTerritory ? link.b
+                            : link.b === this.selectedTerritory ? link.a : null;
+                if (!other) continue;
+                const from = MAP.byName[this.selectedTerritory];
+                const to = MAP.byName[other];
+                if (!from || !to) continue;
+                out.push({
+                    key: link.a + '|' + link.b,
+                    x1: from.labelX, y1: from.labelY, x2: to.labelX, y2: to.labelY
+                });
+            }
+            return out;
         },
 
         filteredTerritories() {
@@ -140,11 +281,10 @@ const app = createApp({
                 this.gameState = result.game;
                 this.gameStarted = true;
 
-                // Wait for Vue to render the game screen before initializing map
+                // Geometry before anything renders, so the map appears complete
+                // rather than filling in.
+                await this.loadLayout();
                 await this.$nextTick();
-
-                // Initialize map overlay (ensure circles are created)
-                this.initializeMapOverlay();
 
                 // Load initial data
                 await this.loadTerritories();
@@ -168,7 +308,6 @@ const app = createApp({
         async loadTerritories() {
             try {
                 this.territories = await this.api.getTerritories();
-                this.updateMapOverlay();
             } catch (error) {
                 console.error('Failed to load territories:', error);
             }
@@ -212,9 +351,6 @@ const app = createApp({
                     await this.loadTerritoryDetails(this.selectedTerritory);
                 }
 
-                // Update map overlay
-                this.updateMapOverlay();
-
             } catch (error) {
                 console.error('Failed to update game state:', error);
             }
@@ -226,7 +362,6 @@ const app = createApp({
         async selectTerritory(territoryName) {
             this.selectedTerritory = territoryName;
             await this.loadTerritoryDetails(territoryName);
-            this.updateMapOverlay();
         },
 
         /**
@@ -440,100 +575,143 @@ const app = createApp({
             }
         },
 
-        /**
-         * Initialize the interactive map overlay
-         */
-        initializeMapOverlay() {
-            const overlay = document.getElementById('mapOverlay');
-            if (!overlay) {
-                console.error('Map overlay element not found');
-                return;
+        // --- Map -----------------------------------------------------------
+        //
+        // There is no "build the overlay" step and no "sync the overlay" step.
+        // Territories are rendered by v-for from the frozen geometry, and their
+        // classes are bound to game state, so ownership, unit counts and
+        // selection follow automatically. The two functions that used to create
+        // and then re-synchronise DOM circles are gone: keeping a second set of
+        // shapes in agreement with the first was the original bug.
+
+        async loadLayout() {
+            try {
+                const layout = await this.api.getLayout();
+                ingestLayout(layout);
+
+                const [, , w, h] = layout.viewBox;
+                this.mapSize = { w, h };
+                this.view = { x: 0, y: 0, w, h };
+                this.mapReady = true;
+            } catch (error) {
+                this.error = 'Could not load the map: ' + error.message;
+                console.error('Failed to load layout:', error);
             }
-            if (!window.TERRITORY_COORDS) {
-                console.error('TERRITORY_COORDS not loaded');
-                return;
-            }
-
-            console.log('Initializing map overlay...');
-
-            // Clear any existing elements
-            overlay.innerHTML = '';
-
-            // Create clickable regions for each territory
-            Object.entries(window.TERRITORY_COORDS).forEach(([territoryName, coords]) => {
-                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-                circle.setAttribute('cx', coords.x);
-                circle.setAttribute('cy', coords.y);
-                // Make circles 3x larger for better clickability (min 4.5, max 12)
-                circle.setAttribute('r', coords.radius * 3);
-                circle.setAttribute('data-territory', territoryName);
-                circle.classList.add('territory-region');
-
-                // Add click handler
-                circle.addEventListener('click', () => {
-                    this.selectTerritory(territoryName);
-                });
-
-                overlay.appendChild(circle);
-            });
-
-            console.log(`✓ Map overlay initialized with ${Object.keys(window.TERRITORY_COORDS).length} clickable territories`);
         },
 
-        /**
-         * Update map overlay to highlight territories based on game state
-         */
-        updateMapOverlay() {
-            if (!this.gameStarted) return;
+        territoryClass(shape) {
+            const terr = this.territories.find(t => t.name === shape.name);
+            const classes = ['terr', shape.isSea ? 'kind-sea' : 'kind-land'];
 
-            const overlay = document.getElementById('mapOverlay');
-            if (!overlay) return;
+            if (this.selectedTerritory === shape.name) classes.push('selected');
+            if (this.hoveredTerritory === shape.name) classes.push('hovered');
+            if (!terr) return classes;
 
-            // Update each territory region's visual state
-            const circles = overlay.querySelectorAll('circle[data-territory]');
-            circles.forEach(circle => {
-                const territoryName = circle.getAttribute('data-territory');
-                const territory = this.territories.find(t => t.name === territoryName);
+            classes.push(ownerClass(terr.owner));
+            if (terr.unitCount > 0) classes.push('has-units');
+            if (terr.owner === this.gameState.humanPlayer) {
+                classes.push('friendly');
+            } else if (terr.owner === 'Neutral') {
+                classes.push('neutral');
+            } else {
+                classes.push('enemy');
+            }
+            return classes;
+        },
 
-                // Remove all state classes
-                circle.classList.remove('selected', 'friendly', 'enemy', 'neutral', 'has-units',
-                    'owner-germany', 'owner-ussr', 'owner-uk', 'owner-japan', 'owner-usa', 'owner-italy');
+        territoryAria(name) {
+            const terr = this.territories.find(t => t.name === name);
+            if (!terr) return name;
+            const units = terr.unitCount === 1 ? '1 unit' : `${terr.unitCount} units`;
+            return `${name}, held by ${terr.owner}, ${units}`;
+        },
 
-                // Add selected class
-                if (this.selectedTerritory === territoryName) {
-                    circle.classList.add('selected');
-                }
+        clampView(view) {
+            const maxW = this.mapSize.w;
+            const minW = maxW / 8;
+            view.w = Math.max(minW, Math.min(maxW, view.w));
+            view.h = view.w * (this.mapSize.h / this.mapSize.w);
+            view.x = Math.max(0, Math.min(this.mapSize.w - view.w, view.x));
+            view.y = Math.max(0, Math.min(this.mapSize.h - view.h, view.y));
+            return view;
+        },
 
-                if (territory) {
-                    // Add ownership indicator with player-specific color
-                    const ownerClass = 'owner-' + territory.owner.toLowerCase().replace(/\s+/g, '-');
-                    circle.classList.add(ownerClass);
-
-                    // Add unit presence indicator
-                    if (territory.unitCount > 0) {
-                        circle.classList.add('has-units');
-                        circle.setAttribute('data-unit-count', territory.unitCount);
-                    } else {
-                        circle.removeAttribute('data-unit-count');
-                    }
-
-                    // Add relationship classes for visibility
-                    if (territory.owner === this.gameState.humanPlayer) {
-                        circle.classList.add('friendly');
-                    } else if (territory.owner === 'Neutral') {
-                        circle.classList.add('neutral');
-                    } else {
-                        circle.classList.add('enemy');
-                    }
-                }
+        zoomBy(factor, originX, originY) {
+            const v = this.view;
+            const cx = originX !== undefined ? originX : v.x + v.w / 2;
+            const cy = originY !== undefined ? originY : v.y + v.h / 2;
+            const w = v.w / factor;
+            const h = w * (this.mapSize.h / this.mapSize.w);
+            // Keep the point under the cursor fixed while scaling around it.
+            this.view = this.clampView({
+                x: cx - (cx - v.x) * (w / v.w),
+                y: cy - (cy - v.y) * (h / v.h),
+                w, h
             });
-        }
+        },
+
+        resetView() {
+            this.view = { x: 0, y: 0, w: this.mapSize.w, h: this.mapSize.h };
+        },
+
+        zoomToSelected() {
+            const geo = MAP.byName[this.selectedTerritory];
+            if (!geo) return;
+            const w = this.mapSize.w / 4;
+            const h = w * (this.mapSize.h / this.mapSize.w);
+            this.view = this.clampView({ x: geo.labelX - w / 2, y: geo.labelY - h / 2, w, h });
+        },
+
+        /** Convert a pointer event to a position in map coordinates. */
+        eventToMap(event) {
+            const svg = document.getElementById('gameMap');
+            if (!svg) return null;
+            const rect = svg.getBoundingClientRect();
+            const scale = this.view.w / rect.width;
+            return {
+                x: this.view.x + (event.clientX - rect.left) * scale,
+                y: this.view.y + (event.clientY - rect.top) * scale
+            };
+        },
+
+        onWheel(event) {
+            const at = this.eventToMap(event);
+            this.zoomBy(event.deltaY < 0 ? 1.18 : 1 / 1.18, at && at.x, at && at.y);
+        },
+
+        onPanStart(event) {
+            const start = this.eventToMap(event);
+            if (!start) return;
+            const origin = { x: this.view.x, y: this.view.y };
+            let moved = false;
+
+            const onMove = (moveEvent) => {
+                const rect = document.getElementById('gameMap').getBoundingClientRect();
+                const scale = this.view.w / rect.width;
+                const dx = (moveEvent.clientX - event.clientX) * scale;
+                const dy = (moveEvent.clientY - event.clientY) * scale;
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved = true;
+                this.view = this.clampView({
+                    x: origin.x - dx, y: origin.y - dy,
+                    w: this.view.w, h: this.view.h
+                });
+            };
+            const onUp = () => {
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                // A drag must not also register as a click on the territory
+                // underneath, or panning would keep changing the selection.
+                if (moved) {
+                    const swallow = (e) => e.stopPropagation();
+                    window.addEventListener('click', swallow, { capture: true, once: true });
+                }
+            };
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
+        },
     },
 
     mounted() {
-        // Initialize map overlay
-        this.initializeMapOverlay();
-
         // Cleanup on page unload
         window.addEventListener('beforeunload', () => {
             this.stopPolling();

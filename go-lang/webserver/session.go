@@ -1,19 +1,30 @@
 package webserver
 
 import (
-	"boardgame/game"
 	"fmt"
 	"sync"
 	"time"
+
+	"boardgame/engine"
+	"boardgame/game"
+	"boardgame/layout"
 
 	"github.com/google/uuid"
 )
 
 // GameSession represents an active game session
 type GameSession struct {
-	ID             string
-	Controller     *game.GameController
-	HumanPlayer    string
+	ID          string
+	Controller  *game.GameController
+	HumanPlayer string
+
+	// Map geometry for this session's board, validated against it at creation.
+	// LayoutRaw is the file as read, so it can be served without re-marshalling.
+	Layout    *layout.Layout
+	LayoutRaw []byte
+
+	driver *engine.Driver
+
 	CreatedAt      time.Time
 	LastAccessedAt time.Time
 	mutex          sync.RWMutex
@@ -38,6 +49,26 @@ func (gs *GameSession) Touch() {
 	gs.LastAccessedAt = time.Now()
 }
 
+// Lock serialises a request against a session.
+//
+// Every handler reaches through the session into one shared *game.GameController
+// and mutates it. The mutex previously guarded only the timestamp, so two
+// concurrent requests on the same game raced the entire object graph -- and a
+// game is exactly the sort of thing a browser hits twice at once, since the
+// client polls state on a timer while the player is clicking.
+//
+// One lock at the dispatch point rather than thirty inside the handlers: a
+// request either owns the game or waits for it.
+func (gs *GameSession) Lock()   { gs.mutex.Lock() }
+func (gs *GameSession) Unlock() { gs.mutex.Unlock() }
+
+// isHumanTurnLocked answers without taking the mutex, for callers that already
+// hold it. A sync.RWMutex is not reentrant, so a handler running under Lock
+// cannot call the exported IsHumanTurn.
+func (gs *GameSession) isHumanTurnLocked() bool {
+	return gs.Controller.Game.CurrentPower == gs.HumanPlayer
+}
+
 // IsExpired checks if the session has expired (24 hours of inactivity)
 func (gs *GameSession) IsExpired() bool {
 	gs.mutex.RLock()
@@ -49,7 +80,7 @@ func (gs *GameSession) IsExpired() bool {
 func (gs *GameSession) IsHumanTurn() bool {
 	gs.mutex.RLock()
 	defer gs.mutex.RUnlock()
-	return gs.Controller.Game.CurrentPower == gs.HumanPlayer
+	return gs.isHumanTurnLocked()
 }
 
 // SessionManager manages all active game sessions
@@ -138,4 +169,16 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 		}
 		sm.mutex.Unlock()
 	}
+}
+
+
+// Driver returns this session's turn driver, building it on first use.
+//
+// Handlers go through the driver rather than poking the controller directly, so
+// the rules for ending a phase exist in exactly one place.
+func (gs *GameSession) Driver() *engine.Driver {
+	if gs.driver == nil {
+		gs.driver = engine.New(gs.Controller)
+	}
+	return gs.driver
 }

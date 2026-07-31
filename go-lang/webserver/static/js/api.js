@@ -65,6 +65,23 @@ class GameAPI {
     }
 
     /**
+     * Get the map geometry for this game's board.
+     *
+     * Served by the API rather than fetched as a static file: the board is
+     * chosen at runtime, and the server has already checked that this layout
+     * describes that board. Fetched once per game, never polled.
+     */
+    async getLayout() {
+        this._ensureSession();
+        const response = await fetch(`${API_BASE}/game/${this.sessionId}/layout`);
+
+        if (!response.ok) {
+            throw new Error('Failed to get map layout');
+        }
+        return await response.json();
+    }
+
+    /**
      * Get detailed information about a specific territory
      */
     async getTerritoryDetails(territoryName) {

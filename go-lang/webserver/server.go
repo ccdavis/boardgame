@@ -124,12 +124,23 @@ func (s *Server) handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Load the map geometry that pairs with this board and check it describes
+	// the same territories. Failing here, loudly, is the point: a board rendered
+	// against another board's coordinates is exactly the bug this replaced.
+	mapLayout, layoutRaw, err := loadLayoutFor(req.GDFPath, gameModel)
+	if err != nil {
+		s.sendError(w, fmt.Sprintf("Map layout problem: %v", err), http.StatusBadRequest)
+		return
+	}
+
 	// Create session
 	session, err := s.sessionManager.CreateSession(controller, humanPlayer)
 	if err != nil {
 		s.sendError(w, fmt.Sprintf("Failed to create session: %v", err), http.StatusInternalServerError)
 		return
 	}
+	session.Layout = mapLayout
+	session.LayoutRaw = layoutRaw
 
 	// Return session info
 	response := map[string]interface{}{
@@ -160,6 +171,16 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Serialise everything that touches this game.
+	//
+	// Handlers reach through the session into one shared controller and mutate
+	// it; the client polls state on a timer while the player clicks, so
+	// concurrent requests on one game are the normal case, not an edge case.
+	// Locking once here rather than in thirty handlers means a request either
+	// owns the game or waits for it.
+	session.Lock()
+	defer session.Unlock()
+
 	// Route based on remaining path
 	if len(parts) == 1 {
 		// /api/game/:sessionId
@@ -176,6 +197,8 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 
 	// Route to sub-handlers
 	switch parts[1] {
+	case "layout":
+		s.handleLayout(w, r, session)
 	case "territories":
 		s.handleTerritories(w, r, session, parts[2:])
 	case "territory":
@@ -307,7 +330,7 @@ func (s *Server) handleAvailableActions(w http.ResponseWriter, r *http.Request, 
 
 	response := map[string]interface{}{
 		"phase":       g.CurrentPhase.String(),
-		"isHumanTurn": session.IsHumanTurn(),
+		"isHumanTurn": session.isHumanTurnLocked(),
 	}
 
 	// Add phase-specific actions
@@ -373,7 +396,7 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, session *G
 	}
 
 	// Check if it's the human player's turn
-	if !session.IsHumanTurn() {
+	if !session.isHumanTurnLocked() {
 		s.sendError(w, "Not your turn", http.StatusBadRequest)
 		return
 	}

@@ -1,11 +1,14 @@
 package webserver
 
 import (
-	"boardgame/game"
-	"boardgame/models"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+
+	"boardgame/engine"
+	"boardgame/game"
+	"boardgame/models"
 )
 
 // handlePurchaseAction handles POST /api/game/:sessionId/action/purchase
@@ -109,101 +112,91 @@ func (s *Server) handleCancelMoveAction(w http.ResponseWriter, r *http.Request, 
 
 // handleAdvancePhaseAction handles POST /api/game/:sessionId/action/advance-phase
 func (s *Server) handleAdvancePhaseAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
-	g := session.Controller.Game
-	previousPhase := g.CurrentPhase
-	player := session.Controller.Game.Players[session.HumanPlayer]
+	// All of the phase logic lives in engine.Driver now. This handler used to
+	// carry its own ~90-line copy, which had already drifted from the terminal's
+	// -- and it evaluated every check against session.HumanPlayer rather than
+	// the power whose turn it actually is, so during an NPC phase the summary,
+	// the unspent-IPC warning, the mobilise gate and the income were all
+	// computed for the wrong player.
+	driver := session.Driver()
 
-	var summary string
-	var warnings []string
-	var battles []string
-
-	// Execute phase-specific actions and create summary
-	switch previousPhase {
-	case models.PurchasePhase:
-		purchased := g.PurchasedUnits[player.Name]
-		if len(purchased) > 0 {
-			summary = fmt.Sprintf("Purchased %d units for %d IPCs", len(purchased), countPurchasedCost(purchased))
-		} else {
-			summary = "No units purchased"
-		}
-
-		// Check for unspent IPCs
-		if player.IPCs > 10 {
-			warnings = append(warnings, fmt.Sprintf("You have %d unspent IPCs", player.IPCs))
-		}
-
-	case models.CombatMovePhase:
-		moves := session.Controller.GetPlannedMoves()
-		summary = fmt.Sprintf("Executing %d combat moves", len(moves))
-
-		// Execute combat moves
-		err := session.Controller.ExecuteCombatMoves()
-		if err != nil {
-			s.sendError(w, fmt.Sprintf("Failed to execute combat moves: %v", err), http.StatusBadRequest)
-			return
-		}
-
-		// Get list of battles
-		for territory := range session.Controller.PendingBattles {
-			battles = append(battles, territory)
-		}
-
-	case models.ConductCombatPhase:
-		if len(session.Controller.PendingBattles) > 0 {
-			s.sendError(w, fmt.Sprintf("Cannot advance: you still have %d unresolved battles", len(session.Controller.PendingBattles)), http.StatusBadRequest)
-			return
-		}
-		summary = "All battles resolved"
-
-	case models.NoncombatMovePhase:
-		moves := session.Controller.GetPlannedMoves()
-		summary = fmt.Sprintf("Executing %d noncombat moves", len(moves))
-
-		// Execute noncombat moves
-		err := session.Controller.ExecuteNoncombatMoves()
-		if err != nil {
-			s.sendError(w, fmt.Sprintf("Failed to execute noncombat moves: %v", err), http.StatusBadRequest)
-			return
-		}
-
-	case models.MobilizePhase:
-		purchased := g.PurchasedUnits[player.Name]
-		if len(purchased) > 0 {
-			s.sendError(w, fmt.Sprintf("Cannot advance: you still have %d units to place", len(purchased)), http.StatusBadRequest)
-			return
-		}
-		summary = "All units placed"
-
-	case models.CollectIncomePhase:
-		income, _ := session.Controller.CalculateIncome(player.Name)
-		err := session.Controller.CollectIncome()
-		if err != nil {
-			s.sendError(w, fmt.Sprintf("Failed to collect income: %v", err), http.StatusInternalServerError)
-			return
-		}
-		summary = fmt.Sprintf("Collected %d IPCs", income)
-	}
-
-	// Advance to next phase
-	err := session.Controller.AdvancePhase()
+	result, err := driver.AdvancePhase()
 	if err != nil {
-		s.sendError(w, fmt.Sprintf("Failed to advance phase: %v", err), http.StatusInternalServerError)
+		var blockers engine.Blockers
+		if errors.As(err, &blockers) {
+			// Not a failure: the phase is simply not finished.
+			s.sendJSON(w, map[string]interface{}{
+				"blocked":  true,
+				"blockers": blockersToDTO(blockers),
+				"summary":  blockers.Error(),
+			}, http.StatusConflict)
+			return
+		}
+		s.sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if result == nil {
+		s.sendJSON(w, map[string]interface{}{
+			"advanced": false,
+			"summary":  "Phase advance declined",
+		}, http.StatusOK)
 		return
 	}
 
 	response := map[string]interface{}{
-		"success":       true,
-		"previousPhase": previousPhase.String(),
-		"currentPhase":  g.CurrentPhase.String(),
-		"summary":       summary,
-		"warnings":      warnings,
+		"advanced":        true,
+		"summary":         phaseSummary(result),
+		"power":           result.Power,
+		"previousPhase":   result.From.String(),
+		"newPhase":        result.To.String(),
+		"newCurrentPower": result.NewPower,
+		"turn":            result.NewTurn,
+		"turnAdvanced":    result.TurnAdvanced,
+		"warnings":        driver.Warnings(),
 	}
-
-	if len(battles) > 0 {
-		response["battles"] = battles
+	if len(result.BattlesCreated) > 0 {
+		response["battles"] = result.BattlesCreated
+	}
+	if result.IncomeCollected > 0 {
+		response["incomeCollected"] = result.IncomeCollected
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
+}
+
+func blockersToDTO(blockers engine.Blockers) []map[string]string {
+	out := make([]map[string]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		out = append(out, map[string]string{"code": blocker.Code, "detail": blocker.Detail})
+	}
+	return out
+}
+
+func phaseSummary(result *engine.PhaseResult) string {
+	switch result.From {
+	case models.PurchasePhase:
+		if len(result.UnitsPurchased) == 0 {
+			return "No units purchased"
+		}
+		total, cost := 0, 0
+		for _, unit := range result.UnitsPurchased {
+			total += unit.Quantity
+			cost += unit.Cost
+		}
+		return fmt.Sprintf("Purchased %d units for %d IPCs", total, cost)
+	case models.CombatMovePhase:
+		if len(result.BattlesCreated) == 0 {
+			return fmt.Sprintf("Executed %d moves; no battles", result.MovesExecuted)
+		}
+		return fmt.Sprintf("Executed %d moves; %d battle(s) created",
+			result.MovesExecuted, len(result.BattlesCreated))
+	case models.NoncombatMovePhase:
+		return fmt.Sprintf("Executed %d moves", result.MovesExecuted)
+	case models.CollectIncomePhase:
+		return fmt.Sprintf("Collected %d IPCs", result.IncomeCollected)
+	default:
+		return fmt.Sprintf("%s complete", result.From)
+	}
 }
 
 // handleMobilizeAction handles POST /api/game/:sessionId/action/mobilize
@@ -373,11 +366,10 @@ func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 
-	// Create NPC AI player
-	npc := game.NewNPCAIPlayer(currentPlayer.Name, "normal")
-
-	// Execute the turn (without transcript for web version)
-	err := npc.TakeTurn(session.Controller, nil)
+	// Run through the driver, which always supplies a transcript. Calling
+	// TakeTurn with a nil transcript here was a guaranteed panic: the AI logs
+	// its first phase before doing anything else.
+	err := session.Driver().RunNPCTurn(currentPlayer.Name, nil)
 	if err != nil {
 		s.sendError(w, fmt.Sprintf("NPC turn failed: %v", err), http.StatusInternalServerError)
 		return
