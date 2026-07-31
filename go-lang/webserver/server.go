@@ -315,8 +315,14 @@ func (s *Server) handleTerritory(w http.ResponseWriter, r *http.Request, session
 			}
 			connDTO.CanMoveTo = true
 		} else if currentPhase == models.NoncombatMovePhase {
-			// Can only move to friendly territories in noncombat
-			if conn.Owner.Name == player.Name || conn.Owner.Name == "Neutral" {
+			// Friendly ground, open water, or a neutral this side may
+			// peacefully activate. The old check said any "Neutral"-owned
+			// territory was enterable, which invited the player into strict
+			// neutrals the server would then refuse.
+			switch {
+			case conn.Owner.Name == player.Name || conn.Terrain == models.Water:
+				connDTO.CanMoveTo = true
+			case game.CanActivateNeutral(conn, player):
 				connDTO.CanMoveTo = true
 			}
 		}

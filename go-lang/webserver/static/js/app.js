@@ -586,8 +586,11 @@ const app = createApp({
          * Start polling for game state updates
          */
         startPolling() {
-            // Poll every 2 seconds to check for state changes
+            // Poll every 2 seconds to check for state changes. A hidden tab
+            // skips the fetch entirely -- nothing on screen can change, and
+            // the server holds the session lock for every request it gets.
             this.pollingInterval = setInterval(() => {
+                if (document.hidden) return;
                 this.updateGameState();
             }, 2000);
         },

@@ -395,7 +395,7 @@ func canTraverseTerritory(game *models.Game, piece *models.Piece, territory, des
 		}
 
 		// 3. Pro-Allied or pro-Axis neutrals we can activate
-		if canActivateNeutral(territory, currentPlayer) {
+		if CanActivateNeutral(territory, currentPlayer) {
 			return true
 		}
 
@@ -495,9 +495,10 @@ func canAttackNeutral(territory *models.Territory, attacker *models.Player) bool
 	return false
 }
 
-// canActivateNeutral checks if a player can peacefully activate a neutral territory
-// during noncombat move phase
-func canActivateNeutral(territory *models.Territory, activator *models.Player) bool {
+// CanActivateNeutral checks if a player can peacefully activate a neutral
+// territory during noncombat move phase. Exported so the web layer can tell
+// the client which neighbours are genuinely enterable, instead of guessing.
+func CanActivateNeutral(territory *models.Territory, activator *models.Player) bool {
 	// Not a neutral territory
 	if territory.Owner.Name != "Neutral" {
 		return false

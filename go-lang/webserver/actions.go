@@ -317,32 +317,44 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get reachable territories
+	// Candidate territories in range by terrain alone, then checked against
+	// the real movement rules. The old response used the terrain-only sweep
+	// and reported every distance as 1, so the UI highlighted moves the
+	// server would then refuse -- blocked paths, hostile waypoints, aircraft
+	// with nowhere to land.
 	reachable, err := game.GetReachableTerritories(session.Controller.Game, req.PieceID, req.FromTerritory)
 	if err != nil {
 		s.sendError(w, fmt.Sprintf("Failed to get reachable territories: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Convert to DTOs
 	player := session.Controller.Game.Players[session.HumanPlayer]
 	currentPhase := session.Controller.Game.CurrentPhase
+	moveType := game.NoncombatMove
+	if currentPhase == models.CombatMovePhase {
+		moveType = game.CombatMove
+	}
 
-	reachableDTOs := make([]ReachableTerritoryDTO, len(reachable))
-	for i, territory := range reachable {
+	reachableDTOs := make([]ReachableTerritoryDTO, 0, len(reachable))
+	for _, territory := range reachable {
+		distance, _, err := game.CalculateMovementPathForPiece(
+			session.Controller.Game, piece, req.FromTerritory, territory.Name, player, moveType)
+		if err != nil || distance > int(piece.Movement) {
+			continue // not actually reachable under the movement rules
+		}
+
 		isAttack := false
 		if currentPhase == models.CombatMovePhase && territory.Owner.Name != player.Name {
 			isAttack = len(territory.Pieces) > 0
 		}
 
-		// Calculate distance (simplified - could use pathfinding for exact distance)
-		reachableDTOs[i] = ReachableTerritoryDTO{
+		reachableDTOs = append(reachableDTOs, ReachableTerritoryDTO{
 			Name:      territory.Name,
-			Distance:  1, // Simplified
+			Distance:  distance,
 			Owner:     territory.Owner.Name,
 			IsAttack:  isAttack,
 			UnitCount: len(territory.Pieces),
-		}
+		})
 	}
 
 	response := map[string]interface{}{

@@ -66,7 +66,6 @@ go test -run "TestNPC" ./game -v    # NPC AI tests
   - `controller.go`: Turn sequence management, phase advancement
   - `combat.go`: Battle resolution with dice rolling, casualties, retreat logic
   - `movement.go`: Movement validation, path finding, transport loading/unloading
-  - `carrier.go`: Carrier operations (fighter landing requirements)
   - `blitz.go`: Tank blitzing through unoccupied territories
   - `npc_ai.go`: NPC AI decision-making with strategic victory city focus
   - `game_runner.go`: Orchestrates complete games to victory
@@ -100,7 +99,9 @@ Located in `game/combat.go`:
 - Submarines: First strike, can submerge, ignored by aircraft
 - Destroyers: Cancel submarine abilities
 - Anti-aircraft artillery: One pre-combat roll per attacking aircraft
-- Artillery support: Infantry attack at 2 when paired with artillery
+- Artillery support: Infantry attack at 2 when paired with artillery (the
+  mechanic is implemented and tested, but `aaa.gdf` declares no artillery
+  unit, so it is inert on the real board)
 - Strategic bombing: Target industrial complexes to cause damage
 
 ### Movement Rules
@@ -110,8 +111,10 @@ Located in `game/movement.go`:
 - Path finding for multi-space moves
 - Blitzing: Tanks can move through friendly unoccupied territories
 - Amphibious assault: Land units load on transports, move, then attack coastal territory
-- Air unit landing: Fighters must land in friendly territory or on carrier within movement range
-- Carrier requirements: Fighters must have valid landing spot (carrier movement considered)
+- Air units overfly enemy territory and units freely; what limits them is range
+- Air unit landing: a noncombat air move must end in friendly territory or on a
+  friendly carrier with room (checked per carrier slot at planning time; two
+  aircraft planned onto the same last slot in one phase are not yet caught)
 
 ### Neutral Territory Rules
 
@@ -138,9 +141,12 @@ Located in `game/npc_ai.go`:
 
 - **Submarines** (`game/submarine_test.go`): First strike, can submerge, ignored by aircraft
 - **Destroyers** (`game/combat.go`): Cancel submarine special abilities
-- **Carriers** (`game/carrier.go`): Carry up to 2 fighters, fighters must have valid landing
+- **Carriers** (`game/movement.go`): Carry up to 2 fighters; a fighter may only
+  end a noncombat move on friendly ground or a friendly carrier with room
 - **Transports** (`game/transport_test.go`): Carry infantry/artillery, enable amphibious assaults
-- **Battleships** (`game/battleship_test.go`): 2 hits to destroy, powerful shore bombardment
+- **Battleships** (`game/battleship_test.go`): 2 hits to destroy. Shore
+  bombardment code exists (`RollBombardment`) but the amphibious landing flow
+  does not yet call it
 - **Artillery** (`game/artillery_test.go`): Boost infantry attack from 1 to 2
 - **Anti-Aircraft Artillery** (`game/combat.go`): Pre-combat roll against aircraft
 - **Bombers** (`game/bombing_test.go`): Strategic bombing raids on industrial complexes
