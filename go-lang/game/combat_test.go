@@ -274,9 +274,10 @@ func TestCombatRound(t *testing.T) {
 		t.Error("Hit results should not be nil")
 	}
 
-	// Surprise casualties should be empty for land battle
-	if len(surpriseCas) != 0 {
-		t.Error("Land battle should not have surprise casualties")
+	// Surprise casualties should be empty for land battle, on both sides.
+	if len(surpriseCas.Attacker) != 0 || len(surpriseCas.Defender) != 0 {
+		t.Errorf("land battle should have no surprise casualties, got %d attacker and %d defender",
+			len(surpriseCas.Attacker), len(surpriseCas.Defender))
 	}
 }
 

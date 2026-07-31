@@ -7,6 +7,18 @@ import (
 )
 
 // Helper function to create a test game
+// giveProductionCentre puts a factory in a territory.
+//
+// New units are built at an industrial complex, so a test that mobilises needs
+// one. It is not in createTestGame because placing pieces there would shift
+// every piece ID and piece count that the movement and combat tests depend on.
+func giveProductionCentre(t *testing.T, g *models.Game, territory string) {
+	t.Helper()
+	if err := g.PlacePieces(territory, "factory", 1); err != nil {
+		t.Fatalf("placing factory in %s: %v", territory, err)
+	}
+}
+
 func createTestGame() *models.Game {
 	game := models.NewGame()
 
@@ -35,6 +47,7 @@ func createTestGame() *models.Game {
 	game.AddPieceTemplate("infantry", models.Land, 1, 1, 2, 3)
 	game.AddPieceTemplate("armor", models.Land, 2, 3, 3, 5)
 	game.AddPieceTemplate("fighter", models.Air, 4, 3, 4, 10)
+	game.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
 
 	return game
 }
@@ -300,6 +313,9 @@ func TestMobilizeUnit(t *testing.T) {
 
 	// Purchase a unit first
 	controller.PurchaseUnit("infantry", 1)
+
+	// Units are built at an industrial complex.
+	giveProductionCentre(t, game, "Moscow")
 
 	// Advance to Mobilize phase
 	game.CurrentPhase = models.MobilizePhase

@@ -100,6 +100,8 @@ func TestFullTurnCycle(t *testing.T) {
 
 	// Phase 5: Mobilize
 	t.Run("MobilizePhase", func(t *testing.T) {
+		// Units are built at an industrial complex.
+		giveProductionCentre(t, game, "Moscow")
 		initialPieceCount := len(game.Pieces)
 
 		// Place the purchased units in Moscow
@@ -258,6 +260,9 @@ func TestPurchaseAndMobilizeIntegration(t *testing.T) {
 	}
 
 	t.Run("MobilizeDifferentUnits", func(t *testing.T) {
+		// Units are built at an industrial complex.
+		giveProductionCentre(t, game, "Moscow")
+
 		// Place infantry
 		err := controller.MobilizeUnit("Moscow", "infantry")
 		if err != nil {

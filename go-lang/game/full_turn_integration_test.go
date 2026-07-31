@@ -536,6 +536,11 @@ func setupRealisticGameState() *models.Game {
 	// Create territories
 	game.AddTerritory("Germany", models.Land, "Germany", 10)
 	game.Board["Germany"].IsVictoryCity = true
+	// Germany is where this test mobilises, and units are built at an
+	// industrial complex.
+	if err := game.PlacePieces("Germany", "industrial_complex", 1); err != nil {
+		panic(err)
+	}
 
 	game.AddTerritory("Poland", models.Land, "USSR", 2)
 

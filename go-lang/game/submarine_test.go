@@ -28,15 +28,18 @@ func TestSubmarineSurpriseStrikeWithoutDestroyer(t *testing.T) {
 		t.Log("Submarine rolled but didn't hit (acceptable due to dice)")
 	}
 
-	// If submarine hit, cruiser should be in surprise casualties and not fire back
-	if len(surpriseCas) > 0 {
-		if len(defenderHits) > 0 {
-			t.Error("Cruiser fired despite being surprise strike casualty")
-		}
+	// An attacking submarine kills DEFENDING units, so any surprise loss must be
+	// recorded against the defender. Previously both sides were credited with
+	// every surprise casualty, so this could not be checked at all.
+	if len(surpriseCas.Attacker) != 0 {
+		t.Errorf("attacking submarine cost the attacker %d units", len(surpriseCas.Attacker))
+	}
+	if len(surpriseCas.Defender) > 0 && len(defenderHits) > 0 {
+		t.Error("Cruiser fired despite being surprise strike casualty")
 	}
 
-	t.Logf("Attacker hits: %d, Defender hits: %d, Surprise casualties: %d",
-		len(attackerHits), len(defenderHits), len(surpriseCas))
+	t.Logf("Attacker hits: %d, Defender hits: %d, defender surprise losses: %d",
+		len(attackerHits), len(defenderHits), len(surpriseCas.Defender))
 }
 
 // Test that submarines do NOT get surprise strike when enemy destroyer present
@@ -57,8 +60,8 @@ func TestSubmarineNoSurpriseStrikeWithDestroyer(t *testing.T) {
 	attackerHits, defenderHits, surpriseCas := dr.CombatRound(battle)
 
 	// There should be NO surprise casualties because destroyer cancels it
-	if len(surpriseCas) != 0 {
-		t.Errorf("Expected 0 surprise casualties with destroyer present, got %d", len(surpriseCas))
+	if n := len(surpriseCas.Attacker) + len(surpriseCas.Defender); n != 0 {
+		t.Errorf("Expected 0 surprise casualties with destroyer present, got %d", n)
 	}
 
 	// Both units should have chance to fire in regular combat
@@ -83,12 +86,14 @@ func TestDefendingSubmarineSurpriseStrike(t *testing.T) {
 	// Execute one round
 	attackerHits, defenderHits, surpriseCas := dr.CombatRound(battle)
 
-	// Defending submarine should have chance for surprise strike
-	// If it hits, cruiser should be removed before it fires
-	if len(defenderHits) > 0 && len(surpriseCas) > 0 {
-		// Verify cruiser was a surprise casualty
+	// A defending submarine kills ATTACKING units, so the loss belongs to the
+	// attacker's column.
+	if len(surpriseCas.Defender) != 0 {
+		t.Errorf("defending submarine cost the defender %d units", len(surpriseCas.Defender))
+	}
+	if len(defenderHits) > 0 && len(surpriseCas.Attacker) > 0 {
 		cruiserKilled := false
-		for _, cas := range surpriseCas {
+		for _, cas := range surpriseCas.Attacker {
 			if cas.Name == "cruiser" {
 				cruiserKilled = true
 			}
@@ -98,8 +103,8 @@ func TestDefendingSubmarineSurpriseStrike(t *testing.T) {
 		}
 	}
 
-	t.Logf("Attacker hits: %d, Defender hits: %d, Surprise casualties: %d",
-		len(attackerHits), len(defenderHits), len(surpriseCas))
+	t.Logf("Attacker hits: %d, Defender hits: %d, attacker surprise losses: %d",
+		len(attackerHits), len(defenderHits), len(surpriseCas.Attacker))
 }
 
 // Test both sides have submarines without destroyers
@@ -119,10 +124,12 @@ func TestMutualSubmarineSurpriseStrikes(t *testing.T) {
 	// Execute one round
 	attackerHits, defenderHits, surpriseCas := dr.CombatRound(battle)
 
-	// Both submarines should fire in surprise strike phase
-	// Both should have chance to hit
-	t.Logf("Mutual sub battle - Attacker hits: %d, Defender hits: %d, Surprise casualties: %d",
-		len(attackerHits), len(defenderHits), len(surpriseCas))
+	// Both submarines fire in the surprise strike phase, and each side's losses
+	// are attributed separately.
+	t.Logf("Mutual sub battle - attacker hits: %d, defender hits: %d, "+
+		"attacker losses: %d, defender losses: %d",
+		len(attackerHits), len(defenderHits),
+		len(surpriseCas.Attacker), len(surpriseCas.Defender))
 
 	// This is valid - both subs fire simultaneously in surprise strike
 }
@@ -149,8 +156,8 @@ func TestMixedFleetWithDestroyerCancelsSurprise(t *testing.T) {
 	_, _, surpriseCas := dr.CombatRound(battle)
 
 	// Destroyer should prevent submarine surprise strike
-	if len(surpriseCas) != 0 {
-		t.Errorf("Expected no surprise casualties when destroyer present, got %d", len(surpriseCas))
+	if n := len(surpriseCas.Attacker) + len(surpriseCas.Defender); n != 0 {
+		t.Errorf("Expected no surprise casualties when destroyer present, got %d", n)
 	}
 }
 

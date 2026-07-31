@@ -15,18 +15,30 @@ const (
 
 // Move represents a planned unit movement
 type Move struct {
-	PieceID     int
-	From        string
-	To          string
-	Type        MoveType
-	Path        []string // For multi-step moves
+	PieceID      int
+	From         string
+	To           string
+	Type         MoveType
+	Path         []string // For multi-step moves
 	DistanceCost int
+
+	// Blitzed lists enemy territories this move takes by driving through them.
+	Blitzed []string
 }
 
 // MovementTracker tracks all moves planned during a turn
 type MovementTracker struct {
 	Moves           []*Move
 	PiecesMovedFrom map[int]string // PieceID -> original territory
+
+	// MovementSpent is how far each piece has already travelled this turn.
+	//
+	// The tracker used to record only *whether* a piece had moved, and that flag
+	// was wiped when the combat-move phase ended. Two consequences, both wrong:
+	// a unit that spent its whole allowance attacking got the full allowance
+	// again in the noncombat phase, and a unit with two movement points could
+	// not make two one-space moves within a single phase.
+	MovementSpent map[int]int
 }
 
 // NewMovementTracker creates a new movement tracker
@@ -34,7 +46,38 @@ func NewMovementTracker() *MovementTracker {
 	return &MovementTracker{
 		Moves:           make([]*Move, 0),
 		PiecesMovedFrom: make(map[int]string),
+		MovementSpent:   make(map[int]int),
 	}
+}
+
+// Remaining reports how much movement a piece has left this turn.
+func (mt *MovementTracker) Remaining(pieceID int, allowance int) int {
+	left := allowance - mt.MovementSpent[pieceID]
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
+// Spend records movement used.
+func (mt *MovementTracker) Spend(pieceID, distance int) {
+	mt.MovementSpent[pieceID] += distance
+}
+
+// ClearPlans drops planned moves but keeps what each piece has already spent.
+//
+// Used between the combat and noncombat phases of one turn: the plans have been
+// executed, but the movement they consumed still counts.
+func (mt *MovementTracker) ClearPlans() {
+	mt.Moves = make([]*Move, 0)
+	mt.PiecesMovedFrom = make(map[int]string)
+}
+
+// ResetTurn clears everything, including spent movement. Called when the turn
+// passes to another power.
+func (mt *MovementTracker) ResetTurn() {
+	mt.ClearPlans()
+	mt.MovementSpent = make(map[int]int)
 }
 
 // ValidateMovement checks if a move is legal
@@ -66,6 +109,17 @@ func ValidateMovement(game *models.Game, pieceID int, from, to string, moveType 
 	}
 	if !pieceInTerritory {
 		return fmt.Errorf("piece %d not in territory %s", pieceID, from)
+	}
+
+	// The piece must belong to whoever is moving. Without this a player could
+	// order enemy units around: nothing else in the validation chain looks at
+	// ownership, and the destination checks pass just as happily for someone
+	// else's army as for your own.
+	if current, err := game.GetCurrentPlayer(); err == nil && current != nil {
+		if piece.Owner != nil && piece.Owner != current && !areAllies(piece.Owner, current) {
+			return fmt.Errorf("%s in %s belongs to %s, not %s",
+				piece.Name, from, piece.Owner.Name, current.Name)
+		}
 	}
 
 	// Check terrain compatibility with destination
@@ -253,7 +307,12 @@ func CalculateMovementPathForPiece(game *models.Game, piece *models.Piece, from,
 				// Check if we can traverse this territory based on ownership and units
 				canTraverse := canTraverseTerritory(game, neighbor, toTerritory, currentPlayer, moveType)
 				if !canTraverse {
-					continue
+					// A tank may drive through an undefended enemy territory and
+					// keep going, taking it on the way.
+					if !(moveType == CombatMove && neighbor != toTerritory &&
+						canBlitzThrough(game, piece, neighbor, currentPlayer)) {
+						continue
+					}
 				}
 
 				visited[neighbor.Name] = true
@@ -313,30 +372,28 @@ func canTraverseTerritory(game *models.Game, territory, destination *models.Terr
 		return false
 	}
 
-	// For waypoint territories (not the destination):
-	// Can only traverse if it's friendly AND has no enemy units
-	// OR if it's a neutral water territory (which can be freely traversed)
-	if territory.Owner != currentPlayer {
-		// Allow traversing neutral water territories
-		if territory.Owner.Name == "Neutral" && territory.Terrain == models.Water {
-			return true
+	// Waypoints (everything short of the destination).
+	//
+	// Open water is passable regardless of who nominally holds it. Every sea
+	// zone in aaa.gdf carries an owner, which is a starting marker rather than
+	// territory; requiring ownership here meant no power could sail through a
+	// sea zone held by anyone else, including an ally, so most naval movement of
+	// more than one space was impossible.
+	//
+	// Land is passable if it is our own or an ally's. Either way, enemy units
+	// present block the path.
+	if territory.Terrain != models.Water {
+		if territory.Owner != currentPlayer && !areAllies(territory.Owner, currentPlayer) {
+			return false
 		}
-		return false
 	}
 
-	// Even if we own it, check if there are enemy units there
-	// (in case of a battle we haven't resolved yet)
-	pieces := game.GetPiecesInTerritory(territory.Name)
-	for _, piece := range pieces {
-		// Find the owner of this piece
-		for _, player := range game.Players {
-			if pieceOwner := findPieceOwner(game, piece, player); pieceOwner != nil {
-				if pieceOwner != currentPlayer {
-					return false // Enemy unit in our territory - can't traverse
-				}
-				break
-			}
+	for _, piece := range game.GetPiecesInTerritory(territory.Name) {
+		owner := piece.Owner
+		if owner == nil || owner == currentPlayer || areAllies(owner, currentPlayer) {
+			continue
 		}
+		return false // an enemy unit sits in the way
 	}
 
 	return true
@@ -393,22 +450,14 @@ func canActivateNeutral(territory *models.Territory, activator *models.Player) b
 	return false
 }
 
-// findPieceOwner finds which player owns a piece
-func findPieceOwner(game *models.Game, piece *models.Piece, player *models.Player) *models.Player {
-	// Check if the piece is in any of this player's territories
-	for _, territory := range player.Territories {
-		for _, pieceID := range territory.Pieces {
-			if game.Pieces[pieceID] == piece {
-				return player
-			}
-		}
-	}
-	return nil
-}
-
 // areAllies checks if two players are on the same side (Axis or Allies)
 func areAllies(player1, player2 *models.Player) bool {
-	// If either player doesn't have a side set, they're not allies
+	if player1 == nil || player2 == nil {
+		return false
+	}
+	// A power with no side has no allies. Before the board declared sides this
+	// was true of every power, so allied nations counted as hostile to each
+	// other and no one could move through a friendly territory.
 	if player1.Side == "" || player2.Side == "" {
 		return false
 	}
@@ -478,22 +527,30 @@ func GetReachableTerritories(game *models.Game, pieceID int, fromTerritory strin
 	return reachable, nil
 }
 
-// AddMove records a planned move
+// AddMove records a planned move whose cost is not known.
 func (mt *MovementTracker) AddMove(pieceID int, from, to string, moveType MoveType) error {
+	return mt.AddMoveWithCost(pieceID, from, to, moveType, 1)
+}
+
+// AddMoveWithCost records a planned move and how much movement it uses.
+func (mt *MovementTracker) AddMoveWithCost(pieceID int, from, to string, moveType MoveType, distance int, blitzed ...string) error {
 	// Check if piece has already moved
 	if originalFrom, hasMoved := mt.PiecesMovedFrom[pieceID]; hasMoved {
 		return fmt.Errorf("piece %d has already moved from %s", pieceID, originalFrom)
 	}
 
 	move := &Move{
-		PieceID: pieceID,
-		From:    from,
-		To:      to,
-		Type:    moveType,
+		PieceID:      pieceID,
+		From:         from,
+		To:           to,
+		Type:         moveType,
+		DistanceCost: distance,
+		Blitzed:      blitzed,
 	}
 
 	mt.Moves = append(mt.Moves, move)
 	mt.PiecesMovedFrom[pieceID] = from
+	mt.Spend(pieceID, distance)
 
 	return nil
 }
@@ -518,6 +575,13 @@ func (mt *MovementTracker) RemoveMove(pieceID int) error {
 
 	mt.Moves = newMoves
 	delete(mt.PiecesMovedFrom, pieceID)
+	// Cancelling a move gives its movement back.
+	for _, move := range mt.Moves {
+		if move.PieceID == pieceID {
+			return nil // still has another planned move; leave the spend alone
+		}
+	}
+	delete(mt.MovementSpent, pieceID)
 
 	return nil
 }
@@ -533,10 +597,9 @@ func (mt *MovementTracker) GetMovesByType(moveType MoveType) []*Move {
 	return moves
 }
 
-// Clear removes all tracked moves
+// Clear removes all tracked moves and resets spent movement.
 func (mt *MovementTracker) Clear() {
-	mt.Moves = make([]*Move, 0)
-	mt.PiecesMovedFrom = make(map[int]string)
+	mt.ResetTurn()
 }
 
 // ExecuteMoves applies all moves to the game state
