@@ -22,12 +22,22 @@ func giveProductionCentre(t *testing.T, g *models.Game, territory string) {
 func createTestGame() *models.Game {
 	game := models.NewGame()
 
-	// Add players in turn order (USSR → Germany → UK → Japan → USA)
+	// Add players in turn order (USSR → Germany → UK → Japan → USA), with the
+	// sides a parsed board would carry. The old fixture set no sides, and the
+	// victory tests only passed because victory counting hardcoded power names
+	// instead of reading Side -- the exact bug the fixture then couldn't catch.
+	sides := map[string]string{
+		"USSR": "Allies", "Germany": "Axis", "UK": "Allies",
+		"Japan": "Axis", "USA": "Allies",
+	}
 	game.PlayerOrder = []string{"USSR", "Germany", "UK", "Japan", "USA"}
 	for _, name := range game.PlayerOrder {
 		player := game.GetOrCreatePlayer(name)
 		player.IPCs = 50 // Start with some money
+		player.Side = sides[name]
+		player.TakesTurns = true
 	}
+	game.VictoryCitiesEnabled = true
 
 	// Add some territories
 	game.AddTerritory("Moscow", models.Land, "USSR", 8)
@@ -835,5 +845,51 @@ func TestResolveBattleCasualties(t *testing.T) {
 	if len(germanyPieces) != expectedInTerritory {
 		t.Errorf("Expected %d pieces in Germany, got %d",
 			expectedInTerritory, len(germanyPieces))
+	}
+}
+
+// A sixth power's victory cities must count for its side. The old counting
+// hardcoded five power names, so Italy could hold two victory cities and the
+// Axis got credit for neither -- while the transcript, using the side-based
+// count, reported different numbers than the win condition acted on.
+func TestVictoryCities_CountForAnySidedPower(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+
+	italy := game.GetOrCreatePlayer("Italy")
+	italy.Side = "Axis"
+	italy.TakesTurns = true
+	game.AddTerritory("Rome", models.Land, "Italy", 3)
+	game.Board["Rome"].IsVictoryCity = true
+
+	axis, allies := controller.GetVictoryCityCounts()
+	if axis != 3 { // Germany, Tokyo, Rome
+		t.Errorf("Axis cities = %d, want 3 (Italy's city must count)", axis)
+	}
+	if allies != 3 {
+		t.Errorf("Allied cities = %d, want 3", allies)
+	}
+}
+
+// The victory-city win condition is a play-time switch. The cities stay in the
+// data; disabling the switch means holding them no longer ends the game.
+func TestVictoryCities_ToggleDisablesWinCondition(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+
+	// Enough cities for an immediate Axis win.
+	for i := 0; i < 11; i++ {
+		name := fmt.Sprintf("AxisCity%d", i)
+		game.AddTerritory(name, models.Land, "Germany", 1)
+		game.Board[name].IsVictoryCity = true
+	}
+
+	if _, won, _ := controller.CheckVictoryCondition(); !won {
+		t.Fatal("sanity: with the switch on, 13 cities should win")
+	}
+
+	game.VictoryCitiesEnabled = false
+	if winner, won, _ := controller.CheckVictoryCondition(); won || winner != "" {
+		t.Errorf("switch off, but CheckVictoryCondition returned winner %q, won=%v", winner, won)
 	}
 }

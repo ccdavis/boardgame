@@ -371,8 +371,11 @@ func TestVictoryConditionIntegration(t *testing.T) {
 	game := models.NewGame()
 	game.PlayerOrder = []string{"Germany", "USSR"}
 
-	game.GetOrCreatePlayer("Germany")
-	game.GetOrCreatePlayer("USSR")
+	// Sides and the victory-city switch, as a parsed board would carry them.
+	// Victory is counted by Side, not by hardcoded power names.
+	game.GetOrCreatePlayer("Germany").Side = "Axis"
+	game.GetOrCreatePlayer("USSR").Side = "Allies"
+	game.VictoryCitiesEnabled = true
 
 	// Give Germany 13 victory cities for immediate victory
 	for i := 0; i < 13; i++ {

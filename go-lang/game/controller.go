@@ -168,31 +168,21 @@ func (gc *GameController) CollectIncome() error {
 	return nil
 }
 
-// CheckVictoryCondition checks if any side has won the game
-// Returns: winner ("Axis" or "Allies"), hasWon (bool), error
+// CheckVictoryCondition checks if any side has won the game.
+// Returns: winner ("Axis" or "Allies"), hasWon (bool), error.
+//
+// Cities are counted by the owner's Side, not by a list of power names. The
+// old hardcoded list -- Germany and Japan against USSR, UK and USA -- meant a
+// sixth power's victory cities counted for nobody: Italy could hold Rome and
+// Southern Europe and the Axis got no credit for either. Whether holding
+// cities ends the game at all is the board's VictoryCitiesEnabled switch, a
+// play-time toggle rather than a property of the rules.
 func (gc *GameController) CheckVictoryCondition() (string, bool, error) {
-	// Count victory cities by side
-	// According to Axis & Allies 1942 rules:
-	// Axis powers: Germany, Japan
-	// Allied powers: USSR, UK, USA
-
-	axisCities := 0
-	alliedCities := 0
-	totalCities := 0
-
-	for _, territory := range gc.Game.Board {
-		if territory.IsVictoryCity {
-			totalCities++
-			owner := territory.Owner.Name
-
-			switch owner {
-			case "Germany", "Japan":
-				axisCities++
-			case "USSR", "UK", "USA":
-				alliedCities++
-			}
-		}
+	if !gc.Game.VictoryCitiesEnabled {
+		return "", false, nil
 	}
+
+	axisCities, alliedCities := gc.Game.CountVictoryCities()
 
 	// Victory conditions (from rulebook):
 	// - Axis wins if they control 9 cities for a full round
@@ -220,21 +210,9 @@ func (gc *GameController) CheckVictoryCondition() (string, bool, error) {
 	return "", false, nil
 }
 
-// GetVictoryCityCounts returns the number of victory cities each side controls
+// GetVictoryCityCounts returns the number of victory cities each side controls.
 func (gc *GameController) GetVictoryCityCounts() (axis int, allies int) {
-	for _, territory := range gc.Game.Board {
-		if territory.IsVictoryCity {
-			owner := territory.Owner.Name
-
-			switch owner {
-			case "Germany", "Japan":
-				axis++
-			case "USSR", "UK", "USA":
-				allies++
-			}
-		}
-	}
-	return axis, allies
+	return gc.Game.CountVictoryCities()
 }
 
 // PurchaseUnit allows the current player to purchase a unit

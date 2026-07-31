@@ -77,6 +77,11 @@ func (s *Server) handleCreateGame(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GDFPath    string `json:"gdfPath"`
 		PlayerName string `json:"playerName"`
+
+		// VictoryCities toggles the victory-city win condition for this game.
+		// The cities are always in the board data; whether holding them ends
+		// the game is chosen at play time. Absent means "as the board says".
+		VictoryCities *bool `json:"victoryCities,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -95,6 +100,10 @@ func (s *Server) handleCreateGame(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.sendError(w, fmt.Sprintf("Failed to parse game: %v", err), http.StatusBadRequest)
 		return
+	}
+
+	if req.VictoryCities != nil {
+		gameModel.VictoryCitiesEnabled = *req.VictoryCities
 	}
 
 	// Create game controller
