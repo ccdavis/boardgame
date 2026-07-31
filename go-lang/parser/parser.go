@@ -169,6 +169,23 @@ func (p *Parser) Parse() (*models.Game, error) {
 		return nil, fmt.Errorf("board is not valid: %s", detail)
 	}
 
+	// The bank deals the starting treasuries: each playing power begins with
+	// cash in hand equal to its income, exactly as the printed rules set up
+	// the game. Without this, every power's first purchase phase was a no-op
+	// and the war economy started a full round late. A board that declares no
+	// Sides marks nobody as playing, so the deal falls back to everyone -- the
+	// same fallback the turn order uses.
+	sidesDeclared := len(p.game.TurnTakingPowers()) > 0
+	for _, name := range p.game.PlayerOrder {
+		player := p.game.Players[name]
+		if player == nil || (sidesDeclared && !player.TakesTurns) {
+			continue
+		}
+		for _, territory := range player.Territories {
+			player.IPCs += territory.Production
+		}
+	}
+
 	return p.game, nil
 }
 

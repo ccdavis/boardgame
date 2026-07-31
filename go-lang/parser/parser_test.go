@@ -128,6 +128,31 @@ Capitals
 	}
 }
 
+// The bank deals each playing power a starting treasury equal to its income,
+// as the printed rules do. A power outside the Sides section owns territory
+// without playing, and gets nothing.
+func TestParse_PowersStartWithIncomeInHand(t *testing.T) {
+	game := parse(t, minimal+`
+Sides
+  Axis: Germany;
+  Allies: USSR;
+
+Capitals
+  Germany: Germany;
+  USSR: Russia;
+`)
+
+	if got := game.Players["Germany"].IPCs; got != 10 {
+		t.Errorf("Germany starts with %d IPCs, want its income of 10", got)
+	}
+	if got := game.Players["USSR"].IPCs; got != 8 {
+		t.Errorf("USSR starts with %d IPCs, want its income of 8", got)
+	}
+	if got := game.Players["Neutral"].IPCs; got != 0 {
+		t.Errorf("Neutral starts with %d IPCs, want 0 -- it does not play", got)
+	}
+}
+
 func TestParse_Capitals(t *testing.T) {
 	game := parse(t, minimal+`
 Capitals
