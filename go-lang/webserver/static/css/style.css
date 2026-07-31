@@ -407,6 +407,26 @@ body {
     stroke: rgba(255,255,255,0.4);
 }
 
+/* Victory cities */
+.vc-halo {
+    fill: rgba(20, 30, 40, 0.55);
+    stroke: #FFD400;
+    stroke-width: 0.9;
+    vector-effect: non-scaling-stroke;
+}
+.vc-star {
+    font-size: 6.5px;
+    fill: #FFD400;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.map-toolbar button.toolbar-on {
+    background: #4a6d20;
+    border-color: #6f9a33;
+    color: #fff;
+}
+
 /* Unit count badges */
 .unit-badge {
     stroke: #12222c;

@@ -100,6 +100,10 @@ const app = createApp({
             // (see loadLayout), and only these small reactive bits live here.
             mapReady: false,
             hoveredTerritory: null,
+            // Victory cities are always present in the board data; whether they
+            // are shown -- and whether holding them wins -- is a play-time
+            // choice, not a property of the board.
+            showVictoryCities: true,
             view: { x: 0, y: 0, w: 1000, h: 600 },
             mapSize: { w: 1000, h: 600 },
 
@@ -153,6 +157,29 @@ const app = createApp({
                 out.push({
                     name: t.name, x: t.labelX, y: t.labelY,
                     cls: t.isSea ? 'terr-label sea' : 'terr-label land'
+                });
+            }
+            return out;
+        },
+
+        /**
+         * Victory cities, drawn from the polled game state rather than the
+         * layout: which territories are victory cities is board data, but a
+         * game may switch the condition off.
+         */
+        victoryMarkers() {
+            if (!this.showVictoryCities) return [];
+            const out = [];
+            for (const terr of this.territories) {
+                if (!terr.isVictoryCity) continue;
+                const geo = MAP.byName[terr.name];
+                if (!geo) continue;
+                // Offset above the label so the star and the name do not collide.
+                out.push({
+                    name: terr.name,
+                    x: geo.labelX,
+                    y: geo.labelY - Math.max(geo.r * 0.5, 5),
+                    r: 4.6
                 });
             }
             return out;
