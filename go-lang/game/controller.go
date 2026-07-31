@@ -266,30 +266,50 @@ func (gc *GameController) MobilizeUnit(territoryName string, unitType string) er
 		return err
 	}
 
-	// Check if territory exists and is owned by player
+	// Check if territory exists
 	territory, exists := gc.Game.Board[territoryName]
 	if !exists {
 		return fmt.Errorf("territory %s not found", territoryName)
 	}
 
-	if territory.Owner != player {
-		return fmt.Errorf("you do not own %s", territoryName)
+	units := gc.Game.Units()
+	template, hasTemplate := gc.Game.GlobalPieceTemplates[unitType]
+	if !hasTemplate {
+		return fmt.Errorf("unit type %s not found", unitType)
 	}
 
-	// New units appear at a production centre, not anywhere you happen to hold.
-	// The rule existed only in the dead copy of this method in
-	// models/turn_state.go, so the live path let units be placed on any owned
-	// territory at all.
-	units := gc.Game.Units()
-	hasProduction := false
-	for _, pieceID := range territory.Pieces {
-		if units.For(gc.Game.Pieces[pieceID]).IsStructure {
-			hasProduction = true
-			break
+	if template.Terrain == models.Water {
+		// A ship is launched into a sea zone beside the yard that built it,
+		// not parked in the factory's home province. Sea zones have nominal
+		// owners in the board file that mean nothing, so the requirement is
+		// adjacency to one of this power's production centres -- transports
+		// and battleships used to be placed on dry land and then awkwardly
+		// sailed out.
+		if territory.Terrain != models.Water {
+			return fmt.Errorf("%s is a sea unit and must be placed in a sea zone", unitType)
 		}
-	}
-	if !hasProduction && !units.Of(unitType).IsStructure {
-		return fmt.Errorf("%s has no industrial complex to build in", territoryName)
+		if !gc.adjacentToOwnProduction(territory, player) {
+			return fmt.Errorf("%s does not border one of your industrial complexes", territoryName)
+		}
+	} else {
+		if territory.Owner != player {
+			return fmt.Errorf("you do not own %s", territoryName)
+		}
+
+		// New units appear at a production centre, not anywhere you happen to
+		// hold. The rule existed only in the dead copy of this method in
+		// models/turn_state.go, so the live path let units be placed on any
+		// owned territory at all.
+		hasProduction := false
+		for _, pieceID := range territory.Pieces {
+			if units.For(gc.Game.Pieces[pieceID]).IsStructure {
+				hasProduction = true
+				break
+			}
+		}
+		if !hasProduction && !units.Of(unitType).IsStructure {
+			return fmt.Errorf("%s has no industrial complex to build in", territoryName)
+		}
 	}
 
 	// Check if player has purchased this unit type
@@ -318,7 +338,31 @@ func (gc *GameController) MobilizeUnit(territoryName string, unitType string) er
 		return fmt.Errorf("failed to place unit: %v", err)
 	}
 
+	// PlacePieces stamps the territory's owner on the piece, which is right on
+	// land but wrong at sea: a launched ship would inherit the sea zone's
+	// meaningless nominal owner. The ship belongs to whoever built it.
+	if newPiece := gc.Game.Pieces[gc.Game.NextPieceID-1]; newPiece != nil {
+		newPiece.Owner = player
+	}
+
 	return nil
+}
+
+// adjacentToOwnProduction reports whether a sea zone borders a territory this
+// player owns that contains an industrial complex.
+func (gc *GameController) adjacentToOwnProduction(seaZone *models.Territory, player *models.Player) bool {
+	units := gc.Game.Units()
+	for _, neighbour := range seaZone.ConnectedTo {
+		if neighbour.Owner != player {
+			continue
+		}
+		for _, pieceID := range neighbour.Pieces {
+			if units.For(gc.Game.Pieces[pieceID]).IsStructure {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // RepairIndustrialComplex repairs damage to an IC

@@ -765,12 +765,24 @@ func (npc *NPCAIPlayer) MobilizePhase(controller *GameController, transcript *Ga
 
 		unitType := pending[0].Type
 
-		// Try each IC territory
+		// Land units appear at the factory; ships are launched into a sea zone
+		// beside it.
+		spots := make([]string, 0, len(icTerritories))
+		if template, ok := game.GlobalPieceTemplates[unitType]; ok && template.Terrain == models.Water {
+			for _, territory := range icTerritories {
+				spots = append(spots, adjacentSeaZones(game, territory.Name)...)
+			}
+		} else {
+			for _, territory := range icTerritories {
+				spots = append(spots, territory.Name)
+			}
+		}
+
 		placed := false
-		for _, territory := range icTerritories {
-			err := controller.MobilizeUnit(territory.Name, unitType)
+		for _, spot := range spots {
+			err := controller.MobilizeUnit(spot, unitType)
 			if err == nil {
-				transcript.LogMobilize(player.Name, unitType, territory.Name)
+				transcript.LogMobilize(player.Name, unitType, spot)
 				unitsPlaced++
 				placed = true
 				break

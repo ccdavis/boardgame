@@ -247,18 +247,7 @@ func (npc *NPCAIPlayer) gatherShipping(gc *GameController, player *models.Player
 			continue
 		}
 
-		// A newly built ship starts in a coastal land territory; its first move
-		// is out to sea.
-		start := from.Name
-		if from.Terrain != models.Water {
-			seas := adjacentSeaZones(g, from.Name)
-			if len(seas) == 0 {
-				continue
-			}
-			start = from.Name
-		}
-
-		step := nextStepTowards(g, piece, start, plan.Embark, player, models.Water)
+		step := nextStepTowards(g, piece, from.Name, plan.Embark, player, models.Water)
 		if step == "" {
 			continue
 		}

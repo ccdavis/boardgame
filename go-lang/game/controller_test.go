@@ -893,3 +893,42 @@ func TestVictoryCities_ToggleDisablesWinCondition(t *testing.T) {
 		t.Errorf("switch off, but CheckVictoryCondition returned winner %q, won=%v", winner, won)
 	}
 }
+
+// Ships are launched into water beside the yard, not parked in the factory's
+// home province. They used to be mobilised onto dry land and sailed out.
+func TestMobilize_ShipsLaunchIntoAdjacentSea(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+	controller.StartGame()
+
+	game.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
+	game.AddTerritory("Moscow Coast", models.Water, "Neutral", 0)
+	game.AddTerritory("Far Sea", models.Water, "Neutral", 0)
+	game.ConnectTerritories("Moscow", "Moscow Coast")
+	game.ConnectTerritories("Moscow Coast", "Far Sea")
+	giveProductionCentre(t, game, "Moscow")
+
+	game.CurrentPhase = models.PurchasePhase
+	if err := controller.PurchaseUnit("transport", 1); err != nil {
+		t.Fatalf("buying: %v", err)
+	}
+	game.CurrentPhase = models.MobilizePhase
+
+	// Onto the factory's land territory: refused.
+	if err := controller.MobilizeUnit("Moscow", "transport"); err == nil {
+		t.Error("a transport was mobilised onto dry land")
+	}
+	// Into a sea zone that borders no factory of ours: refused.
+	if err := controller.MobilizeUnit("Far Sea", "transport"); err == nil {
+		t.Error("a transport was launched into a sea zone with no adjacent yard")
+	}
+	// Into the sea zone beside the factory: launched, and it is ours -- not
+	// the nominal owner of the water.
+	if err := controller.MobilizeUnit("Moscow Coast", "transport"); err != nil {
+		t.Fatalf("launching beside the yard: %v", err)
+	}
+	shipID := game.Board["Moscow Coast"].Pieces[0]
+	if owner := game.Pieces[shipID].Owner; owner == nil || owner.Name != "USSR" {
+		t.Errorf("launched ship belongs to %v, want USSR", game.Pieces[shipID].Owner)
+	}
+}
