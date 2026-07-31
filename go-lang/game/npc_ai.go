@@ -299,6 +299,12 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 	// Find enemy territories adjacent to our territories
 	targets := npc.findAttackTargets(game, player)
 
+	// The production race sets the tempo. A side being outproduced accepts
+	// thinner odds now, because the same attack will only be worse later; a
+	// side winning the race declines marginal fights that patience will turn
+	// into sure ones.
+	pressure := timePressure(game, player)
+
 	// Evaluate each potential attack
 	movesMade := 0
 	attacksPlanned := 0
@@ -346,6 +352,9 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 		if playerTerritoryCount < 5 {
 			minProbability -= 0.2 // More desperate when losing
 		}
+
+		// The clock: outproduced lowers the bar (floored), winning raises it.
+		minProbability = pressureThreshold(minProbability, pressure)
 
 		shouldAttack = successProb >= minProbability
 

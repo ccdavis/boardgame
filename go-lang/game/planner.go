@@ -90,8 +90,16 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 	// Rank by what the prize is worth against what it costs to reach: a rich
 	// target on the far side of the world loses to a decent one nearby, because
 	// every extra sea zone is another turn the convoy spends exposed.
+	//
+	// A power being outproduced discounts the defence penalty: an expedition at
+	// somewhat unfavourable odds today beats the same expedition at hopeless
+	// odds after the enemy's factories have run for another five rounds.
+	defenceWeight := 2
+	if timePressure(g, player) > 1.05 {
+		defenceWeight = 1
+	}
 	score := func(c candidate) int {
-		return c.value*4 - c.crossing*3 - c.defence
+		return c.value*4 - c.crossing*3 - c.defence*defenceWeight/2
 	}
 	sort.Slice(options, func(i, j int) bool {
 		if score(options[i]) != score(options[j]) {

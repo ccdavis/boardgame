@@ -28,14 +28,19 @@ import (
 type front struct {
 	territory *models.Territory
 	enemy     int // attack strength adjacent
+	want      int // strength this front should hold: enemy scaled by the margin
 	ours      int // defence strength present
-	deficit   int // enemy - ours; positive means outnumbered
+	deficit   int // want - ours; positive means under-held
 	distances map[string]int // marching distance from every friendly territory
 }
 
 // findFronts lists the player's land territories that border hostile land or
 // hostile armies, worst-outnumbered first.
-func findFronts(g *models.Game, player *models.Player) []*front {
+//
+// margin scales the strength a front is held to: 1.0 holds at equality with
+// the enemy next door; the side winning the production race holds above it,
+// to make the outproduced enemy's necessary attack as difficult as possible.
+func findFronts(g *models.Game, player *models.Player, margin float64) []*front {
 	var fronts []*front
 	for _, territory := range sortedTerritories(player) {
 		if territory.Terrain != models.Land {
@@ -61,10 +66,11 @@ func findFronts(g *models.Game, player *models.Player) []*front {
 		f := &front{
 			territory: territory,
 			enemy:     enemy,
+			want:      int(float64(enemy)*margin + 0.5),
 			ours:      defenceStrength(g, territory, player),
 			distances: marchDistances(g, player, territory.Name),
 		}
-		f.deficit = f.enemy - f.ours
+		f.deficit = f.want - f.ours
 		fronts = append(fronts, f)
 	}
 	sort.Slice(fronts, func(i, j int) bool {
@@ -171,7 +177,7 @@ func (npc *NPCAIPlayer) surplusIn(gc *GameController, player *models.Player, ter
 // rather than accumulating at the factory that built it.
 func (npc *NPCAIPlayer) DisperseToFronts(gc *GameController, player *models.Player, transcript *GameTranscript) int {
 	g := gc.Game
-	fronts := findFronts(g, player)
+	fronts := findFronts(g, player, pressureFrontMargin(timePressure(g, player)))
 	if len(fronts) == 0 {
 		return 0
 	}
@@ -184,7 +190,7 @@ func (npc *NPCAIPlayer) DisperseToFronts(gc *GameController, player *models.Play
 	}
 	frontNeeds := make(map[string]int, len(fronts))
 	for _, f := range fronts {
-		frontNeeds[f.territory.Name] = f.enemy
+		frontNeeds[f.territory.Name] = f.want
 	}
 	var sources []*source
 	for _, territory := range sortedTerritories(player) {
@@ -282,7 +288,7 @@ func (npc *NPCAIPlayer) DisperseToFronts(gc *GameController, player *models.Play
 // afresh from where the cargo and the fronts actually are.
 func (npc *NPCAIPlayer) FerrySurplus(gc *GameController, player *models.Player, transcript *GameTranscript) int {
 	g := gc.Game
-	fronts := findFronts(g, player)
+	fronts := findFronts(g, player, pressureFrontMargin(timePressure(g, player)))
 	if len(fronts) == 0 {
 		return 0
 	}
