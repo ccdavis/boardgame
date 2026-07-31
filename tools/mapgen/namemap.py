@@ -154,6 +154,9 @@ SPLITS = {
     "Indian Ocean Sea Zone": ["Indian Ocean", "Bay of Bengal",
                               "North Central Indian Ocean"],
     "West Compass Sea Zone": ["Central Indian Ocean", "Southern Indian Ocean"],
+    # TripleA's Red Sea zone is the Red Sea plus the Gulf and Arabian Sea, so it
+    # reaches Persia. This board separates them.
+    "Red Sea Zone": ["Red Sea", "Indian Ocean"],
     "East Compass Sea Zone": ["North East Indian Ocean", "Eastern Indian Ocean"],
 }
 

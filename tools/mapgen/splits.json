@@ -49,6 +49,11 @@
     "North Central Indian Ocean": [[1780, 1240]]
   },
 
+  "Red Sea Zone": {
+    "Red Sea":      [[1340, 1000], [1400, 1100], [1455, 1200], [1540, 1320]],
+    "Indian Ocean": [[1580, 920], [1620, 1000], [1625, 1150]]
+  },
+
   "West Compass Sea Zone": {
     "Central Indian Ocean":  [[1600, 1400]],
     "Southern Indian Ocean": [[1600, 1750]]

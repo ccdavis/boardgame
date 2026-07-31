@@ -76,7 +76,15 @@ def resolve_geometries(polys, kinds):
 
         if len(present) >= 2:
             for name, geom in partition.split_region(polys[tri_name], present).items():
-                out[name] = geom
+                # A territory may take a piece of more than one source region --
+                # aaa.gdf's Indian Ocean is partly TripleA's Indian Ocean zone and
+                # partly the eastern arm of its oversized Red Sea zone. Union
+                # rather than overwrite, so the order splits run in does not
+                # silently discard one of the pieces.
+                if name in out:
+                    out[name] = unary_union([out[name], geom])
+                else:
+                    out[name] = geom
             produced = set(partition.split_region(polys[tri_name], present))
             if set(present) - produced:
                 log(f"  split of {tri_name!r} produced nothing for "
