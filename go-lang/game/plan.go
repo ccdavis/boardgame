@@ -71,6 +71,9 @@ type AmphibiousPlan struct {
 	ID    int
 	Power string
 
+	// Codename is the operation's name, drawn from the side's vendored list.
+	Codename string
+
 	Target   string // hostile land territory to take
 	Staging  string // friendly coastal land territory where troops gather
 	Embark   string // sea zone next to Staging, where shipping waits
@@ -142,6 +145,11 @@ type PlanBook struct {
 	naval    map[string][]*NavalPlan
 	reserve  map[string]int
 	nextID   int
+
+	// sideOf answers which side a power fights for, so a new operation can be
+	// christened from that side's codename list. Set by the controller; a
+	// book built bare (tests) names everything from the default list.
+	sideOf func(power string) string
 }
 
 // NewPlanBook creates an empty plan book.
@@ -192,10 +200,20 @@ func (pb *PlanBook) Defences(power string) []*DefencePlan {
 	return pb.defences[power]
 }
 
+// christen picks an operation's codename from its side's list.
+func (pb *PlanBook) christen(power string, id int) string {
+	side := ""
+	if pb.sideOf != nil {
+		side = pb.sideOf(power)
+	}
+	return operationName(side, id)
+}
+
 // AddDefence records a new garrison plan.
 func (pb *PlanBook) AddDefence(plan *DefencePlan) *DefencePlan {
 	plan.ID = pb.nextID
 	pb.nextID++
+	plan.Codename = pb.christen(plan.Power, plan.ID)
 	pb.defences[plan.Power] = append(pb.defences[plan.Power], plan)
 	return plan
 }
@@ -212,6 +230,7 @@ func (pb *PlanBook) Naval(power string) []*NavalPlan {
 func (pb *PlanBook) AddNaval(plan *NavalPlan) *NavalPlan {
 	plan.ID = pb.nextID
 	pb.nextID++
+	plan.Codename = pb.christen(plan.Power, plan.ID)
 	pb.naval[plan.Power] = append(pb.naval[plan.Power], plan)
 	return plan
 }
@@ -240,6 +259,7 @@ func (pb *PlanBook) Active(power string) []*AmphibiousPlan {
 func (pb *PlanBook) Add(plan *AmphibiousPlan) *AmphibiousPlan {
 	plan.ID = pb.nextID
 	pb.nextID++
+	plan.Codename = pb.christen(plan.Power, plan.ID)
 	pb.plans[plan.Power] = append(pb.plans[plan.Power], plan)
 	return plan
 }
@@ -295,13 +315,20 @@ func (p *AmphibiousPlan) allPieces() []int {
 
 // Describe renders a plan for a transcript.
 func (p *AmphibiousPlan) Describe() string {
-	text := fmt.Sprintf("plan %d: take %s from %s via %s (%s; %d/%d troops, %d/%d transports, %d escorts)",
-		p.ID, p.Target, p.Staging, p.DropZone, p.State,
+	text := fmt.Sprintf("Operation %s (plan %d): take %s from %s via %s (%s; %d/%d troops, %d/%d transports, %d escorts)",
+		p.title(), p.ID, p.Target, p.Staging, p.DropZone, p.State,
 		len(p.Troops), p.WantTroops, len(p.Ships), p.WantTransports, len(p.Escorts))
 	if p.Reason != "" {
 		text += " -- " + p.Reason
 	}
 	return text
+}
+
+func (p *AmphibiousPlan) title() string {
+	if p.Codename == "" {
+		return "UNNAMED"
+	}
+	return p.Codename
 }
 
 // Review brings a plan up to date with the board: it drops units that no longer
@@ -400,14 +427,17 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 	// 159-unit fortress -- twelve such landings at Eastern US across six
 	// games, every one annihilated, each abandonment starting the next. A
 	// defence the largest liftable force cannot beat ends the plan; a defence
-	// that merely grew raises the force to match while still liftable.
+	// that merely grew raises the force to match while still liftable. Both
+	// limits scale with the clock: a power that must win soon lifts more and
+	// judges fewer targets hopeless.
 	if p.State == PlanForming || p.State == PlanEmbarked {
+		troopCap := maxPlanTroopsFor(strategicPressure(g, power))
 		defence := defenderStrength(g, p.Target)
-		if defence > hopelessDefence {
+		if defence > hopelessDefenceFor(troopCap) {
 			p.abandon(fmt.Sprintf("%s is too strongly held (defence %d)", p.Target, defence))
 			return false
 		}
-		if want := troopsNeeded(defence, nil); want > p.WantTroops {
+		if want := troopsNeeded(defence, nil, troopCap); want > p.WantTroops {
 			p.WantTroops = want
 			p.WantTransports = (want + transportCapacity - 1) / transportCapacity
 		}
@@ -417,11 +447,15 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 	return true
 }
 
-// hopelessDefence is the defensive strength beyond which no liftable landing
-// force can expect to win, whatever the escort. maxPlanTroops troops attack at
-// roughly one pip each; a defence several times that is not a target, it is a
-// deterrent.
-const hopelessDefence = 3 * maxPlanTroops
+// hopelessDefenceFor is the defensive strength beyond which no landing the
+// given troop cap can lift could expect to win, whatever the escort. The
+// troops attack at roughly one pip each; a defence several times the cap is
+// not a target, it is a deterrent.
+func hopelessDefenceFor(troopCap int) int {
+	return hopelessDefenceMultiple * troopCap
+}
+
+const hopelessDefenceMultiple = 3
 
 // advanceState moves a plan along according to where its force actually is.
 func (p *AmphibiousPlan) advanceState(g *models.Game) {

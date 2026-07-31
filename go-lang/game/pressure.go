@@ -191,6 +191,53 @@ func strategicPressure(g *models.Game, player *models.Player) float64 {
 	return economic
 }
 
+// Invasion scaling: how hard the clock pushes an expedition.
+const (
+	// maxPlanTroopsCalm is the largest landing force an unhurried power
+	// assembles; past this the build-up never finishes. Under pressure the
+	// cap grows by urgentTroopsPerPressure for every point of excess clock,
+	// up to maxPlanTroopsUrgent -- a power that must win soon mounts real
+	// invasions, not raids.
+	maxPlanTroopsCalm      = 8
+	maxPlanTroopsUrgent    = 16
+	urgentTroopsPerPressure = 10
+
+	// concurrentPlansCalm is how many operations run at once with time to
+	// spare (several at once split the shipping so thinly that none sails);
+	// under pressure a second front opens, and past desperatePressure a
+	// third. desperatePressure is well beyond the dead band: the clock is
+	// not merely against us, it is running out.
+	concurrentPlansCalm      = 1
+	concurrentPlansUrgent    = 2
+	concurrentPlansDesperate = 3
+	desperatePressure        = 1.4
+)
+
+// maxPlanTroopsFor is the landing-force cap at a given pressure.
+func maxPlanTroopsFor(pressure float64) int {
+	if !outproduced(pressure) {
+		return maxPlanTroopsCalm
+	}
+	limit := maxPlanTroopsCalm + int((pressure-1)*urgentTroopsPerPressure)
+	if limit > maxPlanTroopsUrgent {
+		limit = maxPlanTroopsUrgent
+	}
+	return limit
+}
+
+// concurrentPlansFor is how many operations may run at once at a given
+// pressure.
+func concurrentPlansFor(pressure float64) int {
+	switch {
+	case pressure >= desperatePressure:
+		return concurrentPlansDesperate
+	case outproduced(pressure):
+		return concurrentPlansUrgent
+	default:
+		return concurrentPlansCalm
+	}
+}
+
 // frontMargin is the strength multiplier this power holds its fronts to,
 // combining the production race with what this turn's combat phase found.
 //

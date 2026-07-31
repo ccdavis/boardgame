@@ -41,6 +41,8 @@ const maxCrossing = 4
 func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *AmphibiousPlan {
 	g := gc.Game
 	claimed := gc.Plans.Targets(player.Name)
+	pressure := strategicPressure(g, player)
+	troopCap := maxPlanTroopsFor(pressure)
 
 	var options []candidate
 	for name, territory := range g.Board {
@@ -63,8 +65,9 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 			continue // landlocked and unreachable: nothing to plan
 		}
 
-		// A fortress the largest liftable force cannot beat is not a target.
-		if defenderStrength(g, name) > hopelessDefence {
+		// A fortress the largest liftable force cannot beat is not a target --
+		// but the cap, and so the reach, grows with the clock.
+		if defenderStrength(g, name) > hopelessDefenceFor(troopCap) {
 			continue
 		}
 
@@ -95,7 +98,7 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 	// somewhat unfavourable odds today beats the same expedition at hopeless
 	// odds after the enemy's factories have run for another five rounds.
 	defencePenalty := func(defence int) int { return defence }
-	if outproduced(strategicPressure(g, player)) {
+	if outproduced(pressure) {
 		defencePenalty = func(defence int) int { return defence / 2 }
 	}
 	score := func(c candidate) int {
@@ -115,7 +118,7 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 		pick = options[1]
 	}
 
-	troops := troopsNeeded(pick.defence, npc.rng)
+	troops := troopsNeeded(pick.defence, npc.rng, troopCap)
 	return &AmphibiousPlan{
 		Power:          player.Name,
 		Target:         pick.target,
@@ -136,11 +139,13 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 const transportCapacity = 2
 
 // troopsNeeded sizes a landing force against the defence, with a little
-// variation so a power does not always commit exactly the same amount.
+// variation so a power does not always commit exactly the same amount. The
+// cap comes from the clock: an unhurried power keeps its build-ups short,
+// one that must win soon assembles a real invasion.
 //
 // This is the "gather more forces, or act quickly" decision: a lightly held
 // island gets a small force soon, a strong one gets a build-up.
-func troopsNeeded(defence int, rng *rand.Rand) int {
+func troopsNeeded(defence int, rng *rand.Rand, troopCap int) int {
 	needed := defence/2 + 2
 	if rng != nil {
 		needed += rng.Intn(3)
@@ -148,14 +153,11 @@ func troopsNeeded(defence int, rng *rand.Rand) int {
 	if needed < 2 {
 		needed = 2
 	}
-	if needed > maxPlanTroops {
-		needed = maxPlanTroops // beyond this the build-up never finishes
+	if needed > troopCap {
+		needed = troopCap // beyond this the build-up never finishes
 	}
 	return needed
 }
-
-// maxPlanTroops is the largest landing force a plan will assemble.
-const maxPlanTroops = 8
 
 // Plan scoring weights: what a point of production is worth against a sea
 // zone of exposure, and what a victory city adds to a target's value.
@@ -323,13 +325,19 @@ func (npc *NPCAIPlayer) ReviewPlans(gc *GameController, player *models.Player, t
 		}
 	}
 
-	// One operation at a time. Several at once split the shipping so thinly
-	// that none of them ever sails.
-	if len(gc.Plans.Active(player.Name)) == 0 {
-		if plan := npc.ProposePlan(gc, player); plan != nil {
-			gc.Plans.Add(plan)
-			transcript.LogAction(player.Name, "new "+plan.Describe())
+	// With time to spare, one operation at a time: several at once split the
+	// shipping so thinly that none of them ever sails. With the clock against
+	// us the arithmetic reverses -- a second (or, desperate, a third) front
+	// forces the enemy to defend everywhere at once, and the urgent purse is
+	// open wide enough to float them all.
+	wantPlans := concurrentPlansFor(strategicPressure(gc.Game, player))
+	for len(gc.Plans.Active(player.Name)) < wantPlans {
+		plan := npc.ProposePlan(gc, player)
+		if plan == nil {
+			break // nothing else worth invading
 		}
+		gc.Plans.Add(plan)
+		transcript.LogAction(player.Name, "new "+plan.Describe())
 	}
 
 	// Take up whatever is available for the plans that still need it.
@@ -454,8 +462,12 @@ func (npc *NPCAIPlayer) PlanPurchases(gc *GameController, player *models.Player)
 		// bought by fighting value per IPC, which picks submarines -- so once
 		// the starting battleships sank, late-game landings went in without
 		// naval gunfire. Lift comes first: the gun is only wanted once the
-		// transports are on hand.
+		// transports are on hand. And only with time to spare: a power under
+		// pressure strikes with what it has rather than waiting out the price
+		// of a battleship -- a landing this turn can matter more than naval
+		// gunfire next month.
 		if bombardier := bombardierName(g); bombardier != "" &&
+			!outproduced(strategicPressure(g, player)) &&
 			len(plan.Ships) >= plan.WantTransports && !plan.hasBombardier(g) {
 			wanted[bombardier]++
 		}

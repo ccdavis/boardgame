@@ -42,6 +42,9 @@ type NavalPlan struct {
 	Power   string
 	Mission NavalMission
 
+	// Codename is the operation's name, drawn from the side's vendored list.
+	Codename string
+
 	// Station is where the squadron is headed: the sea zone it covers, or the
 	// home port it is making for.
 	Station string
@@ -59,7 +62,12 @@ type NavalPlan struct {
 
 // Describe renders a naval plan for a transcript.
 func (p *NavalPlan) Describe() string {
-	text := fmt.Sprintf("squadron %d: %d ships %s at %s", p.ID, len(p.Ships), p.Mission, p.Station)
+	name := p.Codename
+	if name == "" {
+		name = "UNNAMED"
+	}
+	text := fmt.Sprintf("Operation %s (squadron %d): %d ships %s at %s",
+		name, p.ID, len(p.Ships), p.Mission, p.Station)
 	if p.Supporting != "" {
 		text += " covering " + p.Supporting
 	}

@@ -21,11 +21,19 @@ type GameController struct {
 
 // NewGameController creates a new controller for a game
 func NewGameController(game *models.Game) *GameController {
+	plans := NewPlanBook()
+	// Operations are christened from their side's codename list.
+	plans.sideOf = func(power string) string {
+		if player, ok := game.Players[power]; ok && player != nil {
+			return player.Side
+		}
+		return ""
+	}
 	return &GameController{
 		Game:           game,
 		MoveTracker:    NewMovementTracker(),
 		PendingBattles: make(map[string]*Battle),
-		Plans:          NewPlanBook(),
+		Plans:          plans,
 	}
 }
 

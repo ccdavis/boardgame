@@ -21,6 +21,9 @@ type DefencePlan struct {
 	ID    int
 	Power string
 
+	// Codename is the operation's name, drawn from the side's vendored list.
+	Codename string
+
 	Territory string
 
 	// WantStrength is the defensive value the garrison should reach, from what
@@ -45,8 +48,12 @@ func (p *DefencePlan) Describe(g *models.Game) string {
 	if p.Satisfied {
 		state = "held"
 	}
-	return fmt.Sprintf("defence %d: hold %s to strength %d (%s; have %d)",
-		p.ID, p.Territory, p.WantStrength, state, p.GarrisonStrength(g))
+	name := p.Codename
+	if name == "" {
+		name = "UNNAMED"
+	}
+	return fmt.Sprintf("Operation %s (defence %d): hold %s to strength %d (%s; have %d)",
+		name, p.ID, p.Territory, p.WantStrength, state, p.GarrisonStrength(g))
 }
 
 // GarrisonStrength is the defensive value currently stationed here.

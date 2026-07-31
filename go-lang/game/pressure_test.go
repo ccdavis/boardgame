@@ -378,3 +378,128 @@ func TestPressure_UrgentPowersSpendDown(t *testing.T) {
 		t.Errorf("urgent power spent only %d of 100; want nearly all of it", urgent)
 	}
 }
+
+// The clock scales the expedition machinery: bigger landings, more of them,
+// and no waiting on naval gunfire.
+func TestPressure_ScalesInvasions(t *testing.T) {
+	// Force caps grow with pressure and stop at the ceiling.
+	if got := maxPlanTroopsFor(1.0); got != maxPlanTroopsCalm {
+		t.Errorf("calm troop cap = %d, want %d", got, maxPlanTroopsCalm)
+	}
+	if got := maxPlanTroopsFor(1.35); got <= maxPlanTroopsCalm {
+		t.Errorf("pressed troop cap = %d, want above the calm %d", got, maxPlanTroopsCalm)
+	}
+	if got := maxPlanTroopsFor(9.9); got != maxPlanTroopsUrgent {
+		t.Errorf("desperate troop cap = %d, want ceiling %d", got, maxPlanTroopsUrgent)
+	}
+
+	// Concurrency: one front calm, two pressed, three desperate.
+	if got := concurrentPlansFor(1.0); got != concurrentPlansCalm {
+		t.Errorf("calm concurrency = %d, want %d", got, concurrentPlansCalm)
+	}
+	if got := concurrentPlansFor(1.2); got != concurrentPlansUrgent {
+		t.Errorf("pressed concurrency = %d, want %d", got, concurrentPlansUrgent)
+	}
+	if got := concurrentPlansFor(2.0); got != concurrentPlansDesperate {
+		t.Errorf("desperate concurrency = %d, want %d", got, concurrentPlansDesperate)
+	}
+
+	// A hopeless fortress for a calm power is a valid target for a desperate one.
+	calm, desperate := hopelessDefenceFor(maxPlanTroopsFor(1.0)), hopelessDefenceFor(maxPlanTroopsFor(2.0))
+	if desperate <= calm {
+		t.Errorf("hopeless threshold calm %d, desperate %d; pressure should extend the reach", calm, desperate)
+	}
+}
+
+// An outproduced power opens a second front when there is somewhere to open it.
+func TestPressure_OpensASecondFrontUnderPressure(t *testing.T) {
+	g, gc := pressureBoard(t)
+	germany := g.Players["Germany"]
+
+	addIsles(t, g)
+	g.PlacePieces("Reich", "infantry", 6)
+
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc.ReviewPlans(gc, germany, NewGameTranscript("t"))
+	if got := len(gc.Plans.Active("Germany")); got < 2 {
+		t.Errorf("outproduced Germany runs %d operation(s); the clock calls for a second front", got)
+	}
+
+	// The same board with the economy reversed: one operation at a time.
+	g2, gc2 := pressureBoard(t)
+	g2.Board["Reich"].Production = 60
+	addIsles(t, g2)
+	g2.PlacePieces("Reich", "infantry", 6)
+
+	npc2 := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc2.ReviewPlans(gc2, g2.Players["Germany"], NewGameTranscript("t"))
+	if got := len(gc2.Plans.Active("Germany")); got != 1 {
+		t.Errorf("a favoured Germany runs %d operations; patience wants one at a time", got)
+	}
+}
+
+// addIsles gives a pressure board a small archipelago to covet: two Soviet
+// islands off the Reich coast, shipping templates, and a coastal factory so
+// the plans may buy ships.
+func addIsles(t *testing.T, g *models.Game) {
+	t.Helper()
+	g.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
+	g.GlobalPieceTemplates["transport"].Capacity = 2
+	g.GlobalPieceTemplates["transport"].CanCarry = []string{"infantry"}
+	g.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
+
+	g.AddTerritory("Reich Sea", models.Water, "Neutral", 0)
+	g.ConnectTerritories("Reich", "Reich Sea")
+	for _, name := range []string{"Isle One", "Isle Two"} {
+		g.AddTerritory(name, models.Land, "USSR", 3)
+		sea := name + " Sea"
+		g.AddTerritory(sea, models.Water, "Neutral", 0)
+		g.ConnectTerritories(name, sea)
+		g.ConnectTerritories(sea, "Reich Sea")
+	}
+	if err := g.PlacePieces("Reich", "factory", 1); err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+}
+
+// A power in a hurry does not wait out the price of a battleship.
+func TestPressure_SkipsTheBombardierInAHurry(t *testing.T) {
+	build := func(t *testing.T, production int) (*models.Game, *GameController) {
+		t.Helper()
+		g, gc := pressureBoard(t)
+		g.Board["Reich"].Production = production
+		addIsles(t, g)
+		g.AddPieceTemplate("battleship", models.Water, 2, 4, 4, 24)
+		g.PlacePieces("Reich", "infantry", 6)
+		return g, gc
+	}
+
+	wantsGun := func(t *testing.T, production int) bool {
+		g, gc := build(t, production)
+		player := g.Players["Germany"]
+		npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+		npc.ReviewPlans(gc, player, NewGameTranscript("t"))
+		plans := gc.Plans.Active("Germany")
+		if len(plans) == 0 {
+			t.Fatal("no plan formed")
+		}
+		plan := plans[0]
+		// Hand the plan its full lift, so only the gun question remains.
+		for len(plan.Ships) < plan.WantTransports {
+			if err := g.PlacePieces("Reich Sea", "transport", 1); err != nil {
+				t.Fatalf("transport: %v", err)
+			}
+			id := g.Board["Reich Sea"].Pieces[len(g.Board["Reich Sea"].Pieces)-1]
+			g.Pieces[id].Owner = player
+			plan.Ships = append(plan.Ships, id)
+		}
+		return npc.PlanPurchases(gc, player)["battleship"] > 0
+	}
+
+	if wantsGun(t, 6) {
+		t.Error("an outproduced power waits on a battleship; it should strike with what it has")
+	}
+	if !wantsGun(t, 60) {
+		t.Error("a favoured power skips the bombardier; with time to spare it should want the gun")
+	}
+}
