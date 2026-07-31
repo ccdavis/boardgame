@@ -332,3 +332,147 @@ func toInt(v any) int {
 		return 0
 	}
 }
+
+// TestMap_ViewportZoomsAndPans verifies the view controls actually move the
+// rendered map. The regression it guards: this page is an in-DOM Vue template,
+// so ':viewBox' was lowercased by the HTML parser into an attribute SVG
+// ignores -- every control mutated state faithfully while the picture never
+// changed, and the previous tests, run on a viewport wide enough to show the
+// unscaled geometry 1:1, could not tell the difference.
+func TestMap_ViewportZoomsAndPans(t *testing.T) {
+	skipIfNotBrowserTest(t)
+
+	_, baseURL := startTestServer(t)
+	page := startGameInBrowser(t, baseURL)
+	defer page.Close()
+
+	readView := func() (string, float64) {
+		t.Helper()
+		raw, err := page.Evaluate(`() => {
+			const svg = document.getElementById('gameMap');
+			return { attr: svg.getAttribute('viewBox'), w: svg.viewBox.baseVal.width };
+		}`)
+		if err != nil {
+			t.Fatalf("reading viewBox: %v", err)
+		}
+		entry := raw.(map[string]any)
+		attr, _ := entry["attr"].(string)
+		var w float64
+		switch v := entry["w"].(type) {
+		case float64:
+			w = v
+		case int:
+			w = float64(v)
+		}
+		return attr, w
+	}
+
+	// The real, case-sensitive viewBox attribute must exist and be effective.
+	attr, fullWidth := readView()
+	if attr == "" {
+		t.Fatal("the SVG has no viewBox attribute -- the binding is writing a dead attribute again")
+	}
+	if fullWidth <= 0 {
+		t.Fatalf("viewBox.baseVal.width = %v; the browser is ignoring the viewBox", fullWidth)
+	}
+
+	// Zooming in must narrow the visible span of the map.
+	if err := page.Locator(".map-toolbar button[title='Zoom in']").Click(); err != nil {
+		t.Fatalf("clicking zoom in: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_, zoomedWidth := readView()
+	if zoomedWidth >= fullWidth {
+		t.Errorf("zoom in left the visible span at %v (was %v); the control changes nothing on screen",
+			zoomedWidth, fullWidth)
+	}
+
+	// Dragging must shift the viewport.
+	box, err := page.Locator("#gameMap").BoundingBox()
+	if err != nil {
+		t.Fatalf("map bounding box: %v", err)
+	}
+	cx, cy := box.X+box.Width/2, box.Y+box.Height/2
+	beforeDrag, _ := readView()
+	page.Mouse().Move(cx, cy)
+	page.Mouse().Down()
+	page.Mouse().Move(cx-120, cy-60, playwright.MouseMoveOptions{Steps: playwright.Int(8)})
+	page.Mouse().Up()
+	time.Sleep(200 * time.Millisecond)
+	afterDrag, _ := readView()
+	if afterDrag == beforeDrag {
+		t.Errorf("dragging the map left the viewport at %q; pan does nothing", beforeDrag)
+	}
+
+	// Fit restores the whole world.
+	if err := page.Locator(".map-toolbar button[title='Fit the whole map']").Click(); err != nil {
+		t.Fatalf("clicking fit: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, w := readView(); w != fullWidth {
+		t.Errorf("Fit shows a span of %v, want the full %v", w, fullWidth)
+	}
+}
+
+// TestMap_WholeWorldReachableInANarrowWindow plays the report that found the
+// dead viewBox: pick Japan in a laptop-sized window. Without a working
+// viewBox the geometry rendered 1:1, everything east of the container's edge
+// -- Japan included -- was clipped into unreachability, and its owner could
+// not select a single one of their own territories.
+func TestMap_WholeWorldReachableInANarrowWindow(t *testing.T) {
+	skipIfNotBrowserTest(t)
+
+	_, baseURL := startTestServer(t)
+
+	page, err := browser.NewPage(playwright.BrowserNewPageOptions{
+		Viewport: &playwright.Size{Width: 1280, Height: 800},
+	})
+	if err != nil {
+		t.Fatalf("creating page: %v", err)
+	}
+	defer page.Close()
+
+	if _, err := page.Goto(baseURL, playwright.PageGotoOptions{
+		Timeout: playwright.Float(15000),
+	}); err != nil {
+		t.Fatalf("navigating: %v", err)
+	}
+	if err := page.Fill("#gdfPath", "../../aaa.gdf"); err != nil {
+		t.Fatalf("filling board path: %v", err)
+	}
+	if _, err := page.Locator("#playerName").SelectOption(playwright.SelectOptionValues{
+		Values: &[]string{"Japan"},
+	}); err != nil {
+		t.Fatalf("selecting Japan: %v", err)
+	}
+	if err := page.Click("button[type=submit]"); err != nil {
+		t.Fatalf("starting game: %v", err)
+	}
+	if _, err := page.WaitForSelector("#gameMap", playwright.PageWaitForSelectorOptions{
+		Timeout: playwright.Float(15000),
+	}); err != nil {
+		t.Fatalf("map never rendered: %v", err)
+	}
+	dismiss := page.Locator("button:has-text('Got it!')")
+	if n, _ := dismiss.Count(); n > 0 {
+		dismiss.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)})
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	// A plain click -- no force, no scripted dispatch. If Japan is clipped
+	// out of the container this times out exactly the way a mouse fails.
+	if err := page.Locator(`path[data-territory="Japan"]`).Click(playwright.LocatorClickOptions{
+		Timeout: playwright.Float(5000),
+	}); err != nil {
+		t.Fatalf("Japan cannot be clicked in a 1280px window: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	got, err := page.Evaluate(`() => vueApp ? vueApp.selectedTerritory : null`)
+	if err != nil {
+		t.Fatalf("reading selection: %v", err)
+	}
+	if got != "Japan" {
+		t.Errorf("clicked Japan but the app selected %v", got)
+	}
+}

@@ -111,8 +111,15 @@
                      Paint order is z-order in SVG, hence the layering: sea below
                      land below selection below labels below markers. -->
                 <section class="map-container" role="region" aria-label="Game Map">
+                    <!-- :view-box.camel, not :viewBox: this is an in-DOM
+                         template, so the HTML parser lowercases attribute
+                         names before Vue compiles them, and SVG ignores a
+                         lowercase viewbox. The .camel modifier restores the
+                         case. Without it the map renders 1:1, zoom and pan
+                         write to a dead attribute, and any window narrower
+                         than the geometry clips the Pacific off entirely. -->
                     <svg id="gameMap" class="map-svg" v-if="mapReady"
-                         :viewBox="viewBoxStr" preserveAspectRatio="xMidYMid meet"
+                         :view-box.camel="viewBoxStr" preserveAspectRatio="xMidYMid meet"
                          role="application" aria-label="Game map"
                          @wheel.prevent="onWheel" @pointerdown="onPanStart">
                         <rect class="ocean-bg" x="0" y="0" :width="mapSize.w" :height="mapSize.h"/>

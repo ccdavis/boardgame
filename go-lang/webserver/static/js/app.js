@@ -774,11 +774,17 @@ const app = createApp({
             const onMove = (moveEvent) => {
                 const rect = document.getElementById('gameMap').getBoundingClientRect();
                 const scale = this.view.w / rect.width;
-                const dx = (moveEvent.clientX - event.clientX) * scale;
-                const dy = (moveEvent.clientY - event.clientY) * scale;
-                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved = true;
+                // "Moved" is judged in screen pixels, not map units: a real
+                // mouse drifts a pixel or two during an ordinary click, and a
+                // map-unit threshold (~half a pixel when zoomed out) made the
+                // swallow-guard below eat most territory selections. Until the
+                // threshold is crossed nothing pans, so a click stays a click.
+                const px = moveEvent.clientX - event.clientX;
+                const py = moveEvent.clientY - event.clientY;
+                if (!moved && Math.abs(px) <= 5 && Math.abs(py) <= 5) return;
+                moved = true;
                 this.view = this.clampView({
-                    x: origin.x - dx, y: origin.y - dy,
+                    x: origin.x - px * scale, y: origin.y - py * scale,
                     w: this.view.w, h: this.view.h
                 });
             };
