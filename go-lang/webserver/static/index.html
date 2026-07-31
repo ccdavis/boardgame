@@ -389,6 +389,39 @@
             </footer>
         </div>
 
+        <!-- Notice Modal: every message the app used to push through native
+             alert()/confirm() dialogs. Browsers let users suppress those
+             ("don't allow this page to prompt again"), after which confirm()
+             silently returns false -- which once wedged the whole game on the
+             NPC-turn button. In-page dialogs cannot be suppressed. -->
+        <dialog id="noticeModal" class="modal notice-modal">
+            <div class="modal-content">
+                <h2>{{ notice.title }}</h2>
+                <pre class="notice-body">{{ notice.body }}</pre>
+                <button @click="closeNotice" class="btn btn-primary">Close</button>
+            </div>
+        </dialog>
+
+        <!-- Move Destination Modal: replaces the prompt() that asked the
+             player to type a territory name. -->
+        <dialog id="moveModal" class="modal">
+            <div class="modal-content">
+                <h2>Move {{ movePicker.unitName }}</h2>
+                <p>From <strong>{{ movePicker.from }}</strong> to:</p>
+                <ul class="destination-list">
+                    <li v-for="dest in movePicker.destinations" :key="dest.name">
+                        <button @click="confirmMove(dest.name)" class="btn destination-choice"
+                                :class="{'destination-attack': dest.isAttack}">
+                            {{ dest.name }}
+                            <span class="dest-owner">{{ dest.owner }}</span>
+                            <span v-if="dest.isAttack" class="dest-attack-label">⚔️ attack</span>
+                        </button>
+                    </li>
+                </ul>
+                <button @click="closeMovePicker" class="btn btn-secondary">Cancel</button>
+            </div>
+        </dialog>
+
         <!-- Purchase Modal -->
         <dialog id="purchaseModal" class="modal">
             <div class="modal-content">

@@ -43,17 +43,28 @@ func TestNPCTurnRunnableFromBrowser(t *testing.T) {
 	}
 
 	// Now each NPC turn must be runnable from the browser until the human is up
-	// again. One iteration per playing power is more than enough.
+	// again. One iteration per playing power is more than enough. Every turn
+	// must also return its transcript -- the dialog the player reads to learn
+	// what the computer did.
 	for i := 0; i < 8; i++ {
 		if session.Controller.Game.CurrentPower == "Germany" {
 			return // play came back around: the loop works
 		}
+		who := session.Controller.Game.CurrentPower
 		rec := post("execute-npc-turn")
 		if rec.Code != http.StatusOK {
 			var body map[string]any
 			json.Unmarshal(rec.Body.Bytes(), &body)
-			t.Fatalf("execute-npc-turn for %s: status %d, body %v",
-				session.Controller.Game.CurrentPower, rec.Code, body)
+			t.Fatalf("execute-npc-turn for %s: status %d, body %v", who, rec.Code, body)
+		}
+		var body struct {
+			Transcript []string `json:"transcript"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decoding NPC turn response: %v", err)
+		}
+		if len(body.Transcript) == 0 {
+			t.Fatalf("%s's turn returned no transcript; the player learns nothing", who)
 		}
 	}
 	t.Fatalf("play never returned to the human; stuck at %s",

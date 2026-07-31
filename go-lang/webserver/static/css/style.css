@@ -937,3 +937,65 @@ dialog::backdrop {
     border-radius: 4px;
     font-weight: 600;
 }
+
+/* Notice dialog: the in-page replacement for every native alert() */
+.notice-modal .modal-content {
+    max-width: 640px;
+}
+
+.notice-body {
+    max-height: 50vh;
+    overflow-y: auto;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    margin: 0.75rem 0 1rem;
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Move destination dialog */
+.destination-list {
+    list-style: none;
+    max-height: 50vh;
+    overflow-y: auto;
+    margin: 0.75rem 0 1rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.destination-choice {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: left;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+}
+
+.destination-choice:hover {
+    background: #e9ecef;
+}
+
+.destination-attack {
+    border-color: #dc3545;
+}
+
+.dest-owner {
+    color: #6c757d;
+    font-size: 0.85rem;
+}
+
+.dest-attack-label {
+    margin-left: auto;
+    color: #dc3545;
+    font-size: 0.85rem;
+    font-weight: 600;
+}

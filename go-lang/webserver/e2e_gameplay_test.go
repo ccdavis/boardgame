@@ -73,13 +73,21 @@ func sessionIDOf(t *testing.T, page playwright.Page) string {
 	return id
 }
 
-// closeGuidance dismisses the phase-guidance modal if it is showing. It
-// reopens on every phase change of the human's turn, so phase-walking tests
-// call this before each click.
+// closeGuidance dismisses whatever in-page dialog is showing: the phase
+// guidance (which reopens on every phase change of the human's turn) and the
+// notice dialog (which replaced the native alerts). Phase-walking tests call
+// this before each click, since an open modal blocks the page under it.
 func closeGuidance(page playwright.Page) {
+	// Notice first: it is a true top-layer modal, so while it is open a click
+	// aimed at the guidance dialog underneath cannot land.
+	notice := page.Locator("#noticeModal button")
+	if visible, _ := notice.IsVisible(); visible {
+		notice.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(2000)})
+		time.Sleep(150 * time.Millisecond)
+	}
 	btn := page.Locator(".phase-modal button")
 	if visible, _ := btn.IsVisible(); visible {
-		btn.Click()
+		btn.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(2000)})
 		time.Sleep(150 * time.Millisecond)
 	}
 }
@@ -180,7 +188,9 @@ func TestE2E_CompleteGameFlow(t *testing.T) {
 	}
 
 	// Territory search narrows the sidebar, and selecting from it fills the
-	// details panel.
+	// details panel. The NPC turn just opened its transcript dialog; close it
+	// first, since a modal blocks everything beneath.
+	closeGuidance(page)
 	search := page.Locator("input[placeholder*='Search']")
 	if err := search.Fill("Karelia"); err != nil {
 		t.Fatalf("Failed to fill search: %v", err)
@@ -271,12 +281,6 @@ func TestE2E_PurchaseFlow(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 
-	var dialogs []string
-	page.OnDialog(func(d playwright.Dialog) {
-		dialogs = append(dialogs, d.Message())
-		d.Accept()
-	})
-
 	startGameOnPage(t, page, baseURL, "Germany")
 
 	// Grant a budget: 2 infantry and 1 armor's worth.
@@ -343,21 +347,20 @@ func TestE2E_PurchaseFlow(t *testing.T) {
 		t.Errorf("Mobilize bar shows %d groups, want 2 (infantry, armor)", n)
 	}
 
-	// Ending the phase with units unplaced must be refused, with a reason.
+	// Ending the phase with units unplaced must be refused, with the reason
+	// shown in the in-page notice dialog (native alerts are gone: a browser
+	// can suppress those, and a suppressed dialog wedged the game).
 	clickAction(t, page, "Done Placing")
 	time.Sleep(500 * time.Millisecond)
-	blockedSeen := false
-	for _, d := range dialogs {
-		if strings.Contains(d, "Cannot end this phase yet") && strings.Contains(d, "still to place") {
-			blockedSeen = true
-		}
-	}
-	if !blockedSeen {
-		t.Errorf("Blocked advance never explained itself; dialogs: %q", dialogs)
+	noticeText, _ := page.Locator("#noticeModal").TextContent()
+	if !strings.Contains(noticeText, "Cannot end this phase yet") ||
+		!strings.Contains(noticeText, "still to place") {
+		t.Errorf("Blocked advance never explained itself; notice shows %q", noticeText)
 	}
 	expectPhase(t, page, "Mobilize New Units")
 
 	// Place everything in Germany (the only German factory on the real board).
+	closeGuidance(page) // the refusal notice is still up and blocks the page
 	for _, unit := range []string{"infantry", "armor"} {
 		group := page.Locator(".mobilize-group", playwright.PageLocatorOptions{
 			HasText: unit,
@@ -547,4 +550,83 @@ func TestE2E_VictoryBanner(t *testing.T) {
 	if !strings.Contains(gameOverBar, "Axis win") {
 		t.Errorf("Action bar says %q, want the Axis verdict", gameOverBar)
 	}
+}
+
+// TestE2E_NPCTurnWithSuppressedDialogs replays the report that found the
+// wedge: a player told Firefox to stop letting localhost open dialogs, after
+// which the suppressed confirm() gate on "Watch NPC Turn" silently answered
+// "no" forever -- the button did nothing and the game was stuck for good.
+//
+// No dialog handler is installed here, so Playwright auto-dismisses any
+// native dialog -- exactly the suppressed state. The button must still run
+// the turn, and the turn's transcript must appear in the in-page dialog.
+func TestE2E_NPCTurnWithSuppressedDialogs(t *testing.T) {
+	if os.Getenv("RUN_BROWSER_TESTS") != "1" {
+		t.Skip("Skipping E2E test (set RUN_BROWSER_TESTS=1 to run)")
+	}
+
+	_, baseURL := startTestServer(t)
+
+	ctx, err := browser.NewContext()
+	if err != nil {
+		t.Fatalf("Failed to create context: %v", err)
+	}
+	defer ctx.Close()
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	// Deliberately NO page.OnDialog: any native dialog is auto-dismissed,
+	// as if the user had checked "don't allow this page to prompt again".
+
+	startGameOnPage(t, page, baseURL, "Germany")
+
+	// Walk the human turn so an NPC is up.
+	clickAction(t, page, "Done Purchasing")
+	expectPhase(t, page, "Combat Move")
+	clickAction(t, page, "Execute Moves")
+	expectPhase(t, page, "Conduct Combat")
+	clickAction(t, page, "Done with Combat")
+	expectPhase(t, page, "Noncombat Move")
+	clickAction(t, page, "Execute Moves")
+	expectPhase(t, page, "Mobilize New Units")
+	clickAction(t, page, "Done Placing")
+	expectPhase(t, page, "Collect Income")
+	clickAction(t, page, "Collect Income & End Turn")
+
+	npcInfo := page.Locator(".npc-turn-info")
+	if err := npcInfo.WaitFor(playwright.LocatorWaitForOptions{
+		Timeout: playwright.Float(5000),
+	}); err != nil {
+		t.Fatalf("NPC turn indicator never appeared: %v", err)
+	}
+	before, _ := page.Locator(".player-info").TextContent()
+
+	// The button must work with dialogs suppressed.
+	clickAction(t, page, "Watch NPC Turn")
+
+	// The transcript dialog appears with the turn's actual log...
+	notice := page.Locator("#noticeModal")
+	if err := notice.WaitFor(playwright.LocatorWaitForOptions{
+		Timeout: playwright.Float(60000),
+	}); err != nil {
+		t.Fatalf("NPC transcript dialog never appeared: %v", err)
+	}
+	text, _ := notice.TextContent()
+	if !strings.Contains(text, "'s turn") || !strings.Contains(text, "Phase:") {
+		t.Errorf("Transcript dialog shows %q, want the power's turn log with its phases", text)
+	}
+
+	// ...and the turn genuinely ran: the current power moved on.
+	closeGuidance(page)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if now, _ := page.Locator(".player-info").TextContent(); now != before {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	now, _ := page.Locator(".player-info").TextContent()
+	t.Fatalf("Power never advanced past %q after Watch NPC Turn; the game is stuck again (now %q)",
+		before, now)
 }

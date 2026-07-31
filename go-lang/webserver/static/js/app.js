@@ -120,6 +120,12 @@ const app = createApp({
             // Chosen placement territory per pending unit type, keyed by type.
             mobilizeTargets: {},
 
+            // In-page dialogs. Native alert()/confirm()/prompt() are banned:
+            // a browser lets the user suppress them, after which confirm()
+            // silently answers "no" and the game wedges.
+            notice: { title: '', body: '' },
+            movePicker: { unitId: null, unitName: '', from: '', destinations: [] },
+
             // UI state
             error: null,
             showPhaseGuidance: false,
@@ -310,6 +316,18 @@ const app = createApp({
 
     methods: {
         /**
+         * Show a message in the in-page notice dialog.
+         */
+        showNotice(title, body) {
+            this.notice = { title, body };
+            document.getElementById('noticeModal').showModal();
+        },
+
+        closeNotice() {
+            document.getElementById('noticeModal').close();
+        },
+
+        /**
          * Start a new game
          */
         async startGame() {
@@ -472,27 +490,40 @@ const app = createApp({
          */
         async moveUnit(unit) {
             try {
-                // Get reachable territories
                 const result = await this.api.getReachableTerritories(unit.id, this.selectedTerritory);
 
                 if (!result.reachable || result.reachable.length === 0) {
-                    alert('This unit cannot move to any territories');
+                    this.showNotice('No destinations', `This ${unit.name} cannot move anywhere from ${this.selectedTerritory}.`);
                     return;
                 }
 
-                // For now, use a simple prompt to select destination
-                // TODO: Enhance with modal showing destinations
-                const destinations = result.reachable.map(t => t.name).join('\n');
-                const destination = prompt(`Move ${unit.name} from ${this.selectedTerritory} to:\n\n${destinations}\n\nEnter territory name:`);
-
-                if (destination) {
-                    await this.api.planMove(unit.id, this.selectedTerritory, destination);
-                    await this.updateGameState();
-                    alert(`Move planned: ${unit.name} will move to ${destination}`);
-                }
+                this.movePicker = {
+                    unitId: unit.id,
+                    unitName: unit.name,
+                    from: this.selectedTerritory,
+                    destinations: result.reachable
+                };
+                document.getElementById('moveModal').showModal();
             } catch (error) {
-                alert(`Failed to move unit: ${error.message}`);
+                this.showNotice('Cannot move unit', error.message);
             }
+        },
+
+        /**
+         * The player picked a destination in the move dialog.
+         */
+        async confirmMove(destination) {
+            this.closeMovePicker();
+            try {
+                await this.api.planMove(this.movePicker.unitId, this.movePicker.from, destination);
+                await this.updateGameState();
+            } catch (error) {
+                this.showNotice('Move refused', error.message);
+            }
+        },
+
+        closeMovePicker() {
+            document.getElementById('moveModal').close();
         },
 
         /**
@@ -516,7 +547,7 @@ const app = createApp({
                 await this.api.purchaseUnit(unitType, 1);
                 await this.updateGameState();
             } catch (error) {
-                alert(`Failed to purchase ${unitType}: ${error.message}`);
+                this.showNotice(`Cannot buy ${unitType}`, error.message);
             }
         },
 
@@ -526,14 +557,14 @@ const app = createApp({
         async placeUnits(unitType, quantity) {
             const territory = this.mobilizeTargets[unitType];
             if (!territory) {
-                alert(`No legal territory to place ${unitType} in`);
+                this.showNotice('Nowhere to place', `No legal territory to place ${unitType} in.`);
                 return;
             }
             try {
                 await this.api.mobilizeUnits(unitType, territory, quantity);
                 await this.updateGameState();
             } catch (error) {
-                alert(`Failed to place ${unitType} in ${territory}: ${error.message}`);
+                this.showNotice(`Cannot place ${unitType} in ${territory}`, error.message);
             }
         },
 
@@ -542,7 +573,7 @@ const app = createApp({
          */
         showPlannedMoves() {
             if (this.plannedMoves.length === 0) {
-                alert('No moves planned');
+                this.showNotice('Planned moves', 'No moves planned yet.');
                 return;
             }
 
@@ -550,29 +581,26 @@ const app = createApp({
                 `Piece ${m.pieceId}: ${m.from} → ${m.to} (${m.type})`
             ).join('\n');
 
-            alert(`Planned Moves:\n\n${movesList}`);
+            this.showNotice('Planned moves', movesList);
         },
 
         /**
          * Auto-resolve all battles
          */
         async autoResolveBattles() {
-            if (!confirm('Auto-resolve all battles?')) return;
-
             try {
                 const result = await this.api.autoResolveBattles();
 
-                // Show results
                 const summary = result.battles.map(b => {
                     const outcome = b.attackerWins ? '✓ Attacker wins!' : '✗ Defender wins';
                     return `${b.territory}: ${outcome} (${b.rounds} rounds)`;
                 }).join('\n');
 
-                alert(`Battles Resolved:\n\n${summary}`);
+                this.showNotice('Battles resolved', summary);
 
                 await this.updateGameState();
             } catch (error) {
-                alert(`Failed to resolve battles: ${error.message}`);
+                this.showNotice('Battle resolution failed', error.message);
             }
         },
 
@@ -585,29 +613,28 @@ const app = createApp({
 
                 // The phase has unfinished business; say what, and stay put.
                 if (result.blocked) {
-                    alert(`Cannot end this phase yet:\n\n${result.summary}`);
+                    this.showNotice('Cannot end this phase yet', result.summary);
                     return;
                 }
 
-                if (result.summary) {
-                    // Show summary of what happened
-                    let message = result.summary;
-
-                    if (result.battles && result.battles.length > 0) {
-                        message += `\n\nBattles created in: ${result.battles.join(', ')}`;
-                    }
-
-                    if (result.warnings && result.warnings.length > 0) {
-                        message += `\n\nWarnings:\n${result.warnings.join('\n')}`;
-                    }
-
-                    alert(message);
+                // Routine transitions pass silently -- the header already
+                // announces the new phase. A dialog appears only when there
+                // is something worth reading: battles created, or warnings.
+                const parts = [];
+                if (result.battles && result.battles.length > 0) {
+                    parts.push(`Battles created in: ${result.battles.join(', ')}`);
+                }
+                if (result.warnings && result.warnings.length > 0) {
+                    parts.push(`Warnings:\n${result.warnings.join('\n')}`);
+                }
+                if (parts.length > 0) {
+                    this.showNotice(result.summary || 'Phase complete', parts.join('\n\n'));
                 }
 
                 await this.updateGameState();
 
             } catch (error) {
-                alert(`Cannot advance phase: ${error.message}`);
+                this.showNotice('Cannot advance phase', error.message);
             }
         },
 
@@ -615,15 +642,21 @@ const app = createApp({
          * Execute NPC turn
          */
         async executeNPCTurn() {
-            if (!confirm(`Watch ${this.gameState.currentPower}'s turn?`)) return;
-
+            // No confirm() gate: clicking the button IS the request, and a
+            // suppressed confirm() answers "no" forever, wedging the game.
+            const who = this.gameState.currentPower;
             try {
                 const result = await this.api.executeNPCTurn();
-                alert(result.summary);
+                // The turn's transcript, so the player can read exactly what
+                // the computer did rather than diff the map by eye.
+                const body = (result.transcript && result.transcript.length > 0)
+                    ? result.transcript.join('\n')
+                    : result.summary;
+                this.showNotice(`${who}'s turn`, body);
                 await this.updateGameState();
                 await this.loadTerritories();
             } catch (error) {
-                alert(`NPC turn failed: ${error.message}`);
+                this.showNotice('NPC turn failed', error.message);
             }
         },
 

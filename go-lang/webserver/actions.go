@@ -386,19 +386,26 @@ func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 
-	// Run through the driver, which always supplies a transcript. Calling
-	// TakeTurn with a nil transcript here was a guaranteed panic: the AI logs
-	// its first phase before doing anything else.
-	err := session.Driver().RunNPCTurn(currentPlayer.Name, nil)
+	// Record the turn as it is played and hand the log back to the browser:
+	// the transcript dialog is how a human learns what the computer just did,
+	// which beats trying to spot the differences on the map.
+	transcript := game.NewGameTranscript(currentPlayer.Name + "'s turn")
+	err := session.Driver().RunNPCTurn(currentPlayer.Name, transcript)
 	if err != nil {
 		s.sendError(w, fmt.Sprintf("NPC turn failed: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	lines := make([]string, 0, len(transcript.Entries))
+	for _, entry := range transcript.Entries {
+		lines = append(lines, entry.Action)
 	}
 
 	response := map[string]interface{}{
 		"success":          true,
 		"player":           currentPlayer.Name,
 		"summary":          fmt.Sprintf("%s completed their turn", currentPlayer.Name),
+		"transcript":       lines,
 		"newPhase":         session.Controller.Game.CurrentPhase.String(),
 		"newCurrentPower":  session.Controller.Game.CurrentPower,
 	}
