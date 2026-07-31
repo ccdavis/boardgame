@@ -722,13 +722,39 @@ func ValidateLoad(game *models.Game, transportID, pieceID int, currentPlayerName
 		return fmt.Errorf("piece %d is already loaded", pieceID)
 	}
 
-	// Check ownership - both must be owned by current player
+	// Ownership belongs to the pieces, not the water they float on.
+	//
+	// The old check required the *sea zone's* nominal owner to be the current
+	// player -- the exact ownership semantics the movement rules repudiate
+	// (nobody holds an ocean) -- and never looked at who owned the transport or
+	// the troops, so a power could load its infantry into anyone's shipping.
 	currentPlayer := game.Players[currentPlayerName]
-	if transportTerritory.Owner != currentPlayer {
-		return fmt.Errorf("transport is in enemy territory %s", transportTerritory.Name)
+	if transport.Owner != currentPlayer {
+		owner := "nobody"
+		if transport.Owner != nil {
+			owner = transport.Owner.Name
+		}
+		return fmt.Errorf("%s belongs to %s, not %s", transport.Name, owner, currentPlayerName)
 	}
-	if pieceTerritory.Owner != currentPlayer {
-		return fmt.Errorf("piece is in enemy territory %s", pieceTerritory.Name)
+	if piece.Owner != currentPlayer {
+		owner := "nobody"
+		if piece.Owner != nil {
+			owner = piece.Owner.Name
+		}
+		return fmt.Errorf("%s belongs to %s, not %s", piece.Name, owner, currentPlayerName)
+	}
+
+	// The troops must be standing on friendly ground, and the transport must
+	// not be sitting in a sea zone an enemy fleet holds.
+	if pieceTerritory.Owner != currentPlayer && !areAllies(pieceTerritory.Owner, currentPlayer) {
+		return fmt.Errorf("piece is in hostile territory %s", pieceTerritory.Name)
+	}
+	for _, occupant := range game.GetPiecesInTerritory(transportTerritory.Name) {
+		if occupant.Owner == nil || occupant.Owner == currentPlayer ||
+			areAllies(occupant.Owner, currentPlayer) {
+			continue
+		}
+		return fmt.Errorf("cannot load in %s while an enemy fleet is there", transportTerritory.Name)
 	}
 
 	// Check if territories are the same or adjacent

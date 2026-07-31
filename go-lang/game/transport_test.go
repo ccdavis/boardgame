@@ -335,3 +335,44 @@ func TestGetTransportCargo(t *testing.T) {
 		t.Errorf("Expected infantry %d in cargo, got %d", infantryID, cargo[0])
 	}
 }
+
+// Loading is about who owns the pieces, not who nominally owns the water.
+//
+// The old validation required the sea zone's owner to be the current player --
+// sea-zone ownership being exactly the thing the movement rules treat as a
+// meaningless starting marker -- and never checked the transport or the
+// troops, so a power could load its infantry into anyone's shipping.
+func TestValidateLoad_ChecksPieceOwnershipNotSeaOwnership(t *testing.T) {
+	g := models.NewGame()
+	g.PlayerOrder = []string{"Germany", "UK"}
+	germany := g.GetOrCreatePlayer("Germany")
+	uk := g.GetOrCreatePlayer("UK")
+	germany.Side, uk.Side = "Axis", "Allies"
+	germany.TakesTurns, uk.TakesTurns = true, true
+
+	g.AddTerritory("Port", models.Land, "Germany", 2)
+	// The sea zone nominally belongs to UK -- which must not matter.
+	g.AddTerritory("Roadstead", models.Water, "UK", 0)
+	g.ConnectTerritories("Port", "Roadstead")
+
+	g.AddPieceTemplate("infantry", models.Land, 1, 1, 2, 3)
+	g.AddPieceTemplate("transport", models.Water, 2, 0, 1, 10)
+	g.GlobalPieceTemplates["transport"].Capacity = 2
+	g.GlobalPieceTemplates["transport"].CanCarry = []string{"infantry"}
+
+	g.PlacePieces("Port", "infantry", 1)
+	g.PlacePieces("Roadstead", "transport", 1)
+	infantryID := g.Board["Port"].Pieces[0]
+	transportID := g.Board["Roadstead"].Pieces[0]
+	g.Pieces[transportID].Owner = germany // our ship, in "UK" water
+
+	if err := ValidateLoad(g, transportID, infantryID, "Germany"); err != nil {
+		t.Errorf("loading our own transport in nominally foreign water refused: %v", err)
+	}
+
+	// An enemy transport in the same water is not ours to load.
+	g.Pieces[transportID].Owner = uk
+	if err := ValidateLoad(g, transportID, infantryID, "Germany"); err == nil {
+		t.Error("loading our infantry into an enemy transport was allowed")
+	}
+}
