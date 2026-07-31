@@ -66,18 +66,24 @@ func (n NeutralType) String() string {
 	}
 }
 
+// ParseNeutralType accepts the spellings a .gdf may use.
+//
+// The single-word forms ("proallied", "proaxis") are the ones the board file
+// uses: they survive any tokeniser, whereas the underscore and hyphen forms
+// depend on those characters being valid inside an identifier.
 func ParseNeutralType(s string) (NeutralType, error) {
 	switch s {
-	case "strict", "strict_neutral":
+	case "strict", "strict_neutral", "strictneutral":
 		return StrictNeutral, nil
-	case "pro_allied", "pro-allied":
+	case "proallied", "pro_allied", "pro-allied":
 		return ProAlliedNeutral, nil
-	case "pro_axis", "pro-axis":
+	case "proaxis", "pro_axis", "pro-axis":
 		return ProAxisNeutral, nil
-	case "not_neutral", "":
+	case "not_neutral", "notneutral", "none", "":
 		return NotNeutral, nil
 	default:
-		return NotNeutral, fmt.Errorf("unknown neutral type: %s", s)
+		return NotNeutral, fmt.Errorf(
+			"unknown neutrality %q (want strict, proallied or proaxis)", s)
 	}
 }
 
@@ -130,6 +136,19 @@ type Piece struct {
 	CanCarry  []string
 	Holding   []int // piece IDs
 	Hits      int   // Number of hits taken (for multi-hit units like battleships)
+
+	// ID is the key this piece is stored under in Game.Pieces. Carrying it on
+	// the piece removes the need to scan the whole map by pointer identity just
+	// to answer "which piece is this?".
+	ID int
+
+	// Owner is the power the piece belongs to.
+	//
+	// Ownership used to be inferred from whichever territory a piece happened to
+	// be sitting in, which is wrong the moment a piece is in transit, in a
+	// captured territory, or aboard a transport -- and it is why movement
+	// validation could not tell your units from the enemy's.
+	Owner *Player `json:"-"`
 }
 
 // Player represents a player in the game
@@ -142,6 +161,15 @@ type Player struct {
 	PieceTemplates map[string]*Piece
 	Capital        string // Name of capital territory
 	Side           string // "Axis" or "Allies"
+
+	// TakesTurns distinguishes a playable power from a bookkeeping entry.
+	//
+	// The Players line in a .gdf doubles as the turn order, and aaa.gdf lists
+	// "Neutral" there so unclaimed territories have an owner. Without this flag
+	// Neutral takes a full turn of its own: purchasing units and collecting
+	// income from a dozen territories. It is set for any power named in the
+	// Sides section.
+	TakesTurns bool
 }
 
 // Territory represents a location on the game board
@@ -174,6 +202,25 @@ type Game struct {
 
 	// Combat tracking (will be populated in combat phase)
 	PendingBattles  []string                   // Territory names where battles will occur
+
+	// VictoryCitiesEnabled turns the victory-city win condition on and off at
+	// play time. The cities themselves are always present in the board data;
+	// this only controls whether holding them ends the game.
+	VictoryCitiesEnabled bool
+
+	// unitRegistry is derived from GlobalPieceTemplates on first use.
+	unitRegistry *UnitRegistry
+}
+
+// TurnTakingPowers returns the powers that actually play, in turn order.
+func (g *Game) TurnTakingPowers() []string {
+	out := make([]string, 0, len(g.PlayerOrder))
+	for _, name := range g.PlayerOrder {
+		if player, ok := g.Players[name]; ok && player.TakesTurns {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // NewGame creates a new Game instance
@@ -284,7 +331,13 @@ func determineNeutralType(ownerName, territoryName string, terrain TerrainType) 
 	return ProAlliedNeutral
 }
 
-// ConnectTerritories creates a connection between two territories
+// ConnectTerritories creates a connection between two territories.
+//
+// Adjacency is symmetric: both directions are recorded. The .gdf Map section
+// normally declares each edge from both endpoints, but it is not required to,
+// and several edges in aaa.gdf were only ever declared from one side. Recording
+// just from->to made those edges one-way in the engine, so (for example) a fleet
+// in Madagascar Sea could never invade Madagascar.
 func (g *Game) ConnectTerritories(from, to string) error {
 	fromTerr, exists := g.Board[from]
 	if !exists {
@@ -296,15 +349,19 @@ func (g *Game) ConnectTerritories(from, to string) error {
 		return fmt.Errorf("territory %s not found", to)
 	}
 
-	// Check if connection already exists
-	for _, t := range fromTerr.ConnectedTo {
-		if t == toTerr {
-			return nil // Already connected
+	connect(fromTerr, toTerr)
+	connect(toTerr, fromTerr)
+	return nil
+}
+
+// connect appends dst to src's adjacency list if it is not already present.
+func connect(src, dst *Territory) {
+	for _, t := range src.ConnectedTo {
+		if t == dst {
+			return
 		}
 	}
-
-	fromTerr.ConnectedTo = append(fromTerr.ConnectedTo, toTerr)
-	return nil
+	src.ConnectedTo = append(src.ConnectedTo, dst)
 }
 
 // AddPieceTemplate adds a piece template to the global templates
@@ -359,11 +416,13 @@ func (g *Game) PlacePieces(territoryName, pieceType string, count int) error {
 			Capacity: template.Capacity,
 			CanCarry: make([]string, len(template.CanCarry)),
 			Holding:  make([]int, 0),
+			Owner:    territory.Owner,
 		}
 		copy(piece.CanCarry, template.CanCarry)
 
 		pieceID := g.NextPieceID
 		g.NextPieceID++
+		piece.ID = pieceID
 		g.Pieces[pieceID] = piece
 		territory.Pieces = append(territory.Pieces, pieceID)
 	}

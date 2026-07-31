@@ -93,21 +93,16 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 
 	// Check if we should buy a factory first
 	// Only consider if we have enough IPCs and a good territory without a factory
-	factoryTemplate, hasFactory := game.GlobalPieceTemplates["factory"]
-	if !hasFactory {
-		// Try alternative name
-		factoryTemplate, hasFactory = game.GlobalPieceTemplates["industrial_complex"]
-	}
+	// Find whatever this board calls its factory, rather than guessing at names.
+	// The old code looked up "factory" then "industrial_complex"; a board using
+	// any other spelling meant the AI could never build one.
+	factoryName, factoryTemplate, hasFactory := findStructureTemplate(game)
 
 	if hasFactory && player.IPCs >= int(factoryTemplate.Cost)+20 {
 		// Find high-value territories without factories
 		bestTerritory := npc.findBestTerritoryForFactory(game, player)
 		if bestTerritory != nil && bestTerritory.Production >= 3 {
 			// Buy one factory if we can afford it and still have money for units
-			factoryName := factoryTemplate.Name
-			if factoryName == "" {
-				factoryName = "factory" // default
-			}
 			err := controller.PurchaseUnit(factoryName, 1)
 			if err == nil {
 				spent += int(factoryTemplate.Cost)
@@ -118,34 +113,46 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 
 	// Priority order: infantry (cheap), armor (strong), fighters (versatile)
 	unitPriorities := []string{"infantry", "armor", "fighter"}
+	unaffordable := make(map[string]bool)
 
 	for spent < budget {
-		// Pick a unit type to buy
+		// Pick a unit type to buy.
+		//
+		// A failed purchase must end the loop, not be swallowed. The previous
+		// version discarded the error and broke out of the inner loop either
+		// way, leaving `spent` unchanged -- so if PurchaseUnit refused for a
+		// reason unrelated to cost (chiefly being called outside the Purchase
+		// phase, which the web server does) the outer loop span forever and took
+		// the request with it.
+		bought := false
 		for _, unitType := range unitPriorities {
 			template, exists := game.GlobalPieceTemplates[unitType]
 			if !exists {
 				continue
 			}
+			if unaffordable[unitType] {
+				continue
+			}
 
 			cost := int(template.Cost)
-			if spent+cost <= budget {
-				err := controller.PurchaseUnit(unitType, 1)
-				if err == nil {
-					spent += cost
-					purchases[unitType]++
-				}
-				break
+			if spent+cost > budget {
+				continue
 			}
-		}
 
-		// If we can't afford anything from priority list, try to buy the cheapest unit
-		if spent == player.IPCs*8/10 {
+			if err := controller.PurchaseUnit(unitType, 1); err != nil {
+				// Not a budget problem: stop trying this unit type rather than
+				// asking again with the same arguments and the same answer.
+				unaffordable[unitType] = true
+				continue
+			}
+			spent += cost
+			purchases[unitType]++
+			bought = true
 			break
 		}
 
-		// Prevent infinite loop
-		if spent >= budget-2 {
-			break
+		if !bought {
+			break // nothing left that we can afford or are allowed to buy
 		}
 	}
 
@@ -550,8 +557,7 @@ func (npc *NPCAIPlayer) MobilizePhase(controller *GameController, transcript *Ga
 
 		for _, pieceID := range territory.Pieces {
 			piece := game.Pieces[pieceID]
-			// Check for both "factory" (from aaa.gdf) and "industrial_complex" (alternative name)
-			if piece.Name == "factory" || piece.Name == "industrial_complex" {
+			if game.Units().For(piece).IsStructure {
 				icTerritories = append(icTerritories, territory)
 				break
 			}
@@ -709,7 +715,8 @@ func (npc *NPCAIPlayer) findAttackersFor(game *models.Game, player *models.Playe
 			// Filter out immobile pieces and industrial complexes
 			attackingPieces := make([]*models.Piece, 0)
 			for _, piece := range pieces {
-				if piece.Movement > 0 && piece.Name != "factory" && piece.Name != "industrial_complex" && piece.Name != "AAA" {
+				caps := game.Units().For(piece)
+				if piece.Movement > 0 && !caps.IsStructure && !caps.IsAA {
 					attackingPieces = append(attackingPieces, piece)
 				}
 			}
@@ -767,12 +774,12 @@ func (npc *NPCAIPlayer) findSafeTerritories(game *models.Game, player *models.Pl
 
 // findPieceID finds the piece ID for a given piece in the game
 func findPieceID(game *models.Game, piece *models.Piece) int {
-	for id, p := range game.Pieces {
-		if p == piece {
-			return id
-		}
+	if piece == nil {
+		return -1
 	}
-	return -1
+	// Pieces carry their own ID, so this no longer walks the whole board by
+	// pointer identity to answer a question the piece already knows.
+	return piece.ID
 }
 
 // findBestTerritoryForFactory finds the best territory to build a new factory
@@ -791,7 +798,7 @@ func (npc *NPCAIPlayer) findBestTerritoryForFactory(game *models.Game, player *m
 		hasFactory := false
 		for _, pieceID := range territory.Pieces {
 			piece := game.Pieces[pieceID]
-			if piece.Name == "factory" || piece.Name == "industrial_complex" {
+			if game.Units().For(piece).IsStructure {
 				hasFactory = true
 				break
 			}
@@ -862,7 +869,7 @@ func (npc *NPCAIPlayer) evaluateTerritoryThreat(game *models.Game, territory *mo
 		// Count enemy mobile units (those that can attack)
 		enemyAttackPower := 0
 		for _, piece := range enemyPieces {
-			if piece.Movement > 0 && piece.Name != "factory" && piece.Name != "industrial_complex" {
+			if piece.Movement > 0 && !game.Units().For(piece).IsStructure {
 				enemyAttackPower += int(piece.Attack)
 			}
 		}
@@ -915,7 +922,7 @@ func (npc *NPCAIPlayer) wouldLeaveTerritoryVulnerable(game *models.Game, territo
 		enemyPieces := game.GetPiecesInTerritory(neighbor.Name)
 		enemyAttack := 0
 		for _, piece := range enemyPieces {
-			if piece.Movement > 0 && piece.Name != "factory" && piece.Name != "industrial_complex" {
+			if piece.Movement > 0 && !game.Units().For(piece).IsStructure {
 				enemyAttack += int(piece.Attack)
 			}
 		}
@@ -950,4 +957,17 @@ func (npc *NPCAIPlayer) identifyStrategicTargets(game *models.Game, player *mode
 	}
 
 	return targets
+}
+
+
+// findStructureTemplate returns the board's buildable structure -- its factory
+// or industrial complex -- under whatever name the board gives it.
+func findStructureTemplate(game *models.Game) (string, *models.Piece, bool) {
+	registry := game.Units()
+	for name, template := range game.GlobalPieceTemplates {
+		if registry.Of(name).IsStructure {
+			return name, template, true
+		}
+	}
+	return "", nil, false
 }

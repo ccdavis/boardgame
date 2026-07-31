@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"time"
 )
 
@@ -38,14 +39,21 @@ func (bt BattleType) String() string {
 
 // Battle represents a combat encounter
 type Battle struct {
-	Location      string
-	Type          BattleType
-	Attackers     []*models.Piece
-	Defenders     []*models.Piece
-	AttackerID    string // Player name
-	DefenderID    string // Player name
-	Round         int
+	Location          string
+	Type              BattleType
+	Attackers         []*models.Piece
+	Defenders         []*models.Piece
+	AttackerID        string // Player name
+	DefenderID        string // Player name
+	Round             int
 	AttackingPieceIDs []int // Track which pieces are attackers
+
+	// AttackerOrigins records where each attacking piece came from, so survivors
+	// of a broken-off attack can be put back. Attackers are physically moved
+	// into the contested territory before combat, and nothing used to move them
+	// out again on retreat -- they stayed inside enemy territory and were
+	// counted as *defenders* of that enemy in the next battle fought there.
+	AttackerOrigins map[int]string
 }
 
 // Hit represents a successful hit in combat
@@ -57,14 +65,14 @@ type Hit struct {
 
 // BattleResult contains the outcome of a battle
 type BattleResult struct {
-	AttackerWins         bool
-	DefenderWins         bool
-	AttackerCasualties   []*models.Piece
-	DefenderCasualties   []*models.Piece
-	AttackersRemaining   []*models.Piece
-	DefendersRemaining   []*models.Piece
-	Rounds               int
-	AttackerRetreated    bool
+	AttackerWins       bool
+	DefenderWins       bool
+	AttackerCasualties []*models.Piece
+	DefenderCasualties []*models.Piece
+	AttackersRemaining []*models.Piece
+	DefendersRemaining []*models.Piece
+	Rounds             int
+	AttackerRetreated  bool
 }
 
 // DiceRoller provides dice rolling functionality
@@ -102,11 +110,18 @@ func (dr *DiceRoller) RollDice(count int) []int {
 
 // CombatRound executes one round of combat with submarine surprise strikes
 // Returns hits and units that were removed before they could fire
-func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderHits []Hit, surpriseStrikeCasualties []*models.Piece) {
+// CombatRound fights one round.
+//
+// Surprise-strike losses are returned per side. They used to come back as a
+// single merged list, and the caller appended that same list to *both* sides'
+// casualties -- so every submarine kill was reported as a loss for the killer
+// as well as the victim, and both were then removed from the board.
+func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderHits []Hit, surprise SurpriseLosses) {
 	battle.Round++
 	attackerHits = make([]Hit, 0)
 	defenderHits = make([]Hit, 0)
-	surpriseStrikeCasualties = make([]*models.Piece, 0)
+	surprise.Attacker = make([]*models.Piece, 0)
+	surprise.Defender = make([]*models.Piece, 0)
 
 	// STEP 2: Submarine Surprise Strike (only in sea battles)
 	if battle.Type == SeaBattle {
@@ -131,7 +146,7 @@ func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderH
 			if len(attackerHits) > 0 {
 				// Casualties from surprise strikes cannot hit submarines with air
 				casualties := SelectCasualtiesAvoidingAir(battle.Defenders, len(attackerHits), !defenderHasDestroyer)
-				surpriseStrikeCasualties = append(surpriseStrikeCasualties, casualties...)
+				surprise.Defender = append(surprise.Defender, casualties...)
 				battle.Defenders = RemoveCasualties(battle.Defenders, casualties)
 			}
 		}
@@ -153,7 +168,7 @@ func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderH
 			// Select casualties from attacker - these units don't get to fire back
 			if len(defenderHits) > 0 {
 				casualties := SelectCasualtiesAvoidingAir(battle.Attackers, len(defenderHits), !attackerHasDestroyer)
-				surpriseStrikeCasualties = append(surpriseStrikeCasualties, casualties...)
+				surprise.Attacker = append(surprise.Attacker, casualties...)
 				battle.Attackers = RemoveCasualties(battle.Attackers, casualties)
 			}
 		}
@@ -182,7 +197,7 @@ func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderH
 		attackerHits = append(attackerHits, subHits...)
 	}
 
-	return attackerHits, defenderHits, surpriseStrikeCasualties
+	return attackerHits, defenderHits, surprise
 }
 
 // RollForNonSubmarineUnits rolls for all non-submarine units
@@ -210,12 +225,34 @@ func (dr *DiceRoller) RollForNonSubmarineUnits(units []*models.Piece, isAttackin
 	return hits
 }
 
-// SelectCasualtiesAvoidingAir selects casualties but avoids assigning hits from air units to submarines
+// SelectCasualtiesAvoidingAir selects casualties, optionally sparing submarines.
+//
+// A submerged submarine cannot be hit by aircraft, and in a fleet with no
+// destroyer to hold it down that means aircraft cannot target it at all. This
+// was a passthrough to SelectCasualties that ignored its own flag, so
+// submarines were freely killed by air units the rules say cannot reach them.
 func SelectCasualtiesAvoidingAir(units []*models.Piece, hitCount int, subsCannotBeHitByAir bool) []*models.Piece {
-	// For now, use the regular SelectCasualties
-	// In a full implementation, this would need to track which hits came from air units
-	// and avoid assigning them to submarines
-	return SelectCasualties(units, hitCount)
+	if !subsCannotBeHitByAir {
+		return SelectCasualties(units, hitCount)
+	}
+
+	// Split out the submarines, take casualties from everything else first, and
+	// only fall back to submarines when nothing else is left to lose.
+	targetable := make([]*models.Piece, 0, len(units))
+	protected := make([]*models.Piece, 0)
+	for _, unit := range units {
+		if unitRules.For(unit).IsSubmarine {
+			protected = append(protected, unit)
+		} else {
+			targetable = append(targetable, unit)
+		}
+	}
+
+	casualties := SelectCasualties(targetable, hitCount)
+	if remaining := hitCount - len(casualties); remaining > 0 && len(protected) > 0 {
+		casualties = append(casualties, SelectCasualties(protected, remaining)...)
+	}
+	return casualties
 }
 
 // RollForUnits rolls dice for all units and returns hits
@@ -241,12 +278,33 @@ func (dr *DiceRoller) RollForUnits(units []*models.Piece, isAttacking bool) []Hi
 	return hits
 }
 
-// Helper functions for submarine and destroyer mechanics
+// SurpriseLosses separates the units each side loses to submarine first strike.
+type SurpriseLosses struct {
+	Attacker []*models.Piece // attacking units killed by defending submarines
+	Defender []*models.Piece // defending units killed by attacking submarines
+}
 
-// hasDestroyer checks if there's a destroyer in the unit list
+// Helper functions for submarine and destroyer mechanics.
+//
+// These ask the unit registry rather than comparing names. They used to test
+// for "submarine" and "destroyer" literally, which meant none of them ever
+// matched against aaa.gdf -- the board calls the unit "sub" and declares no
+// destroyer at all -- so submarine first strike and destroyer negation were
+// silently inert in every real game while their tests passed against fixtures
+// that used the other spelling.
+var unitRules = models.BuildUnitRegistry(nil)
+
+// SetUnitRegistry points combat at a board's unit roster.
+func SetUnitRegistry(registry *models.UnitRegistry) {
+	if registry != nil {
+		unitRules = registry
+	}
+}
+
+// hasDestroyer checks whether any unit cancels submarine abilities
 func hasDestroyer(units []*models.Piece) bool {
 	for _, unit := range units {
-		if unit.Name == "destroyer" {
+		if unitRules.For(unit).NegatesSubmarines {
 			return true
 		}
 	}
@@ -257,7 +315,7 @@ func hasDestroyer(units []*models.Piece) bool {
 func getSubmarines(units []*models.Piece) []*models.Piece {
 	subs := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unit.Name == "submarine" {
+		if unitRules.For(unit).IsSubmarine {
 			subs = append(subs, unit)
 		}
 	}
@@ -268,7 +326,7 @@ func getSubmarines(units []*models.Piece) []*models.Piece {
 func getNonSubmarines(units []*models.Piece) []*models.Piece {
 	nonSubs := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unit.Name != "submarine" {
+		if !unitRules.For(unit).IsSubmarine {
 			nonSubs = append(nonSubs, unit)
 		}
 	}
@@ -290,7 +348,7 @@ func getAirUnits(units []*models.Piece) []*models.Piece {
 func getSeaUnits(units []*models.Piece) []*models.Piece {
 	seaUnits := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unit.Terrain == models.Water && unit.Name != "submarine" {
+		if unit.Terrain == models.Water && !unitRules.For(unit).IsSubmarine {
 			seaUnits = append(seaUnits, unit)
 		}
 	}
@@ -301,7 +359,7 @@ func getSeaUnits(units []*models.Piece) []*models.Piece {
 func getBombardmentShips(units []*models.Piece) []*models.Piece {
 	ships := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unit.Name == "battleship" || unit.Name == "cruiser" {
+		if unitRules.For(unit).CanBombard {
 			ships = append(ships, unit)
 		}
 	}
@@ -381,7 +439,7 @@ func (dr *DiceRoller) RollBombardment(bombardingShips []*models.Piece, unitsBein
 // StrategicBombingResult contains the outcome of a strategic bombing raid
 type StrategicBombingResult struct {
 	TotalBombers     int
-	BombersDestroyed int   // Shot down by AA
+	BombersDestroyed int // Shot down by AA
 	BombersSurvived  int
 	DamageRolls      []int // Damage from each surviving bomber
 	TotalDamage      int
@@ -416,9 +474,9 @@ func ResolveStrategicBombing(bombers []*models.Piece, diceRoller *DiceRoller) (*
 	}
 
 	result := &StrategicBombingResult{
-		TotalBombers:    len(bombers),
-		DamageRolls:     make([]int, 0),
-		AAHits:          make([]Hit, 0),
+		TotalBombers: len(bombers),
+		DamageRolls:  make([]int, 0),
+		AAHits:       make([]Hit, 0),
 	}
 
 	// STEP 1: IC AA Defense
@@ -498,7 +556,7 @@ func ApplyArtillerySupport(units []*models.Piece) {
 
 	// Count artillery and infantry
 	for _, unit := range units {
-		if unit.Name == "artillery" {
+		if unitRules.For(unit).SupportsInfantry {
 			artilleryCount++
 		} else if unit.Name == "infantry" && unit.Attack == 1 {
 			infantryNeedingSupport = append(infantryNeedingSupport, unit)
@@ -512,18 +570,29 @@ func ApplyArtillerySupport(units []*models.Piece) {
 	}
 
 	for i := 0; i < supportCount; i++ {
+		boostedInfantry[infantryNeedingSupport[i]] = infantryNeedingSupport[i].Attack
 		infantryNeedingSupport[i].Attack = 2
 	}
 }
 
 // RemoveArtillerySupport resets infantry attack values
+// RemoveArtillerySupport undoes the boost applied by ApplyArtillerySupport.
+//
+// It restores each boosted unit to the attack value it actually had. Matching
+// on "infantry with attack 2" instead would demote infantry whose base attack is
+// 2 on some other board, permanently weakening units that were never boosted.
 func RemoveArtillerySupport(units []*models.Piece) {
 	for _, unit := range units {
-		if unit.Name == "infantry" && unit.Attack == 2 {
-			unit.Attack = 1
+		if original, boosted := boostedInfantry[unit]; boosted {
+			unit.Attack = original
+			delete(boostedInfantry, unit)
 		}
 	}
 }
+
+// boostedInfantry records the pre-boost attack value of each supported unit, so
+// the boost can be undone exactly.
+var boostedInfantry = make(map[*models.Piece]int16)
 
 // SelectCasualties selects which units to remove as casualties
 // Handles multi-hit units like battleships (require 2 hits to destroy)
@@ -534,44 +603,52 @@ func SelectCasualties(units []*models.Piece, hitCount int) []*models.Piece {
 
 	casualties := make([]*models.Piece, 0)
 
-	// Sort units by cost (ascending) to prefer removing cheap units
+	// Cheapest first, so the expensive units survive longest.
 	sortedUnits := make([]*models.Piece, len(units))
 	copy(sortedUnits, units)
-
-	// Simple bubble sort by cost
-	for i := 0; i < len(sortedUnits); i++ {
-		for j := i + 1; j < len(sortedUnits); j++ {
-			if sortedUnits[i].Cost > sortedUnits[j].Cost {
-				sortedUnits[i], sortedUnits[j] = sortedUnits[j], sortedUnits[i]
-			}
-		}
-	}
+	sort.SliceStable(sortedUnits, func(i, j int) bool {
+		return sortedUnits[i].Cost < sortedUnits[j].Cost
+	})
 
 	// Apply hits
 	for hitCount > 0 && len(sortedUnits) > 0 {
-		// Find the cheapest unit
 		unit := sortedUnits[0]
 
-		// Check if this is a battleship (2-hit unit)
-		if unit.Name == "battleship" {
+		// Multi-hit units absorb a hit and stay in the fight. How many hits a
+		// unit takes comes from the registry rather than a name comparison, so a
+		// board that calls its capital ship something else still works.
+		maxHits := unitRules.For(unit).MaxHits
+		if maxHits > 1 {
 			unit.Hits++
 			hitCount--
 
-			// Battleship is destroyed after 2 hits
-			if unit.Hits >= 2 {
+			if unit.Hits >= maxHits {
 				casualties = append(casualties, unit)
-				sortedUnits = sortedUnits[1:] // Remove from list
+				sortedUnits = sortedUnits[1:]
 			}
-			// If only 1 hit, battleship stays (damaged but functional)
-		} else {
-			// Regular unit - destroyed with 1 hit
-			casualties = append(casualties, unit)
-			sortedUnits = sortedUnits[1:]
-			hitCount--
+			continue
 		}
+
+		// Regular unit - destroyed with 1 hit
+		casualties = append(casualties, unit)
+		sortedUnits = sortedUnits[1:]
+		hitCount--
 	}
 
 	return casualties
+}
+
+// RepairDamagedUnits clears accumulated damage from surviving units.
+//
+// Damage is per-battle: a battleship that soaks a hit is at full strength for
+// the next engagement. Nothing ever reset Hits, so a damaged battleship stayed
+// a one-hit unit for the remainder of the game.
+func RepairDamagedUnits(units []*models.Piece) {
+	for _, unit := range units {
+		if unit != nil {
+			unit.Hits = 0
+		}
+	}
 }
 
 // RemoveCasualties removes casualties from the unit list
@@ -716,7 +793,7 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 	airUnits := make([]*models.Piece, 0)
 
 	for _, unit := range defenders {
-		if unit.Name == "AAA" {
+		if unitRules.For(unit).IsAA {
 			aaaUnits = append(aaaUnits, unit)
 		}
 	}
@@ -764,11 +841,12 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 		// Execute one combat round
 		battle.Attackers = attackers
 		battle.Defenders = defenders
-		attackerHits, defenderHits, surpriseCasualties := diceRoller.CombatRound(battle)
+		attackerHits, defenderHits, surprise := diceRoller.CombatRound(battle)
 
-		// Surprise casualties were already removed in CombatRound
-		result.AttackerCasualties = append(result.AttackerCasualties, surpriseCasualties...)
-		result.DefenderCasualties = append(result.DefenderCasualties, surpriseCasualties...)
+		// Surprise casualties were already removed from the battle in
+		// CombatRound; record each side's losses against that side.
+		result.AttackerCasualties = append(result.AttackerCasualties, surprise.Attacker...)
+		result.DefenderCasualties = append(result.DefenderCasualties, surprise.Defender...)
 
 		// Select and remove remaining casualties from regular combat
 		defenderCasualties := SelectCasualties(defenders, len(attackerHits))
@@ -788,6 +866,10 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 	// Remove artillery support from all original attackers (including casualties)
 	RemoveArtillerySupport(originalAttackers)
 
+	// Damage does not carry between battles.
+	RepairDamagedUnits(attackers)
+	RepairDamagedUnits(defenders)
+
 	result.AttackersRemaining = attackers
 	result.DefendersRemaining = defenders
 
@@ -805,6 +887,7 @@ func NewBattle(location string, battleType BattleType, attackerID, defenderID st
 		DefenderID:        defenderID,
 		Round:             0,
 		AttackingPieceIDs: make([]int, 0),
+		AttackerOrigins:   make(map[int]string),
 	}
 }
 
