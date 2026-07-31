@@ -932,3 +932,61 @@ func TestMobilize_ShipsLaunchIntoAdjacentSea(t *testing.T) {
 		t.Errorf("launched ship belongs to %v, want USSR", game.Pieces[shipID].Owner)
 	}
 }
+
+// Capturing a capital seizes the defender's treasury, and a power whose
+// capital is enemy-held collects no income until it is liberated.
+//
+// The Capitals grammar, the parser and the docs all promised the transfer;
+// nothing implemented it, so a capital was just another province.
+func TestCapitals_CaptureSeizesTreasuryAndStopsIncome(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+	controller.StartGame()
+
+	ussr := game.Players["USSR"]
+	germany := game.Players["Germany"]
+	ussr.Capital = "Moscow"
+	germany.Capital = "Germany"
+	ussr.IPCs = 37
+	germany.IPCs = 10
+
+	// A second Soviet province, so liberation leaves the USSR something to
+	// collect from even while Moscow itself sits in allied hands.
+	game.AddTerritory("Urals", models.Land, "USSR", 4)
+
+	if err := controller.CaptureTerritory("Moscow", "Germany"); err != nil {
+		t.Fatalf("capturing: %v", err)
+	}
+	if germany.IPCs != 47 {
+		t.Errorf("Germany holds %d IPCs after sacking Moscow, want 47", germany.IPCs)
+	}
+	if ussr.IPCs != 0 {
+		t.Errorf("USSR still holds %d IPCs after losing its capital", ussr.IPCs)
+	}
+
+	// With Moscow in German hands, the USSR collects nothing.
+	game.CurrentPower = "USSR"
+	game.CurrentPhase = models.CollectIncomePhase
+	if err := controller.CollectIncome(); err != nil {
+		t.Fatalf("collecting: %v", err)
+	}
+	if ussr.IPCs != 0 {
+		t.Errorf("USSR collected %d IPCs with its capital enemy-held, want 0", ussr.IPCs)
+	}
+
+	// Liberated, income flows again. (UK, an ally, retakes it -- liberation,
+	// not a second sack, so nothing is looted from anyone.)
+	ukIPCs := game.Players["UK"].IPCs
+	if err := controller.CaptureTerritory("Moscow", "UK"); err != nil {
+		t.Fatalf("liberating: %v", err)
+	}
+	if game.Players["UK"].IPCs != ukIPCs {
+		t.Errorf("liberation changed UK's treasury from %d to %d", ukIPCs, game.Players["UK"].IPCs)
+	}
+	if err := controller.CollectIncome(); err != nil {
+		t.Fatalf("collecting: %v", err)
+	}
+	if ussr.IPCs == 0 {
+		t.Error("USSR collected nothing with its capital back in allied hands")
+	}
+}

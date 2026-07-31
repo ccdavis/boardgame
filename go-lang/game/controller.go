@@ -145,11 +145,18 @@ func (gc *GameController) CalculateIncome(playerName string) (int, error) {
 	return income, nil
 }
 
-// CollectIncome adds income to the current player's treasury
+// CollectIncome adds income to the current player's treasury.
+//
+// A power whose capital is in enemy hands collects nothing: the treasury was
+// seized with the city, and no income flows until it is liberated.
 func (gc *GameController) CollectIncome() error {
 	player, err := gc.GetCurrentPlayer()
 	if err != nil {
 		return err
+	}
+
+	if gc.capitalHeldByEnemy(player) {
+		return nil
 	}
 
 	income, err := gc.CalculateIncome(player.Name)
@@ -752,7 +759,37 @@ func (gc *GameController) CaptureTerritory(territoryName, newOwnerName string) e
 		}
 	}
 
+	// Capturing a capital seizes its treasury. The Capitals section, the
+	// grammar and the docs all promised this; nothing implemented it, so a
+	// capital was just another province with a flag. Only an enemy loots --
+	// an ally walking into a fallen capital is liberating it, not sacking it.
+	for _, name := range gc.Game.PlayerOrder {
+		player := gc.Game.Players[name]
+		if player == nil || player == newOwner || player.Capital != territoryName {
+			continue
+		}
+		if areAllies(player, newOwner) {
+			continue
+		}
+		if player.IPCs > 0 {
+			newOwner.IPCs += player.IPCs
+			player.IPCs = 0
+		}
+	}
+
 	return nil
+}
+
+// capitalHeldByEnemy reports whether a power's capital is in enemy hands.
+func (gc *GameController) capitalHeldByEnemy(player *models.Player) bool {
+	if player.Capital == "" {
+		return false
+	}
+	capital, ok := gc.Game.Board[player.Capital]
+	if !ok || capital.Owner == nil || capital.Owner == player {
+		return false
+	}
+	return !areAllies(capital.Owner, player)
 }
 
 // removePieceFromBoard removes a piece from the game entirely
