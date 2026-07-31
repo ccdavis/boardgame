@@ -395,13 +395,16 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, session *G
 		return
 	}
 
-	// Check if it's the human player's turn
-	if !session.isHumanTurnLocked() {
+	actionType := parts[0]
+
+	// Every action belongs to the human player except running an NPC's turn,
+	// which by definition happens when it is NOT the human's turn. Gating it
+	// with the rest deadlocked the whole game: after the human's first turn the
+	// browser could neither act (not its turn) nor let the NPC act (same gate).
+	if actionType != "execute-npc-turn" && !session.isHumanTurnLocked() {
 		s.sendError(w, "Not your turn", http.StatusBadRequest)
 		return
 	}
-
-	actionType := parts[0]
 
 	switch actionType {
 	case "purchase":
