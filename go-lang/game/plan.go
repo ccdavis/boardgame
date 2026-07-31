@@ -137,13 +137,52 @@ const planStallLimit = 12
 // constructs one per request. State kept on the AI would be discarded between
 // turns, which is precisely the failure this is meant to fix.
 type PlanBook struct {
-	plans  map[string][]*AmphibiousPlan
-	nextID int
+	plans    map[string][]*AmphibiousPlan
+	defences map[string][]*DefencePlan
+	naval    map[string][]*NavalPlan
+	nextID   int
 }
 
 // NewPlanBook creates an empty plan book.
 func NewPlanBook() *PlanBook {
-	return &PlanBook{plans: make(map[string][]*AmphibiousPlan), nextID: 1}
+	return &PlanBook{
+		plans:    make(map[string][]*AmphibiousPlan),
+		defences: make(map[string][]*DefencePlan),
+		naval:    make(map[string][]*NavalPlan),
+		nextID:   1,
+	}
+}
+
+// Defences returns a power's garrison plans.
+func (pb *PlanBook) Defences(power string) []*DefencePlan {
+	if pb == nil {
+		return nil
+	}
+	return pb.defences[power]
+}
+
+// AddDefence records a new garrison plan.
+func (pb *PlanBook) AddDefence(plan *DefencePlan) *DefencePlan {
+	plan.ID = pb.nextID
+	pb.nextID++
+	pb.defences[plan.Power] = append(pb.defences[plan.Power], plan)
+	return plan
+}
+
+// Naval returns a power's squadrons.
+func (pb *PlanBook) Naval(power string) []*NavalPlan {
+	if pb == nil {
+		return nil
+	}
+	return pb.naval[power]
+}
+
+// AddNaval records a new squadron.
+func (pb *PlanBook) AddNaval(plan *NavalPlan) *NavalPlan {
+	plan.ID = pb.nextID
+	pb.nextID++
+	pb.naval[plan.Power] = append(pb.naval[plan.Power], plan)
+	return plan
 }
 
 // For returns a power's plans.
@@ -185,10 +224,28 @@ func (pb *PlanBook) Targets(power string) map[string]bool {
 }
 
 // Committed reports whether a piece is already assigned to some plan, so
-// ordinary movement does not wander off with an invasion force.
+// ordinary movement does not wander off with an invasion force, a garrison, or
+// a squadron under orders.
 func (pb *PlanBook) Committed(power string, pieceID int) bool {
+	if pb == nil {
+		return false
+	}
 	for _, plan := range pb.Active(power) {
 		for _, id := range plan.allPieces() {
+			if id == pieceID {
+				return true
+			}
+		}
+	}
+	for _, plan := range pb.Defences(power) {
+		for _, id := range plan.Garrison {
+			if id == pieceID {
+				return true
+			}
+		}
+	}
+	for _, plan := range pb.Naval(power) {
+		for _, id := range plan.Ships {
 			if id == pieceID {
 				return true
 			}

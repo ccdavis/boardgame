@@ -59,6 +59,8 @@ func (npc *NPCAIPlayer) TakeTurn(controller *GameController, transcript *GameTra
 	// makes the computer players non-stateless: a plan formed several turns ago
 	// tells this turn what to buy, where to march, and when to sail.
 	npc.ReviewPlans(controller, player, transcript)
+	npc.ReviewNaval(controller, player, transcript)
+	npc.ReviewDefences(controller, player, transcript)
 
 	// Phase 1: Purchase
 	err = npc.PurchasePhase(controller, transcript)
@@ -112,8 +114,14 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 
 	transcript.LogPhaseStart(player.Name, models.PurchasePhase)
 
-	// Simple strategy: spend about 80% of IPCs on a balanced force
+	// Spend about 80% of the treasury, divided by this power's temperament.
+	//
+	// The split is what makes the computer players differ from one another:
+	// Germany presses and keeps a thin garrison, Italy garrisons and rarely
+	// sails, the United States and the Soviet Union build the largest forces.
 	budget := player.IPCs * 8 / 10
+	posture := PostureFor(player.Name)
+	defenceBudget, _, offenceBudget := posture.Budget(budget)
 	spent := 0
 
 	purchases := make(map[string]int)
@@ -158,11 +166,36 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	}
 	spentOn := make(map[string]int)
 	unaffordable := make(map[string]bool)
+	_ = posture
 
-	// Standing plans get first call on the budget, but not all of it. An
-	// invasion short of shipping stays short forever if production ignores it;
-	// an invasion given the whole budget builds a fleet and no army to land.
-	planBudget := budget / 2
+	// Garrisons first: they are cheap, they are what a defensive power exists
+	// to buy, and an undefended factory loses the war quietly.
+	defenceSpent := 0
+	for _, unitType := range sortedWants(npc.DefencePurchases(controller, player)) {
+		count := npc.DefencePurchases(controller, player)[unitType]
+		template, exists := game.GlobalPieceTemplates[unitType]
+		if !exists {
+			continue
+		}
+		for i := 0; i < count; i++ {
+			cost := int(template.Cost)
+			if spent+cost > budget || defenceSpent+cost > defenceBudget {
+				break
+			}
+			if err := controller.PurchaseUnit(unitType, 1); err != nil {
+				break
+			}
+			spent += cost
+			defenceSpent += cost
+			spentOn[unitType] += cost
+			purchases[unitType]++
+		}
+	}
+
+	// Expeditionary work takes its own share. An invasion short of shipping
+	// stays short forever if production ignores it; one given the whole budget
+	// builds a fleet and no army to land.
+	planBudget := offenceBudget
 	planSpent := 0
 
 	for unitType, count := range npc.PlanPurchases(controller, player) {
@@ -475,6 +508,7 @@ func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcrip
 	// ordinary logic scattering an invasion force that has been assembling for
 	// several turns.
 	movesMade := npc.GatherForPlans(controller, player, transcript)
+	movesMade += npc.SailNavalPlans(controller, player, transcript)
 
 	// Identify strategic targets (victory cities)
 	strategicTargets := npc.identifyStrategicTargets(game, player)

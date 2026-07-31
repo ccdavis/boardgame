@@ -283,8 +283,15 @@ func (npc *NPCAIPlayer) ReviewPlans(gc *GameController, player *models.Player, t
 	for _, plan := range gc.Plans.For(player.Name) {
 		before := plan.State
 		plan.Review(gc)
-		if plan.State != before {
-			transcript.LogAction(player.Name, plan.Describe())
+		if plan.State == before {
+			continue
+		}
+		transcript.LogAction(player.Name, plan.Describe())
+
+		// A finished operation leaves warships in a foreign sea. Give them
+		// orders rather than letting them drift out of the war.
+		if plan.State == PlanSucceeded || plan.State == PlanAbandoned {
+			npc.DisposeOfEscorts(gc, player, plan, transcript)
 		}
 	}
 
@@ -456,4 +463,15 @@ func carriesLandUnits(g *models.Game, template *models.Piece) bool {
 		}
 	}
 	return false
+}
+
+// sortedWants orders a purchase list so production is deterministic for a given
+// seed rather than following Go's map iteration.
+func sortedWants(wanted map[string]int) []string {
+	names := make([]string, 0, len(wanted))
+	for name := range wanted {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
