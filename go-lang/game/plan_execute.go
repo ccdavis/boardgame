@@ -116,6 +116,91 @@ func (npc *NPCAIPlayer) sailConvoy(gc *GameController, player *models.Player, pl
 	return moved
 }
 
+// ForceConvoysThrough moves a covered convoy into water an enemy fleet is
+// holding.
+//
+// Called during combat movement, because entering an occupied sea zone is an
+// attack. A stationed warship should slow a landing, not forbid it outright:
+// with cover the convoy fights its way past, and without cover it waits for
+// escorts rather than feeding transports to a destroyer.
+func (npc *NPCAIPlayer) ForceConvoysThrough(gc *GameController, player *models.Player, transcript *GameTranscript) int {
+	if gc.Plans == nil {
+		return 0
+	}
+	g := gc.Game
+	forced := 0
+
+	for _, plan := range gc.Plans.Active(player.Name) {
+		if plan.State != PlanEmbarked || plan.Contested == 0 {
+			continue
+		}
+		// Only fight through if the convoy can expect to win the action.
+		if plan.EscortStrength(g) < plan.WantEscort {
+			continue
+		}
+
+		blocked := nextContestedLeg(g, plan, player)
+		if blocked == "" {
+			continue
+		}
+
+		escorts := 0
+		for _, id := range plan.Escorts {
+			from := territoryOf(g, id)
+			if from == nil {
+				continue
+			}
+			if err := gc.PlanMove(id, from.Name, blocked); err == nil {
+				escorts++
+			}
+		}
+		if escorts == 0 {
+			continue // nothing could get there to fight; do not send the transports
+		}
+
+		for _, id := range plan.Ships {
+			from := territoryOf(g, id)
+			if from == nil || len(g.Pieces[id].Holding) == 0 {
+				continue
+			}
+			if err := gc.PlanMove(id, from.Name, blocked); err == nil {
+				forced++
+			}
+		}
+
+		transcript.LogAction(player.Name, fmt.Sprintf(
+			"plan %d: forcing a passage through %s with %d escorts",
+			plan.ID, blocked, escorts))
+		plan.LastProgress = g.Turn
+	}
+	return forced
+}
+
+// nextContestedLeg returns the enemy-held sea zone standing between the convoy
+// and its destination, if the convoy is adjacent to one on its route.
+func nextContestedLeg(g *models.Game, plan *AmphibiousPlan, player *models.Player) string {
+	for _, id := range plan.Ships {
+		ship, ok := g.Pieces[id]
+		if !ok || len(ship.Holding) == 0 {
+			continue
+		}
+		at := territoryOf(g, id)
+		if at == nil {
+			continue
+		}
+		for _, next := range at.ConnectedTo {
+			if next.Terrain != models.Water || !occupiedByEnemy(g, next, player) {
+				continue
+			}
+			// Only worth fighting for if it is actually on the way.
+			if onward, _ := seaRouteCost(g, next.Name, plan.DropZone, player); len(onward) > 0 {
+				return next.Name
+			}
+		}
+	}
+	return ""
+}
+
 // gatherTroops walks committed land units toward the port.
 func (npc *NPCAIPlayer) gatherTroops(gc *GameController, player *models.Player, plan *AmphibiousPlan, transcript *GameTranscript) int {
 	g := gc.Game

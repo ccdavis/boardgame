@@ -159,9 +159,12 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	spentOn := make(map[string]int)
 	unaffordable := make(map[string]bool)
 
-	// Standing plans get first call on the budget. An invasion that is short of
-	// shipping stays short forever if production is decided without reference to
-	// it -- which is why no transport was ever built.
+	// Standing plans get first call on the budget, but not all of it. An
+	// invasion short of shipping stays short forever if production ignores it;
+	// an invasion given the whole budget builds a fleet and no army to land.
+	planBudget := budget / 2
+	planSpent := 0
+
 	for unitType, count := range npc.PlanPurchases(controller, player) {
 		template, exists := game.GlobalPieceTemplates[unitType]
 		if !exists {
@@ -169,13 +172,14 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 		}
 		for i := 0; i < count; i++ {
 			cost := int(template.Cost)
-			if spent+cost > budget {
+			if spent+cost > budget || planSpent+cost > planBudget {
 				break
 			}
 			if err := controller.PurchaseUnit(unitType, 1); err != nil {
 				break
 			}
 			spent += cost
+			planSpent += cost
 			spentOn[unitType] += cost
 			purchases[unitType]++
 		}
@@ -361,6 +365,10 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 	// all happen in this phase, so an operation that has been forming for
 	// several turns executes here in one go.
 	launched := npc.ExecuteReadyPlans(controller, player, transcript)
+
+	// A convoy held up by a stationed fleet fights its way past, provided it
+	// has the cover to do so.
+	npc.ForceConvoysThrough(controller, player, transcript)
 
 	// Execute all combat moves
 	err := controller.ExecuteCombatMoves()

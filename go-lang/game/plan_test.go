@@ -202,14 +202,23 @@ func TestPlan_SucceedsWhenTheTargetIsTaken(t *testing.T) {
 	}
 }
 
-// A route is only useful if the convoy can actually take it, so enemy fleets
-// close a passage rather than being sailed through.
-func TestSeaRoute_AvoidsEnemyFleets(t *testing.T) {
+// Enemy shipping makes a passage expensive, not impossible.
+//
+// Treating it as impassable meant one destroyer parked off a coast forbade any
+// landing there for the rest of the game. A convoy should prefer open water and
+// go round -- but where there is no way round, it should still find the route
+// and be told the crossing is contested, so it can bring something to fight
+// with.
+func TestSeaRoute_PrefersOpenWaterButStillFindsAContestedOne(t *testing.T) {
 	g, _ := invasionBoard(t)
 	germany := g.Players["Germany"]
 
-	if open := seaRouteFor(g, "Home Sea", "Island Sea", germany); len(open) == 0 {
-		t.Fatal("expected an open route before any blockade")
+	route, contested := seaRouteCost(g, "Home Sea", "Island Sea", germany)
+	if len(route) == 0 {
+		t.Fatal("expected a route before any blockade")
+	}
+	if contested != 0 {
+		t.Errorf("open water reported %d contested zones", contested)
 	}
 
 	// Park a UK destroyer in the only intervening sea zone.
@@ -220,12 +229,76 @@ func TestSeaRoute_AvoidsEnemyFleets(t *testing.T) {
 		g.Pieces[id].Owner = g.Players["UK"]
 	}
 
-	if blocked := seaRouteFor(g, "Home Sea", "Island Sea", germany); len(blocked) != 0 {
-		t.Errorf("route %v runs through an enemy fleet", blocked)
+	route, contested = seaRouteCost(g, "Home Sea", "Island Sea", germany)
+	if len(route) == 0 {
+		t.Fatal("a guarded sea zone should not make the crossing impossible")
 	}
-	// Ignoring ownership, the passage still exists.
-	if ignoring := seaRoute(g, "Home Sea", "Island Sea"); len(ignoring) == 0 {
-		t.Error("the geographic route should still be found when enemies are ignored")
+	if contested == 0 {
+		t.Error("the route runs through a guarded zone but was not reported contested")
+	}
+}
+
+// Where a way round exists, take it.
+func TestSeaRoute_GoesAroundAGuardedZone(t *testing.T) {
+	g, _ := invasionBoard(t)
+	germany := g.Players["Germany"]
+
+	// An alternative passage: Home Sea -- Far Sea -- Island Sea.
+	g.AddTerritory("Far Sea", models.Water, "Germany", 0)
+	g.ConnectTerritories("Home Sea", "Far Sea")
+	g.ConnectTerritories("Far Sea", "Island Sea")
+
+	if err := g.PlacePieces("Mid Sea", "destroyer", 1); err != nil {
+		t.Fatalf("placing blockade: %v", err)
+	}
+	for _, id := range g.Board["Mid Sea"].Pieces {
+		g.Pieces[id].Owner = g.Players["UK"]
+	}
+
+	route, contested := seaRouteCost(g, "Home Sea", "Island Sea", germany)
+	if contested != 0 {
+		t.Errorf("took a contested route %v when a clear one existed", route)
+	}
+	for _, name := range route {
+		if name == "Mid Sea" {
+			t.Errorf("route %v sails through the blockade instead of round it", route)
+		}
+	}
+}
+
+// The covering force is sized to what is actually in the way: nothing where
+// nobody is watching, and enough to win where somebody is.
+func TestEscortNeeded_ScalesWithOpposition(t *testing.T) {
+	g, controller := invasionBoard(t)
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc.ReviewPlans(controller, g.Players["Germany"], NewGameTranscript("t"))
+	plan := controller.Plans.Active("Germany")[0]
+
+	if plan.WantEscort != 0 {
+		t.Errorf("an unguarded crossing asked for %d escort strength, want 0", plan.WantEscort)
+	}
+
+	// Cover the landing with a battleship-grade force.
+	if err := g.PlacePieces(plan.DropZone, "destroyer", 2); err != nil {
+		t.Fatalf("placing defenders: %v", err)
+	}
+	for _, id := range g.Board[plan.DropZone].Pieces {
+		g.Pieces[id].Owner = g.Players["UK"]
+	}
+	plan.Review(controller)
+
+	if plan.WantEscort <= 0 {
+		t.Error("a guarded landing should call for a covering force")
+	}
+}
+
+// A carrier is a credible escort because its aircraft do the fighting.
+func TestCombatValue_CountsCarriedAircraft(t *testing.T) {
+	empty := &models.Piece{Name: "carrier", Attack: 0, Defend: 1}
+	loaded := &models.Piece{Name: "carrier", Attack: 0, Defend: 1, Holding: []int{1, 2}}
+
+	if combatValue(loaded) <= combatValue(empty) {
+		t.Error("a carrier with aircraft aboard should be worth more than an empty one")
 	}
 }
 

@@ -84,6 +84,12 @@ type AmphibiousPlan struct {
 	WantTroops     int
 	WantTransports int
 
+	// WantEscort is the fighting strength the convoy should sail with, set from
+	// what is actually in the way. A crossing nobody is guarding needs almost
+	// nothing; one covered by a fleet needs enough to win the action, or the
+	// transports are simply sunk.
+	WantEscort int
+
 	// Units committed to this plan, by piece ID. A plan that loses all of them
 	// has lost its army and must rebuild.
 	Troops  []int
@@ -93,6 +99,9 @@ type AmphibiousPlan struct {
 	// Route is the sea path from Embark to DropZone, recomputed every turn
 	// because an enemy fleet can close it.
 	Route []string
+
+	// Contested is how many zones on that route are held by an enemy fleet.
+	Contested int
 
 	// pendingLanding holds the transports that sailed this turn and still have
 	// troops aboard, so the landing happens after the convoy has actually moved.
@@ -273,11 +282,15 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 	// it. Recomputing is what lets a plan route around interference instead of
 	// stalling against it.
 	if p.State == PlanForming {
-		if clear := clearEmbarkZone(g, p); clear != "" {
-			p.Embark = clear
+		if zone := chooseEmbarkZone(g, p); zone != "" {
+			p.Embark = zone
 		}
 	}
-	p.Route = seaRouteFor(g, p.Embark, p.DropZone, g.Players[p.Power])
+	power := g.Players[p.Power]
+	route, contested := seaRouteCost(g, p.Embark, p.DropZone, power)
+	p.Route = route
+	p.Contested = contested
+	p.WantEscort = escortNeeded(g, p, power)
 
 	p.advanceState(g)
 	return true
@@ -319,6 +332,49 @@ func (p *AmphibiousPlan) advanceState(g *models.Game) {
 	default:
 		p.State = PlanForming
 	}
+}
+
+// escortNeeded sizes the covering force from the opposition actually on the
+// route and over the landing.
+//
+// This is deliberately proportionate. Sending a battle fleet to escort a
+// crossing nobody is watching wastes the production that should be buying
+// troops; sending bare transports into guarded water loses them. Where there is
+// no enemy navy in the way the requirement falls to almost nothing.
+func escortNeeded(g *models.Game, p *AmphibiousPlan, power *models.Player) int {
+	if power == nil {
+		return 0
+	}
+
+	opposition := 0
+	for _, name := range p.Route {
+		opposition += enemyNavalStrength(g, g.Board[name], power)
+	}
+	// Whatever covers the landing itself matters most: the convoy has to sit
+	// there while the troops go ashore.
+	opposition += enemyNavalStrength(g, g.Board[p.DropZone], power) * 2
+
+	if opposition == 0 {
+		return 0 // an unguarded crossing needs no fleet
+	}
+	// Enough to expect to win rather than merely trade, but bounded: past a
+	// point the answer is a different target, not a bigger fleet. Without a
+	// ceiling a heavily patrolled crossing demanded a navy that consumed the
+	// whole war economy and left no army to land.
+	needed := opposition*3/2 + 2
+	if needed > maxEscortStrength {
+		needed = maxEscortStrength
+	}
+	return needed
+}
+
+// maxEscortStrength caps what one operation will wait for. Roughly a handful of
+// warships; beyond that the crossing is not the problem, the choice of target is.
+const maxEscortStrength = 24
+
+// EscortStrength is what the plan currently has to fight with.
+func (p *AmphibiousPlan) EscortStrength(g *models.Game) int {
+	return friendlyNavalStrength(g, p.Escorts)
 }
 
 // progressScore measures how far along the operation is, so a build-up that is
@@ -406,7 +462,14 @@ func (p *AmphibiousPlan) forceAssembled(g *models.Game) bool {
 	if carried > lift {
 		carried = lift
 	}
-	return carried >= minimum
+	if carried < minimum {
+		return false
+	}
+
+	// Do not sail into a guarded crossing with nothing to fight back with.
+	// Where nobody is watching the water this costs nothing, because the
+	// requirement is zero.
+	return p.EscortStrength(g) >= p.WantEscort
 }
 
 // survivors keeps the piece IDs that still exist and still belong to us.
@@ -448,77 +511,105 @@ func seaRoute(g *models.Game, from, to string) []string {
 // crossings out of the Baltic straight through the Royal Navy sitting in the
 // North Sea, and its transports simply never moved.
 func seaRouteFor(g *models.Game, from, to string, power *models.Player) []string {
+	route, _ := seaRouteCost(g, from, to, power)
+	return route
+}
+
+// contestedPenalty is how much a sea zone held by an enemy fleet adds to the
+// cost of a route.
+//
+// It is a preference, not a prohibition. Treating enemy shipping as impassable
+// meant a single destroyer parked off a coast made a landing there impossible
+// forever, which is not how a navy works: you either go round, or you bring
+// something to fight with. The penalty is large enough that a clear route
+// several zones longer still wins, and small enough that a defended crossing
+// remains on the table when there is no alternative.
+const contestedPenalty = 6
+
+// seaRouteCost finds the cheapest sea path and reports how much of it is
+// contested, so a plan knows whether it must fight its way through.
+//
+// Cost is one per open sea zone and contestedPenalty per zone held by an enemy
+// fleet. The second return is the number of contested zones on the chosen route.
+func seaRouteCost(g *models.Game, from, to string, power *models.Player) ([]string, int) {
 	start, ok := g.Board[from]
 	if !ok {
-		return nil
+		return nil, 0
 	}
 	goal, ok := g.Board[to]
 	if !ok {
-		return nil
+		return nil, 0
 	}
 	if start == goal {
-		return []string{from}
+		return []string{from}, 0
 	}
 
-	type step struct {
-		territory *models.Territory
-		path      []string
-	}
-	seen := map[string]bool{from: true}
-	queue := []step{{start, []string{from}}}
+	// Small graph, so a simple settled-set search is clearer than a heap.
+	dist := map[string]int{from: 0}
+	prev := map[string]string{}
+	settled := map[string]bool{}
 
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
+	for {
+		current, best := "", -1
+		for name, d := range dist {
+			if !settled[name] && (best == -1 || d < best) {
+				current, best = name, d
+			}
+		}
+		if current == "" {
+			break
+		}
+		if current == to {
+			break
+		}
+		settled[current] = true
 
-		for _, next := range current.territory.ConnectedTo {
-			if seen[next.Name] || next.Terrain != models.Water {
+		territory := g.Board[current]
+		if territory == nil {
+			continue
+		}
+		for _, next := range territory.ConnectedTo {
+			if next.Terrain != models.Water && next.Name != to {
 				continue
 			}
-			if power != nil && next.Name != to && occupiedByEnemy(g, next, power) {
-				continue // an enemy fleet closes this water to a quiet passage
+			step := 1
+			if power != nil && occupiedByEnemy(g, next, power) {
+				step += contestedPenalty
 			}
-			seen[next.Name] = true
-			path := append(append([]string{}, current.path...), next.Name)
-			if next == goal {
-				return path
+			if known, seen := dist[next.Name]; !seen || best+step < known {
+				dist[next.Name] = best + step
+				prev[next.Name] = current
 			}
-			queue = append(queue, step{next, path})
 		}
-	}
-	return nil
-}
-
-// clearEmbarkZone picks a sea zone next to the staging port that is free of
-// enemy ships and still has a crossing to the drop zone.
-//
-// Returns "" if none qualifies, in which case the plan keeps the zone it had
-// and waits -- the enemy fleet may move on.
-func clearEmbarkZone(g *models.Game, p *AmphibiousPlan) string {
-	power := g.Players[p.Power]
-	if power == nil {
-		return ""
 	}
 
-	best, bestRoute := "", -1
-	for _, candidate := range adjacentSeaZones(g, p.Staging) {
-		zone := g.Board[candidate]
-		if zone == nil || occupiedByEnemy(g, zone, power) {
-			continue
-		}
-		route := seaRouteFor(g, candidate, p.DropZone, power)
-		if len(route) == 0 {
-			continue
-		}
-		if bestRoute == -1 || len(route) < bestRoute {
-			best, bestRoute = candidate, len(route)
+	if _, reached := dist[to]; !reached {
+		return nil, 0
+	}
+
+	route := []string{to}
+	for at := prev[to]; at != "" && at != from; at = prev[at] {
+		route = append([]string{at}, route...)
+	}
+
+	contested := 0
+	if power != nil {
+		for _, name := range route {
+			if zone := g.Board[name]; zone != nil && occupiedByEnemy(g, zone, power) {
+				contested++
+			}
 		}
 	}
-	return best
+	return route, contested
 }
 
 // occupiedByEnemy reports whether a territory holds units hostile to a power.
 func occupiedByEnemy(g *models.Game, territory *models.Territory, power *models.Player) bool {
+	return enemyNavalStrength(g, territory, power) > 0 || enemyPresent(g, territory, power)
+}
+
+// enemyPresent reports any hostile unit at all.
+func enemyPresent(g *models.Game, territory *models.Territory, power *models.Player) bool {
 	for _, id := range territory.Pieces {
 		piece, ok := g.Pieces[id]
 		if !ok || piece.Owner == nil {
@@ -529,6 +620,85 @@ func occupiedByEnemy(g *models.Game, territory *models.Territory, power *models.
 		}
 	}
 	return false
+}
+
+// enemyNavalStrength measures the hostile fighting power in a sea zone.
+//
+// Used to size an escort: what matters is not whether an enemy is present but
+// how much of a fight it can put up.
+func enemyNavalStrength(g *models.Game, territory *models.Territory, power *models.Player) int {
+	if territory == nil {
+		return 0
+	}
+	units := g.Units()
+	strength := 0
+	for _, id := range territory.Pieces {
+		piece, ok := g.Pieces[id]
+		if !ok || piece.Owner == nil {
+			continue
+		}
+		if piece.Owner == power || areAllies(piece.Owner, power) {
+			continue
+		}
+		if units.For(piece).IsStructure {
+			continue
+		}
+		strength += combatValue(piece)
+	}
+	return strength
+}
+
+// combatValue rates a unit's usefulness in a naval action. Aircraft aboard a
+// carrier count, which is why a carrier is a credible escort.
+func combatValue(piece *models.Piece) int {
+	value := int(piece.Attack) + int(piece.Defend)
+	for range piece.Holding {
+		value += 2
+	}
+	return value
+}
+
+// friendlyNavalStrength measures what a power has to fight with in a zone.
+func friendlyNavalStrength(g *models.Game, ids []int) int {
+	strength := 0
+	for _, id := range ids {
+		if piece, ok := g.Pieces[id]; ok {
+			strength += combatValue(piece)
+		}
+	}
+	return strength
+}
+
+// chooseEmbarkZone picks the sea zone next to the staging port to gather in.
+//
+// Clear water is strongly preferred, but a contested zone is allowed rather
+// than leaving the plan with nowhere to assemble -- the route cost already
+// makes an unguarded approach the first choice.
+func chooseEmbarkZone(g *models.Game, p *AmphibiousPlan) string {
+	power := g.Players[p.Power]
+	if power == nil {
+		return ""
+	}
+
+	best, bestCost := "", -1
+	for _, candidate := range adjacentSeaZones(g, p.Staging) {
+		zone := g.Board[candidate]
+		if zone == nil {
+			continue
+		}
+		route, _ := seaRouteCost(g, candidate, p.DropZone, power)
+		if len(route) == 0 {
+			continue
+		}
+		cost := len(route)
+		if occupiedByEnemy(g, zone, power) {
+			cost += contestedPenalty
+		}
+		if bestCost == -1 || cost < bestCost {
+			best, bestCost = candidate, cost
+		}
+	}
+	return best
 }
 
 // adjacentSeaZones returns the water territories touching a land territory.

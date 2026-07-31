@@ -324,9 +324,11 @@ func (npc *NPCAIPlayer) assignUnits(gc *GameController, player *models.Player, p
 			case piece.Terrain == models.Water && carriesLandUnits(g, piece) &&
 				len(plan.Ships) < plan.WantTransports:
 				plan.Ships = append(plan.Ships, id)
-			case piece.Terrain == models.Water && !carriesLandUnits(g, piece) && piece.Attack > 0 &&
-				len(plan.Escorts) < plan.WantTransports:
-				// Escorts: something to fight with, so the convoy is not naked.
+			case piece.Terrain == models.Water && !carriesLandUnits(g, piece) &&
+				combatValue(piece) > 0 &&
+				plan.EscortStrength(g) < plan.WantEscort:
+				// Escorts: something to fight with, taken up until the convoy
+				// has the cover the crossing calls for.
 				plan.Escorts = append(plan.Escorts, id)
 			}
 		}
@@ -341,17 +343,67 @@ func (npc *NPCAIPlayer) PlanPurchases(gc *GameController, player *models.Player)
 		return wanted
 	}
 
-	transportName, escortName := shippingNames(gc.Game)
+	g := gc.Game
+	transportName, _ := shippingNames(g)
 
 	for _, plan := range gc.Plans.Active(player.Name) {
 		if transportName != "" && len(plan.Ships) < plan.WantTransports {
 			wanted[transportName] += plan.WantTransports - len(plan.Ships)
 		}
-		if escortName != "" && len(plan.Escorts) < 1 {
-			wanted[escortName]++
+
+		// Buy cover in proportion to what is in the way. An unguarded crossing
+		// asks for nothing and the budget goes to troops instead.
+		short := plan.WantEscort - plan.EscortStrength(g)
+		if short <= 0 {
+			continue
 		}
+		warship := bestWarshipFor(g, short)
+		if warship == "" {
+			continue
+		}
+		perShip := combatValue(g.GlobalPieceTemplates[warship])
+		if perShip <= 0 {
+			perShip = 1
+		}
+		wanted[warship] += (short + perShip - 1) / perShip
 	}
 	return wanted
+}
+
+// bestWarshipFor picks what to buy as cover: the best fighting value per IPC
+// among the ships this board offers.
+//
+// Any warship will do -- a battleship, a submarine, or a carrier, whose value
+// counts the aircraft it carries. What matters is that the convoy has something
+// to fight with, not which silhouette it is.
+func bestWarshipFor(g *models.Game, needed int) string {
+	units := g.Units()
+
+	names := make([]string, 0, len(g.GlobalPieceTemplates))
+	for name := range g.GlobalPieceTemplates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	best, bestRatio := "", 0.0
+	for _, name := range names {
+		template := g.GlobalPieceTemplates[name]
+		if template.Terrain != models.Water || units.Of(name).IsStructure {
+			continue
+		}
+		if carriesLandUnits(g, template) {
+			continue // that is the transport, not its escort
+		}
+		value := combatValue(template)
+		if value <= 0 || template.Cost <= 0 {
+			continue
+		}
+		ratio := float64(value) / float64(template.Cost)
+		if ratio > bestRatio {
+			best, bestRatio = name, ratio
+		}
+	}
+	return best
 }
 
 // shippingNames finds what this board calls a troop transport and a warship.
