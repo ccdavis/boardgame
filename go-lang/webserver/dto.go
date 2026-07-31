@@ -1,6 +1,8 @@
 package webserver
 
 import (
+	"sort"
+
 	"boardgame/game"
 	"boardgame/models"
 )
@@ -65,6 +67,10 @@ type GameStateDTO struct {
 	IsHumanTurn  bool                 `json:"isHumanTurn"`
 	Players      []PlayerDTO          `json:"players"`
 	VictoryCities VictoryCityCount    `json:"victoryCities"`
+	// GameOver and Winner report the victory check, so the browser learns the
+	// war has been decided from the same poll that carries everything else.
+	GameOver bool   `json:"gameOver"`
+	Winner   string `json:"winner,omitempty"`
 }
 
 // VictoryCityCount represents victory city control
@@ -116,6 +122,9 @@ type AvailableUnitDTO struct {
 type PurchasedUnitDTO struct {
 	Type     string `json:"type"`
 	Quantity int    `json:"quantity"`
+	// Targets is filled in during the Mobilize phase: the territories where a
+	// unit of this type may legally be placed right now.
+	Targets []string `json:"targets,omitempty"`
 }
 
 // Conversion Functions
@@ -253,11 +262,17 @@ func GroupPurchasedUnits(units []*models.PendingUnit) []PurchasedUnitDTO {
 		counts[unit.Type]++
 	}
 
+	types := make([]string, 0, len(counts))
+	for unitType := range counts {
+		types = append(types, unitType)
+	}
+	sort.Strings(types)
+
 	result := make([]PurchasedUnitDTO, 0, len(counts))
-	for unitType, quantity := range counts {
+	for _, unitType := range types {
 		result = append(result, PurchasedUnitDTO{
 			Type:     unitType,
-			Quantity: quantity,
+			Quantity: counts[unitType],
 		})
 	}
 

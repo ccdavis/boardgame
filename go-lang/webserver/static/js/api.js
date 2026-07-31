@@ -286,6 +286,12 @@ class GameAPI {
             }
         });
 
+        // 409 is not a failure: the phase has unfinished business (battles to
+        // resolve, units to place) and the body says exactly what.
+        if (response.status === 409) {
+            return await response.json();
+        }
+
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.error || 'Failed to advance phase');

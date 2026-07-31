@@ -426,6 +426,45 @@ func (gc *GameController) adjacentToOwnProduction(seaZone *models.Territory, pla
 	return false
 }
 
+// PlacementTargets lists every territory where this player could mobilize a
+// unit of the given type right now, sorted by name. It answers the question a
+// placement interface has to ask before offering a destination, applying the
+// same rules MobilizeUnit enforces: ships launch into sea zones beside an
+// owned industrial complex, land units appear at an owned complex, and a new
+// structure may rise in any owned land territory.
+func (gc *GameController) PlacementTargets(player *models.Player, unitType string) []string {
+	template, hasTemplate := gc.Game.GlobalPieceTemplates[unitType]
+	if !hasTemplate || player == nil {
+		return nil
+	}
+	units := gc.Game.Units()
+
+	hasComplex := func(territory *models.Territory) bool {
+		for _, pieceID := range territory.Pieces {
+			if units.For(gc.Game.Pieces[pieceID]).IsStructure {
+				return true
+			}
+		}
+		return false
+	}
+
+	var targets []string
+	for name, territory := range gc.Game.Board {
+		switch {
+		case template.Terrain == models.Water:
+			if territory.Terrain == models.Water && gc.adjacentToOwnProduction(territory, player) {
+				targets = append(targets, name)
+			}
+		case territory.Owner != player || territory.Terrain == models.Water:
+			// Land units only appear on land the player holds.
+		case units.Of(unitType).IsStructure || hasComplex(territory):
+			targets = append(targets, name)
+		}
+	}
+	sort.Strings(targets)
+	return targets
+}
+
 // RepairIndustrialComplex repairs damage to an IC
 func (gc *GameController) RepairIndustrialComplex(territoryName string, amount int) error {
 	if gc.Game.CurrentPhase != models.PurchasePhase {

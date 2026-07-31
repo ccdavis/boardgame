@@ -79,8 +79,13 @@ const app = createApp({
                 humanPlayer: '',
                 isHumanTurn: false,
                 players: [],
-                victoryCities: { axis: 0, allies: 0 }
+                victoryCities: { axis: 0, allies: 0 },
+                gameOver: false,
+                winner: ''
             },
+            // Set once the victory overlay has been dismissed, so the player
+            // can study the final map without the banner in the way.
+            victoryDismissed: false,
 
             // Setup
             setup: {
@@ -112,6 +117,8 @@ const app = createApp({
             purchasedUnits: [],
             plannedMoves: [],
             pendingBattles: [],
+            // Chosen placement territory per pending unit type, keyed by type.
+            mobilizeTargets: {},
 
             // UI state
             error: null,
@@ -126,6 +133,11 @@ const app = createApp({
     computed: {
         currentPlayer() {
             return this.gameState.players.find(p => p.name === this.gameState.humanPlayer) || { ipcs: 0 };
+        },
+
+        /** Units bought but not yet on the board -- actual units, not groups. */
+        unplacedCount() {
+            return this.purchasedUnits.reduce((n, group) => n + group.quantity, 0);
         },
 
         viewBoxStr() {
@@ -359,6 +371,14 @@ const app = createApp({
                     }
                     if (actions.actions.purchasedUnits) {
                         this.purchasedUnits = actions.actions.purchasedUnits;
+                        // Give every pending group a placement choice that is
+                        // actually legal, without clobbering one the player set.
+                        for (const group of this.purchasedUnits) {
+                            const targets = group.targets || [];
+                            if (!targets.includes(this.mobilizeTargets[group.type])) {
+                                this.mobilizeTargets[group.type] = targets[0] || '';
+                            }
+                        }
                     }
                     if (actions.actions.plannedMoves) {
                         this.plannedMoves = actions.actions.plannedMoves;
@@ -366,6 +386,19 @@ const app = createApp({
                     if (actions.actions.pendingBattles) {
                         this.pendingBattles = actions.actions.pendingBattles;
                     }
+                }
+
+                // The territory list feeds the sidebar and the map badges, and
+                // ownership or unit counts can change on any action -- ours or
+                // an NPC's -- so it refreshes with the same poll.
+                await this.loadTerritories();
+
+                // The war can end on anyone's turn; the poll is how we hear.
+                // Phase guidance is beside the point once there are no more
+                // phases, and its modal would sit on top of the verdict.
+                if (this.gameState.gameOver) {
+                    this.showPhaseGuidance = false;
+                    this.stopPolling();
                 }
 
                 // Show phase guidance when phase changes during human turn
@@ -488,6 +521,23 @@ const app = createApp({
         },
 
         /**
+         * Place purchased units during the Mobilize phase.
+         */
+        async placeUnits(unitType, quantity) {
+            const territory = this.mobilizeTargets[unitType];
+            if (!territory) {
+                alert(`No legal territory to place ${unitType} in`);
+                return;
+            }
+            try {
+                await this.api.mobilizeUnits(unitType, territory, quantity);
+                await this.updateGameState();
+            } catch (error) {
+                alert(`Failed to place ${unitType} in ${territory}: ${error.message}`);
+            }
+        },
+
+        /**
          * Show planned moves
          */
         showPlannedMoves() {
@@ -532,6 +582,12 @@ const app = createApp({
         async advancePhase() {
             try {
                 const result = await this.api.advancePhase();
+
+                // The phase has unfinished business; say what, and stay put.
+                if (result.blocked) {
+                    alert(`Cannot end this phase yet:\n\n${result.summary}`);
+                    return;
+                }
 
                 if (result.summary) {
                     // Show summary of what happened

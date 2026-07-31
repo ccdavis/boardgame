@@ -287,3 +287,94 @@ func TestServerIntegration_AdvancePhase(t *testing.T) {
 		t.Errorf("Expected Combat Move phase, got %v", g.CurrentPhase)
 	}
 }
+
+// The state response must carry the victory verdict: the browser only ever
+// learns anything through this poll, so a game that ends silently on the
+// server never ends on screen.
+func TestServerIntegration_StateReportsVictory(t *testing.T) {
+	g := createIntegrationTestGame()
+	controller := game.NewGameController(g)
+	controller.StartGame()
+
+	// A sustained victory already on the books: Axis held their threshold
+	// across two consecutive round boundaries.
+	g.VictoryCitiesEnabled = true
+	g.VictoryHoldSide = "Axis"
+	g.VictoryHoldRounds = 2
+
+	sm := NewSessionManager()
+	session, err := sm.CreateSession(controller, "Germany")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+	server := &Server{sessionManager: sm, port: 8080}
+
+	req := httptest.NewRequest("GET", "/api/game/"+session.ID, nil)
+	w := httptest.NewRecorder()
+	server.handleGameRoutes(w, req)
+
+	var state GameStateDTO
+	if err := json.NewDecoder(w.Body).Decode(&state); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if !state.GameOver {
+		t.Error("state does not report the game as over")
+	}
+	if state.Winner != "Axis" {
+		t.Errorf("state names %q as winner, want Axis", state.Winner)
+	}
+}
+
+// During the Mobilize phase, available-actions must say not only what is
+// waiting to be placed but where it may legally go -- that list is what the
+// placement interface offers the player.
+func TestServerIntegration_MobilizeActionsIncludeTargets(t *testing.T) {
+	g := createIntegrationTestGame()
+
+	// Berlin gets an industrial complex; Poland stays bare. Only Berlin may
+	// receive the pending infantry.
+	factory := &models.Piece{Name: "factory", Cost: 32, Terrain: models.Land}
+	g.GlobalPieceTemplates["factory"] = factory
+	if err := g.PlacePieces("Berlin", "factory", 1); err != nil {
+		t.Fatalf("placing factory: %v", err)
+	}
+
+	controller := game.NewGameController(g)
+	controller.StartGame()
+	g.CurrentPhase = models.MobilizePhase
+	g.PurchasedUnits["Germany"] = []*models.PendingUnit{
+		{Type: "infantry", Cost: 3},
+		{Type: "infantry", Cost: 3},
+	}
+
+	sm := NewSessionManager()
+	session, err := sm.CreateSession(controller, "Germany")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+	server := &Server{sessionManager: sm, port: 8080}
+
+	req := httptest.NewRequest("GET", "/api/game/"+session.ID+"/available-actions", nil)
+	w := httptest.NewRecorder()
+	server.handleGameRoutes(w, req)
+
+	var response struct {
+		Actions struct {
+			PurchasedUnits []PurchasedUnitDTO `json:"purchasedUnits"`
+		} `json:"actions"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	groups := response.Actions.PurchasedUnits
+	if len(groups) != 1 {
+		t.Fatalf("got %d pending groups, want 1: %+v", len(groups), groups)
+	}
+	if groups[0].Type != "infantry" || groups[0].Quantity != 2 {
+		t.Errorf("pending group = %+v, want 2 infantry", groups[0])
+	}
+	if len(groups[0].Targets) != 1 || groups[0].Targets[0] != "Berlin" {
+		t.Errorf("targets = %v, want [Berlin]", groups[0].Targets)
+	}
+}

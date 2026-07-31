@@ -933,6 +933,46 @@ func TestMobilize_ShipsLaunchIntoAdjacentSea(t *testing.T) {
 	}
 }
 
+// PlacementTargets must offer exactly the territories MobilizeUnit would
+// accept: owned factory territories for land units, sea zones beside an owned
+// factory for ships, and any owned land territory for a new structure.
+func TestPlacementTargets_MatchMobilizeRules(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+	controller.StartGame()
+
+	game.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
+	game.AddTerritory("Siberia", models.Land, "USSR", 2) // owned, no factory
+	game.AddTerritory("Moscow Coast", models.Water, "Neutral", 0)
+	game.AddTerritory("Far Sea", models.Water, "Neutral", 0)
+	game.ConnectTerritories("Moscow", "Moscow Coast")
+	game.ConnectTerritories("Moscow Coast", "Far Sea")
+	giveProductionCentre(t, game, "Moscow")
+	giveProductionCentre(t, game, "Germany") // enemy factory must not appear
+
+	ussr := game.Players["USSR"]
+
+	assertTargets := func(unitType string, want []string) {
+		t.Helper()
+		got := controller.PlacementTargets(ussr, unitType)
+		if len(got) != len(want) {
+			t.Fatalf("%s targets = %v, want %v", unitType, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%s targets = %v, want %v", unitType, got, want)
+			}
+		}
+	}
+
+	assertTargets("infantry", []string{"Moscow"})
+	assertTargets("transport", []string{"Moscow Coast"})
+	// A structure may rise on any owned land, factory or not.
+	assertTargets("factory", []string{"Moscow", "Siberia"})
+	// An unknown type has nowhere to go.
+	assertTargets("dreadnought", nil)
+}
+
 // Capturing a capital seizes the defender's treasury, and a power whose
 // capital is enemy-held collects no income until it is liberated.
 //

@@ -274,11 +274,30 @@
                 </aside>
             </main>
 
+            <!-- Victory Overlay -->
+            <div v-if="gameState.gameOver && !victoryDismissed" class="victory-overlay">
+                <div class="victory-card">
+                    <h2>🏆 {{ gameState.winner }} win the war!</h2>
+                    <p>
+                        Final count: Axis {{ gameState.victoryCities.axis }} victory cities,
+                        Allies {{ gameState.victoryCities.allies }}.
+                    </p>
+                    <button @click="victoryDismissed = true" class="btn btn-primary">
+                        View the final map
+                    </button>
+                </div>
+            </div>
+
             <!-- Bottom Action Bar -->
             <footer class="action-bar">
                 <div class="phase-actions">
+                    <!-- Game over: no further actions, just the verdict. -->
+                    <div v-if="gameState.gameOver" class="game-over-bar">
+                        <span class="game-over-text">The war is over — {{ gameState.winner }} win.</span>
+                    </div>
+
                     <!-- Purchase Phase -->
-                    <div v-if="gameState.currentPhase === 'Purchase Units' && gameState.isHumanTurn">
+                    <div v-else-if="gameState.currentPhase === 'Purchase Units' && gameState.isHumanTurn">
                         <button @click="openPurchaseModal" class="btn btn-action">
                             Buy Units ({{ currentPlayer.ipcs }} IPCs)
                         </button>
@@ -319,11 +338,27 @@
                         </button>
                     </div>
 
-                    <!-- Mobilize Phase -->
-                    <div v-else-if="gameState.currentPhase === 'Mobilize New Units' && gameState.isHumanTurn">
-                        <span class="units-count" v-if="purchasedUnits.length > 0">
-                            {{ purchasedUnits.length }} units to place
+                    <!-- Mobilize Phase: one row per pending unit type, with a
+                         choice of every legal destination. The server computes
+                         the destinations; this only offers them. -->
+                    <div v-else-if="gameState.currentPhase === 'Mobilize New Units' && gameState.isHumanTurn"
+                         class="mobilize-bar">
+                        <span class="units-count" v-if="unplacedCount > 0">
+                            {{ unplacedCount }} unit{{ unplacedCount === 1 ? '' : 's' }} to place
                         </span>
+                        <div v-for="group in purchasedUnits" :key="group.type" class="mobilize-group">
+                            <span class="mobilize-label">{{ group.quantity }} × {{ group.type }}</span>
+                            <template v-if="group.targets && group.targets.length > 0">
+                                <select v-model="mobilizeTargets[group.type]" class="mobilize-select"
+                                        :aria-label="'Territory to place ' + group.type + ' in'">
+                                    <option v-for="t in group.targets" :key="t" :value="t">{{ t }}</option>
+                                </select>
+                                <button @click="placeUnits(group.type, 1)" class="btn btn-sm">Place 1</button>
+                                <button @click="placeUnits(group.type, group.quantity)" class="btn btn-sm"
+                                        v-if="group.quantity > 1">Place all</button>
+                            </template>
+                            <span v-else class="mobilize-warning">no legal territory</span>
+                        </div>
                         <button @click="advancePhase" class="btn btn-advance">
                             Done Placing →
                         </button>

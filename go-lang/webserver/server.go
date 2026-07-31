@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -224,6 +225,10 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 // handleGetGameState handles GET /api/game/:sessionId
 func (s *Server) handleGetGameState(w http.ResponseWriter, r *http.Request, session *GameSession) {
 	state := ToGameStateDTO(session.Controller.Game, session.HumanPlayer)
+	if winner, won, _ := session.Controller.CheckVictoryCondition(); won {
+		state.GameOver = true
+		state.Winner = winner
+	}
 	s.sendJSON(w, state, http.StatusOK)
 }
 
@@ -243,9 +248,15 @@ func (s *Server) handleTerritories(w http.ResponseWriter, r *http.Request, sessi
 		return
 	}
 
-	territories := make([]TerritoryDTO, 0, len(session.Controller.Game.Board))
-	for _, territory := range session.Controller.Game.Board {
-		territories = append(territories, ToTerritoryDTO(territory))
+	names := make([]string, 0, len(session.Controller.Game.Board))
+	for name := range session.Controller.Game.Board {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	territories := make([]TerritoryDTO, 0, len(names))
+	for _, name := range names {
+		territories = append(territories, ToTerritoryDTO(session.Controller.Game.Board[name]))
 	}
 
 	response := map[string]interface{}{
@@ -383,9 +394,12 @@ func (s *Server) handleAvailableActions(w http.ResponseWriter, r *http.Request, 
 		}
 
 	case models.MobilizePhase:
-		purchased := g.PurchasedUnits[player.Name]
+		purchased := GroupPurchasedUnits(g.PurchasedUnits[player.Name])
+		for i := range purchased {
+			purchased[i].Targets = session.Controller.PlacementTargets(player, purchased[i].Type)
+		}
 		response["actions"] = map[string]interface{}{
-			"purchasedUnits": GroupPurchasedUnits(purchased),
+			"purchasedUnits": purchased,
 		}
 
 	case models.CollectIncomePhase:
