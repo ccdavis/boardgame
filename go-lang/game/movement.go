@@ -305,7 +305,7 @@ func CalculateMovementPathForPiece(game *models.Game, piece *models.Piece, from,
 				}
 
 				// Check if we can traverse this territory based on ownership and units
-				canTraverse := canTraverseTerritory(game, neighbor, toTerritory, currentPlayer, moveType)
+				canTraverse := canTraverseTerritory(game, piece, neighbor, toTerritory, currentPlayer, moveType)
 				if !canTraverse {
 					// A tank may drive through an undefended enemy territory and
 					// keep going, taking it on the way.
@@ -328,9 +328,19 @@ func CalculateMovementPathForPiece(game *models.Game, piece *models.Piece, from,
 }
 
 // canTraverseTerritory checks if a unit can move through a territory
-func canTraverseTerritory(game *models.Game, territory, destination *models.Territory, currentPlayer *models.Player, moveType MoveType) bool {
+func canTraverseTerritory(game *models.Game, piece *models.Piece, territory, destination *models.Territory, currentPlayer *models.Player, moveType MoveType) bool {
 	// If this is the destination territory
 	if territory == destination {
+		// Where an aircraft may finish a noncombat move is a landing question,
+		// not an ownership question: friendly ground, or a carrier with room.
+		//
+		// The general rules below got aircraft wrong in both directions -- a
+		// fighter could "land" in any sea zone and live there indefinitely, and
+		// (via the waypoint rules) could not fly *over* an enemy army at all.
+		if piece != nil && piece.Terrain == models.Air && moveType == NoncombatMove {
+			return canLandAt(game, piece, territory, currentPlayer)
+		}
+
 		// Combat moves can target enemy territories
 		if moveType == CombatMove {
 			// Can target enemy territories, but NOT allied territories
@@ -395,6 +405,14 @@ func canTraverseTerritory(game *models.Game, territory, destination *models.Terr
 
 	// Waypoints (everything short of the destination).
 	//
+	// Aircraft overfly everything: hostile armies, enemy territory, oceans.
+	// What limits them is range and where they may land, not what they pass
+	// over. Applying the ground rules below grounded them completely -- a
+	// fighter could not reach any target past one enemy-held territory.
+	if piece != nil && piece.Terrain == models.Air {
+		return true
+	}
+
 	// Open water is passable regardless of who nominally holds it. Every sea
 	// zone in aaa.gdf carries an owner, which is a starting marker rather than
 	// territory; requiring ownership here meant no power could sail through a
@@ -418,6 +436,38 @@ func canTraverseTerritory(game *models.Game, territory, destination *models.Terr
 	}
 
 	return true
+}
+
+// canLandAt reports whether an aircraft may end its move in a territory:
+// friendly land, or a sea zone holding a friendly carrier with room for it.
+//
+// The room check is per-carrier-slot at planning time; it does not account for
+// other aircraft planned onto the same carrier this phase, so two fighters can
+// both be promised the last slot. That is an over-permission, not a crash --
+// and far closer to the rules than no landing requirement at all.
+func canLandAt(game *models.Game, piece *models.Piece, territory *models.Territory, player *models.Player) bool {
+	if territory.Terrain == models.Land {
+		return territory.Owner == player || areAllies(territory.Owner, player)
+	}
+
+	for _, id := range territory.Pieces {
+		ship := game.Pieces[id]
+		if ship == nil || ship.Owner == nil {
+			continue
+		}
+		if ship.Owner != player && !areAllies(ship.Owner, player) {
+			continue
+		}
+		if len(ship.Holding) >= int(ship.Capacity) {
+			continue
+		}
+		for _, kind := range ship.CanCarry {
+			if kind == piece.Name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // canAttackNeutral checks if a player can attack a neutral territory
