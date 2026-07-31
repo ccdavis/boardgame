@@ -124,9 +124,16 @@ func (dr *DiceRoller) RollDice(count int) []int {
 	return results
 }
 
-// CombatRound executes one round of combat with submarine surprise strikes
-// Returns hits and units that were removed before they could fire
 // CombatRound fights one round.
+//
+// The returned attackerHits and defenderHits are UNAPPLIED: the caller selects
+// and removes casualties for them. Surprise-strike hits are not among them --
+// their casualties are applied here, before the victims can fire, and are
+// reported through SurpriseLosses. The hit lists used to include the surprise
+// hits too, so the caller applied every submarine hit a second time against
+// its own casualty selection; when the two selections picked different victims
+// (the surprise pass shields submarines from air, the plain pass does not),
+// one unit died twice and another was recorded dead while fighting on.
 //
 // Surprise-strike losses are returned per side. They used to come back as a
 // single merged list, and the caller appended that same list to *both* sides'
@@ -150,7 +157,7 @@ func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderH
 			for _, sub := range attackingSubs {
 				roll := dr.Roll()
 				if roll <= int(sub.Attack) {
-					attackerHits = append(attackerHits, Hit{
+					surprise.AttackerHits = append(surprise.AttackerHits, Hit{
 						Roll:      roll,
 						Threshold: int(sub.Attack),
 						UnitType:  sub.Name,
@@ -159,9 +166,9 @@ func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderH
 			}
 
 			// Select casualties from defender - these units don't get to fire back
-			if len(attackerHits) > 0 {
+			if len(surprise.AttackerHits) > 0 {
 				// Casualties from surprise strikes cannot hit submarines with air
-				casualties := SelectCasualtiesAvoidingAir(battle.Defenders, len(attackerHits), !defenderHasDestroyer)
+				casualties := SelectCasualtiesAvoidingAir(battle.Defenders, len(surprise.AttackerHits), !defenderHasDestroyer)
 				surprise.Defender = append(surprise.Defender, casualties...)
 				battle.Defenders = RemoveCasualties(battle.Defenders, casualties)
 			}
@@ -173,7 +180,7 @@ func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderH
 			for _, sub := range defendingSubs {
 				roll := dr.Roll()
 				if roll <= int(sub.Defend) {
-					defenderHits = append(defenderHits, Hit{
+					surprise.DefenderHits = append(surprise.DefenderHits, Hit{
 						Roll:      roll,
 						Threshold: int(sub.Defend),
 						UnitType:  sub.Name,
@@ -182,8 +189,8 @@ func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderH
 			}
 
 			// Select casualties from attacker - these units don't get to fire back
-			if len(defenderHits) > 0 {
-				casualties := SelectCasualtiesAvoidingAir(battle.Attackers, len(defenderHits), !attackerHasDestroyer)
+			if len(surprise.DefenderHits) > 0 {
+				casualties := SelectCasualtiesAvoidingAir(battle.Attackers, len(surprise.DefenderHits), !attackerHasDestroyer)
 				surprise.Attacker = append(surprise.Attacker, casualties...)
 				battle.Attackers = RemoveCasualties(battle.Attackers, casualties)
 			}
@@ -294,10 +301,15 @@ func (dr *DiceRoller) RollForUnits(units []*models.Piece, isAttacking bool) []Hi
 	return hits
 }
 
-// SurpriseLosses separates the units each side loses to submarine first strike.
+// SurpriseLosses carries everything about the submarine first strike: the
+// hits each side's submarines scored, and the units each side lost to them.
+// The casualties are already applied when CombatRound returns.
 type SurpriseLosses struct {
 	Attacker []*models.Piece // attacking units killed by defending submarines
 	Defender []*models.Piece // defending units killed by attacking submarines
+
+	AttackerHits []Hit // hits scored by attacking submarines (already applied)
+	DefenderHits []Hit // hits scored by defending submarines (already applied)
 }
 
 // Helper functions for submarine and destroyer mechanics.
@@ -879,7 +891,14 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 		attackerHits, defenderHits, surprise := diceRoller.CombatRound(battle)
 
 		// Surprise casualties were already removed from the battle in
-		// CombatRound; record each side's losses against that side.
+		// CombatRound; record each side's losses against that side -- and
+		// adopt the thinned lists. The local slices used to keep the victims:
+		// a submarine's kill was recorded as a casualty yet fought on in every
+		// later round, and if the attack then broke off, the controller
+		// deleted the piece as a casualty AND "withdrew" it as a survivor,
+		// leaving its dead ID in the origin territory's list.
+		attackers = battle.Attackers
+		defenders = battle.Defenders
 		result.AttackerCasualties = append(result.AttackerCasualties, surprise.Attacker...)
 		result.DefenderCasualties = append(result.DefenderCasualties, surprise.Defender...)
 

@@ -22,10 +22,13 @@ func TestSubmarineSurpriseStrikeWithoutDestroyer(t *testing.T) {
 	// Execute one round
 	attackerHits, defenderHits, surpriseCas := dr.CombatRound(battle)
 
-	// Submarine should have fired in surprise strike
-	// With seed 1, submarine (attack 2) should get a hit
-	if len(attackerHits) == 0 {
+	// Submarine surprise hits travel in SurpriseLosses; the returned hit
+	// lists carry only unapplied regular hits.
+	if len(surpriseCas.AttackerHits) == 0 {
 		t.Log("Submarine rolled but didn't hit (acceptable due to dice)")
+	}
+	if len(attackerHits) != 0 {
+		t.Errorf("a lone submarine produced %d regular hits; its strike is the surprise", len(attackerHits))
 	}
 
 	// An attacking submarine kills DEFENDING units, so any surprise loss must be
@@ -91,7 +94,7 @@ func TestDefendingSubmarineSurpriseStrike(t *testing.T) {
 	if len(surpriseCas.Defender) != 0 {
 		t.Errorf("defending submarine cost the defender %d units", len(surpriseCas.Defender))
 	}
-	if len(defenderHits) > 0 && len(surpriseCas.Attacker) > 0 {
+	if len(surpriseCas.DefenderHits) > 0 && len(surpriseCas.Attacker) > 0 {
 		cruiserKilled := false
 		for _, cas := range surpriseCas.Attacker {
 			if cas.Name == "cruiser" {
@@ -231,6 +234,61 @@ func TestGetSubmarines(t *testing.T) {
 	for _, sub := range subs {
 		if sub.Name != "submarine" {
 			t.Errorf("Expected submarine, got %s", sub.Name)
+		}
+	}
+}
+
+// One surprise hit kills exactly one unit, and the victim is dead: not
+// fighting on, not among the survivors.
+//
+// Two compounding bugs made this fail, found by batch play (two of a hundred
+// games ended with corrupt boards). CombatRound applied surprise casualties
+// to the battle's lists but returned the surprise hits merged into the hit
+// lists, so the resolver applied every submarine hit a second time against
+// its own stale local slices -- and because the surprise pass shields
+// submarines from air while the plain pass does not, the two passes could
+// pick DIFFERENT victims: two units died to one hit, and the first victim
+// stayed in the local survivor list. On a retreat, the controller then
+// deleted that piece as a casualty AND withdrew it as a survivor, leaving a
+// dead ID in the origin territory's list.
+func TestSurpriseStrike_OneHitKillsExactlyOneUnit(t *testing.T) {
+	// Defending sub with defend 6 always hits. The attackers include a
+	// submarine of their own -- the cheapest unit, which the surprise pass
+	// shields and a naive second pass would kill instead.
+	defendingSub := &models.Piece{Name: "sub", Attack: 2, Defend: 6, Cost: 8, Terrain: models.Water, ID: 100}
+	attackingSub := &models.Piece{Name: "sub", Attack: 0, Defend: 1, Cost: 6, Terrain: models.Water, ID: 101}
+	battleship := &models.Piece{Name: "cruiserish", Attack: 3, Defend: 6, Cost: 20, Terrain: models.Water, ID: 102}
+
+	battle := NewBattle("Deep Water", SeaBattle, "Germany", "UK")
+	battle.Attackers = []*models.Piece{attackingSub, battleship}
+	battle.Defenders = []*models.Piece{defendingSub}
+
+	// Break off after the first round, so survivors are computed mid-fight.
+	retreat := func(_, _, _, _, round int) bool { return round >= 1 }
+
+	result, err := ResolveCombatWithRetreat(battle, NewSeededDiceRoller(3), 10, retreat)
+	if err != nil {
+		t.Fatalf("resolving: %v", err)
+	}
+
+	// The always-hitting sub fired once in round one: exactly one attacker is
+	// dead, and it is the shielded-selection victim (the warship, not the sub).
+	if len(result.AttackerCasualties) != 1 {
+		t.Fatalf("one surprise hit killed %d units, want exactly 1: %v",
+			len(result.AttackerCasualties), result.AttackerCasualties)
+	}
+	if result.AttackerCasualties[0].ID != battleship.ID {
+		t.Errorf("the surprise killed piece %d; air-shielded selection should spare the submarine",
+			result.AttackerCasualties[0].ID)
+	}
+
+	dead := make(map[int]bool)
+	for _, casualty := range result.AttackerCasualties {
+		dead[casualty.ID] = true
+	}
+	for _, survivor := range result.AttackersRemaining {
+		if dead[survivor.ID] {
+			t.Fatalf("piece %d is recorded both as a casualty and a survivor", survivor.ID)
 		}
 	}
 }
