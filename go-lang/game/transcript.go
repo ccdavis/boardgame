@@ -3,6 +3,7 @@ package game
 import (
 	"boardgame/models"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -32,8 +33,16 @@ func NewGameTranscript(title string) *GameTranscript {
 	}
 }
 
-// Log adds a generic entry to the transcript
+// Log adds a generic entry to the transcript.
+//
+// A nil transcript is a no-op rather than a panic. Recording is optional -- the
+// web server passed nil for a long time and the first Log call took the whole
+// request down with a nil dereference. Every other Log* method routes through
+// here, so guarding once covers them all.
 func (t *GameTranscript) Log(turn int, player string, phase models.Phase, action string) {
+	if t == nil {
+		return
+	}
 	entry := TranscriptEntry{
 		Turn:      turn,
 		Player:    player,
@@ -91,8 +100,23 @@ func (t *GameTranscript) LogBattleResult(territory string, result *BattleResult)
 		winner = "Defender Victory"
 	}
 
-	action := fmt.Sprintf("  %s captured! %s after %d rounds (Att casualties: %d, Def casualties: %d)",
-		territory, winner, result.Rounds, len(result.AttackerCasualties), len(result.DefenderCasualties))
+	// The outcome describes what actually happened. This used to read
+	// "<territory> captured!" for every battle, producing entries like
+	// "France captured! Defender Victory after 3 rounds".
+	var outcome string
+	switch {
+	case result.AttackerWins:
+		outcome = fmt.Sprintf("%s captured", territory)
+	case result.DefenderWins:
+		outcome = fmt.Sprintf("%s held", territory)
+	case result.AttackerRetreated:
+		outcome = fmt.Sprintf("attack on %s broken off", territory)
+	default:
+		outcome = fmt.Sprintf("fighting in %s ended inconclusively", territory)
+	}
+
+	action := fmt.Sprintf("  %s - %s after %d rounds (Att casualties: %d, Def casualties: %d)",
+		outcome, winner, result.Rounds, len(result.AttackerCasualties), len(result.DefenderCasualties))
 
 	t.Log(0, "", models.ConductCombatPhase, action)
 }
@@ -135,6 +159,9 @@ func (t *GameTranscript) LogPlayerState(player *models.Player) {
 
 // String returns the full transcript as a formatted string
 func (t *GameTranscript) String() string {
+	if t == nil {
+		return ""
+	}
 	var builder strings.Builder
 
 	builder.WriteString("════════════════════════════════════════════════════════\n")
@@ -177,10 +204,17 @@ func (t *GameTranscript) String() string {
 	return builder.String()
 }
 
-// SaveToFile writes the transcript to a file
+// SaveToFile writes the transcript to a file.
+//
+// This used to return nil without writing anything, so every caller believed it
+// had saved a transcript that was never on disk.
 func (t *GameTranscript) SaveToFile(filename string) error {
-	// This could be implemented to write to a file
-	// For now, we'll just return the string representation
+	if t == nil {
+		return fmt.Errorf("no transcript to save")
+	}
+	if err := os.WriteFile(filename, []byte(t.String()), 0o644); err != nil {
+		return fmt.Errorf("writing transcript to %s: %w", filename, err)
+	}
 	return nil
 }
 

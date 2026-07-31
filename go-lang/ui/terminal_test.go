@@ -117,7 +117,7 @@ func TestTerminalBasicCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			terminal := NewTerminal(controller)
+			terminal := newTestTerminal(controller)
 			err := terminal.ProcessCommand(tt.command)
 
 			if tt.expectError && err == nil {
@@ -169,6 +169,12 @@ func TestTerminalPurchaseAndMobilize(t *testing.T) {
 	g.Board["Berlin"] = berlin
 	player.Territories = append(player.Territories, berlin)
 
+	// Berlin builds units, so it needs an industrial complex.
+	g.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
+	if err := g.PlacePieces("Berlin", "factory", 1); err != nil {
+		panic(err)
+	}
+
 	// Add unit template
 	tank := &models.Piece{
 		Name:     "armor",
@@ -188,7 +194,7 @@ func TestTerminalPurchaseAndMobilize(t *testing.T) {
 		t.Fatalf("Failed to start game: %v", err)
 	}
 
-	terminal := NewTerminal(controller)
+	terminal := newTestTerminal(controller)
 
 	// Purchase phase: buy 2 tanks (10 IPCs)
 	err = terminal.ProcessCommand("buy armor 2")
@@ -220,9 +226,11 @@ func TestTerminalPurchaseAndMobilize(t *testing.T) {
 		t.Fatalf("Failed to place armor: %v", err)
 	}
 
-	// Verify units are on the board
-	if len(berlin.Pieces) != 2 {
-		t.Errorf("Expected 2 pieces in Berlin, got %d", len(berlin.Pieces))
+	// Verify units are on the board. Three, not two: Berlin's industrial
+	// complex is a piece as well as the two units just placed.
+	if len(berlin.Pieces) != 3 {
+		t.Errorf("Expected 3 pieces in Berlin (2 units plus the factory), got %d",
+			len(berlin.Pieces))
 	}
 
 	// Verify purchased units list is empty
@@ -281,7 +289,7 @@ func TestTerminalIncomeCollection(t *testing.T) {
 		t.Fatalf("Failed to start game: %v", err)
 	}
 
-	terminal := NewTerminal(controller)
+	terminal := newTestTerminal(controller)
 
 	// Advance through all phases to collect income
 	terminal.ProcessCommand("done") // -> Combat Move
@@ -326,7 +334,7 @@ func TestTerminalQuitCommand(t *testing.T) {
 	controller := game.NewGameController(g)
 	controller.StartGame()
 
-	terminal := NewTerminal(controller)
+	terminal := newTestTerminal(controller)
 	terminal.Running = true
 
 	err := terminal.ProcessCommand("quit")

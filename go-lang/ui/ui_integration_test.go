@@ -12,6 +12,8 @@ func TestModeToggle(t *testing.T) {
 	controller := game.NewGameController(g)
 	controller.StartGame()
 
+	// This test exercises the mode toggle itself, so it needs a terminal in the
+	// real default mode rather than the ExpertMode one the other tests use.
 	terminal := NewTerminal(controller)
 
 	// Should start in tutorial mode
@@ -38,7 +40,7 @@ func TestMovementCommands(t *testing.T) {
 	controller := game.NewGameController(g)
 	controller.StartGame()
 
-	terminal := NewTerminal(controller)
+	terminal := newTestTerminal(controller)
 
 	// Advance to combat move phase
 	controller.Game.CurrentPhase = models.CombatMovePhase
@@ -80,7 +82,7 @@ func TestCombatCommands(t *testing.T) {
 	controller := game.NewGameController(g)
 	controller.StartGame()
 
-	terminal := NewTerminal(controller)
+	terminal := newTestTerminal(controller)
 
 	// Set up phase
 	controller.Game.CurrentPhase = models.ConductCombatPhase
@@ -125,7 +127,7 @@ func TestAutoCombat(t *testing.T) {
 	controller := game.NewGameController(g)
 	controller.StartGame()
 
-	terminal := NewTerminal(controller)
+	terminal := newTestTerminal(controller)
 	controller.Game.CurrentPhase = models.ConductCombatPhase
 
 	// Create multiple battles
@@ -160,7 +162,7 @@ func TestCompleteGameFlow(t *testing.T) {
 	controller := game.NewGameController(g)
 	controller.StartGame()
 
-	terminal := NewTerminal(controller)
+	terminal := newTestTerminal(controller)
 	player := g.Players["Germany"]
 
 	// Purchase phase - buy units
@@ -257,6 +259,12 @@ func createMinimalGame(playerName string) *models.Game {
 	}
 	g.Board["Berlin"] = territory
 	player.Territories = append(player.Territories, territory)
+
+	// Berlin builds units, so it needs an industrial complex.
+	g.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
+	if err := g.PlacePieces("Berlin", "factory", 1); err != nil {
+		panic(err)
+	}
 
 	return g
 }

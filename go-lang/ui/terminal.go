@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"boardgame/engine"
 	"boardgame/game"
 	"boardgame/models"
 	"bufio"
@@ -28,11 +29,16 @@ func (m UIMode) String() string {
 
 // Terminal handles user interaction
 type Terminal struct {
-	Controller   *game.GameController
-	Reader       *bufio.Reader
-	Running      bool
-	Mode         UIMode
-	AIController *AIController
+	Controller *game.GameController
+	Reader     *bufio.Reader
+	Running    bool
+	Mode       UIMode
+
+	// Driver owns the turn sequence, including running NPC powers. The terminal
+	// used to carry its own AI (ui/ai.go), a stub that printed "No attacks
+	// planned" and never moved a unit -- so the terminal opponent did nothing
+	// while the web opponent played a real game off the same engine.
+	Driver *engine.Driver
 }
 
 // NewTerminal creates a new terminal interface
@@ -43,7 +49,7 @@ func NewTerminal(controller *game.GameController) *Terminal {
 		Running:    true,
 		Mode:       TutorialMode, // Default to tutorial mode
 	}
-	terminal.AIController = &AIController{Terminal: terminal}
+	terminal.Driver = engine.New(controller)
 	return terminal
 }
 
@@ -84,7 +90,7 @@ func (t *Terminal) Run() error {
 			fmt.Print("Press Enter to watch their turn... ")
 			t.Reader.ReadString('\n')
 
-			err = t.AIController.ExecuteNPCTurn()
+			err = t.Driver.RunNPCTurn(player.Name, nil)
 			if err != nil {
 				return fmt.Errorf("NPC turn error: %v", err)
 			}
@@ -318,7 +324,7 @@ func (t *Terminal) advancePhase() error {
 
 	fmt.Println("\n═══════════════════════════════════════════════════════════")
 	fmt.Println("✓ Advanced to next phase")
-	fmt.Println("═══════════════════════════════════════════════════════════\n")
+	fmt.Print("═══════════════════════════════════════════════════════════\n\n")
 	return nil
 }
 
@@ -1708,7 +1714,7 @@ func (t *Terminal) promptInteractiveMove() error {
 		return movablePieces[i].Piece.Name < movablePieces[j].Piece.Name
 	})
 
-	fmt.Println("\nAvailable units to move:\n")
+	fmt.Print("\nAvailable units to move:\n\n")
 	fmt.Println("  ID    Unit Type      Movement  Attack  Defense")
 	fmt.Println("  ────────────────────────────────────────────────")
 	for _, mp := range movablePieces {

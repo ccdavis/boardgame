@@ -14,6 +14,10 @@ type GameController struct {
 
 // NewGameController creates a new controller for a game
 func NewGameController(game *models.Game) *GameController {
+	// Point the combat rules at this board's unit roster, so capability checks
+	// use the names the board actually declares.
+	SetUnitRegistry(game.Units())
+
 	return &GameController{
 		Game:           game,
 		MoveTracker:    NewMovementTracker(),
@@ -77,17 +81,44 @@ func (gc *GameController) AdvanceTurn() error {
 		return fmt.Errorf("current player %s not found in player order", gc.Game.CurrentPower)
 	}
 
-	// Move to next player
-	nextIndex := (currentIndex + 1) % len(gc.Game.PlayerOrder)
-	gc.Game.CurrentPower = gc.Game.PlayerOrder[nextIndex]
-	gc.Game.CurrentPhase = models.PurchasePhase
+	// Move to the next power that actually plays.
+	//
+	// The Players line doubles as the turn order and includes Neutral, which
+	// exists only to own unclaimed territory. Stepping to it gave Neutral a full
+	// turn: buying units and collecting income from a dozen territories.
+	nextIndex := currentIndex
+	for i := 0; i < len(gc.Game.PlayerOrder); i++ {
+		nextIndex = (nextIndex + 1) % len(gc.Game.PlayerOrder)
+		candidate := gc.Game.Players[gc.Game.PlayerOrder[nextIndex]]
+		// A board with no Sides section marks nobody as turn-taking; fall back to
+		// the old behaviour rather than deadlocking.
+		if candidate == nil || candidate.TakesTurns || !gc.anyPowerTakesTurns() {
+			break
+		}
+	}
 
-	// If we wrapped around to the first player, increment turn number
-	if nextIndex == 0 {
+	// Wrapping past the end of the order means a new round.
+	if nextIndex <= currentIndex {
 		gc.Game.Turn++
 	}
 
+	gc.Game.CurrentPower = gc.Game.PlayerOrder[nextIndex]
+	gc.Game.CurrentPhase = models.PurchasePhase
+
+	// Movement allowances are per turn, so the incoming power starts fresh.
+	gc.MoveTracker.ResetTurn()
+
 	return nil
+}
+
+// anyPowerTakesTurns reports whether the board declares playing powers at all.
+func (gc *GameController) anyPowerTakesTurns() bool {
+	for _, player := range gc.Game.Players {
+		if player.TakesTurns {
+			return true
+		}
+	}
+	return false
 }
 
 // GetCurrentPlayer returns the player whose turn it is
@@ -264,6 +295,22 @@ func (gc *GameController) MobilizeUnit(territoryName string, unitType string) er
 		return fmt.Errorf("you do not own %s", territoryName)
 	}
 
+	// New units appear at a production centre, not anywhere you happen to hold.
+	// The rule existed only in the dead copy of this method in
+	// models/turn_state.go, so the live path let units be placed on any owned
+	// territory at all.
+	units := gc.Game.Units()
+	hasProduction := false
+	for _, pieceID := range territory.Pieces {
+		if units.For(gc.Game.Pieces[pieceID]).IsStructure {
+			hasProduction = true
+			break
+		}
+	}
+	if !hasProduction && !units.Of(unitType).IsStructure {
+		return fmt.Errorf("%s has no industrial complex to build in", territoryName)
+	}
+
 	// Check if player has purchased this unit type
 	pending := gc.Game.PurchasedUnits[player.Name]
 	unitIndex := -1
@@ -356,19 +403,23 @@ func (gc *GameController) PlanMove(pieceID int, from, to string) error {
 
 	// Check if piece can reach territory using pathfinding that considers enemy units
 	piece := gc.Game.Pieces[pieceID]
-	distance, _, err := CalculateMovementPathForPiece(gc.Game, piece, from, to, player, moveType)
+	distance, path, err := CalculateMovementPathForPiece(gc.Game, piece, from, to, player, moveType)
 	if err != nil {
 		return fmt.Errorf("cannot move %s from %s to %s: %v", piece.Name, from, to, err)
 	}
 
-	// Check if distance is within movement range
-	if distance > int(piece.Movement) {
-		return fmt.Errorf("piece %s cannot reach %s from %s (distance=%d, movement=%d)",
-			piece.Name, to, from, distance, piece.Movement)
+	// Check against what the piece has left this turn, not its full allowance.
+	remaining := gc.MoveTracker.Remaining(pieceID, int(piece.Movement))
+	if distance > remaining {
+		return fmt.Errorf("piece %s cannot reach %s from %s (distance=%d, movement left this turn=%d)",
+			piece.Name, to, from, distance, remaining)
 	}
 
+	// Record any territory this move blitzes through, so execution can take it.
+	blitzed := BlitzedTerritories(gc.Game, piece, path, player)
+
 	// Add to movement tracker
-	err = gc.MoveTracker.AddMove(pieceID, from, to, moveType)
+	err = gc.MoveTracker.AddMoveWithCost(pieceID, from, to, moveType, distance, blitzed...)
 	if err != nil {
 		return err
 	}
@@ -405,6 +456,15 @@ func (gc *GameController) ExecuteCombatMoves() error {
 			return fmt.Errorf("failed to execute move: %v", err)
 		}
 
+		// Undefended enemy territory driven through is taken on the way past.
+		for _, name := range move.Blitzed {
+			if blitzed := gc.Game.Board[name]; blitzed != nil && blitzed.Owner != player {
+				if err := gc.CaptureTerritory(name, player.Name); err != nil {
+					return fmt.Errorf("failed to take %s while blitzing: %v", name, err)
+				}
+			}
+		}
+
 		// Check if move creates a battle
 		toTerritory := gc.Game.Board[move.To]
 		if toTerritory.Owner.Name != player.Name {
@@ -416,12 +476,24 @@ func (gc *GameController) ExecuteCombatMoves() error {
 			// Moving into hostile territory - create battle
 			if _, exists := gc.PendingBattles[move.To]; !exists {
 				// Create new battle
-				battle := NewBattle(move.To, LandBattle, player.Name, toTerritory.Owner.Name)
+				// The battle type follows the terrain. It was hardcoded to
+				// LandBattle, and every submarine rule in CombatRound is gated
+				// on SeaBattle -- so in a real game submarines never rolled a
+				// single die, attacking or defending.
+				battleType := LandBattle
+				if toTerritory.Terrain == models.Water {
+					battleType = SeaBattle
+				}
+				battle := NewBattle(move.To, battleType, player.Name, toTerritory.Owner.Name)
 				gc.PendingBattles[move.To] = battle
 			}
-			// Track this piece as an attacker
+			// Track this piece as an attacker, and where it came from.
 			gc.PendingBattles[move.To].AttackingPieceIDs = append(
 				gc.PendingBattles[move.To].AttackingPieceIDs, move.PieceID)
+			if gc.PendingBattles[move.To].AttackerOrigins == nil {
+				gc.PendingBattles[move.To].AttackerOrigins = make(map[int]string)
+			}
+			gc.PendingBattles[move.To].AttackerOrigins[move.PieceID] = move.From
 		}
 	}
 
@@ -430,11 +502,13 @@ func (gc *GameController) ExecuteCombatMoves() error {
 		gc.TriggerStrictNeutralChainReaction(player)
 	}
 
-	// Clear combat moves from tracker
+	// Drop the executed combat plans but keep the movement they consumed --
+	// clearing that too handed every unit a second full allowance for the
+	// noncombat phase.
 	newMoves := gc.MoveTracker.GetMovesByType(NoncombatMove)
-	gc.MoveTracker.Clear()
+	gc.MoveTracker.ClearPlans()
 	for _, move := range newMoves {
-		gc.MoveTracker.AddMove(move.PieceID, move.From, move.To, move.Type)
+		gc.MoveTracker.AddMoveWithCost(move.PieceID, move.From, move.To, move.Type, move.DistanceCost)
 	}
 
 	return nil
@@ -537,14 +611,32 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 	}
 
 	// Separate pieces into attackers and defenders
+	// Structures -- factories and industrial complexes -- are captured with the
+	// territory, not fought over. Treating them as defenders let them roll
+	// defence dice, be chosen as casualties, and keep a battle alive after every
+	// real defender was gone, because the "no defenders left" test counted them.
+	units := gc.Game.Units()
+	var capturedStructures []*models.Piece
+
 	for _, pieceID := range territory.Pieces {
 		piece := gc.Game.Pieces[pieceID]
-		if attackingIDs[pieceID] {
+		switch {
+		case attackingIDs[pieceID]:
 			attackerPieces = append(attackerPieces, piece)
-		} else {
+		case units.For(piece).IsStructure:
+			capturedStructures = append(capturedStructures, piece)
+		default:
 			defenderPieces = append(defenderPieces, piece)
 		}
 	}
+	// Structures survive the battle and change hands with the territory.
+	defer func() {
+		if territory.Owner != nil {
+			for _, structure := range capturedStructures {
+				structure.Owner = territory.Owner
+			}
+		}
+	}()
 
 	battle.Attackers = attackerPieces
 	battle.Defenders = defenderPieces
@@ -563,6 +655,13 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 		gc.removePieceFromBoard(casualty, territoryName)
 	}
 
+	// A broken-off attack withdraws. Survivors go back where they came from;
+	// leaving them in the contested territory made them defenders of the enemy
+	// they had just failed to dislodge.
+	if result.AttackerRetreated {
+		gc.withdrawAttackers(battle, territoryName, result.AttackersRemaining)
+	}
+
 	// Handle territory capture (only if attacker won, not if they retreated)
 	if result.AttackerWins && !result.AttackerRetreated {
 		err = gc.CaptureTerritory(territoryName, attacker.Name)
@@ -575,6 +674,37 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 	delete(gc.PendingBattles, territoryName)
 
 	return result, nil
+}
+
+// withdrawAttackers moves surviving attackers back to where they came from.
+func (gc *GameController) withdrawAttackers(battle *Battle, territoryName string, survivors []*models.Piece) {
+	territory := gc.Game.Board[territoryName]
+	if territory == nil {
+		return
+	}
+
+	for _, piece := range survivors {
+		if piece == nil {
+			continue
+		}
+		origin := battle.AttackerOrigins[piece.ID]
+		if origin == "" || origin == territoryName {
+			continue // nowhere recorded to fall back to
+		}
+		from := gc.Game.Board[origin]
+		if from == nil {
+			continue
+		}
+
+		remaining := make([]int, 0, len(territory.Pieces))
+		for _, id := range territory.Pieces {
+			if id != piece.ID {
+				remaining = append(remaining, id)
+			}
+		}
+		territory.Pieces = remaining
+		from.Pieces = append(from.Pieces, piece.ID)
+	}
 }
 
 // CaptureTerritory transfers ownership of a territory
@@ -592,22 +722,41 @@ func (gc *GameController) CaptureTerritory(territoryName, newOwnerName string) e
 	// Use the existing ChangeOwnership function from models
 	models.ChangeOwnership(territory, newOwner)
 
+	// Everything left standing in the territory changes hands with it. That is
+	// how a captured factory ends up building for its new owner.
+	for _, pieceID := range territory.Pieces {
+		if piece := gc.Game.Pieces[pieceID]; piece != nil {
+			piece.Owner = newOwner
+		}
+	}
+
 	return nil
 }
 
 // removePieceFromBoard removes a piece from the game entirely
 func (gc *GameController) removePieceFromBoard(piece *models.Piece, territoryName string) {
-	// Find the piece ID
-	var pieceID int
-	for id, p := range gc.Game.Pieces {
-		if p == piece {
-			pieceID = id
-			break
-		}
+	if piece == nil {
+		return
+	}
+	// The piece knows its own ID. The previous scan defaulted to 0 when it found
+	// nothing, then deleted key 0 -- harmless only because IDs start at 1, and it
+	// silently swallowed double removals.
+	pieceID := piece.ID
+
+	// Anything the piece was carrying goes down with it. Cargo lives only in
+	// Holding and is absent from the territory's piece list, so without this it
+	// stays in Game.Pieces forever, in no territory, still counted by unit
+	// tallies.
+	for _, cargoID := range piece.Holding {
+		delete(gc.Game.Pieces, cargoID)
 	}
 
 	// Remove from territory
 	territory := gc.Game.Board[territoryName]
+	if territory == nil {
+		delete(gc.Game.Pieces, pieceID)
+		return
+	}
 	newPieces := make([]int, 0)
 	for _, id := range territory.Pieces {
 		if id != pieceID {
