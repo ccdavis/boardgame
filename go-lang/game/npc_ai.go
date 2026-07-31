@@ -353,9 +353,23 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 			continue // Skip this target
 		}
 
-		// Move units to attack (don't leave territories completely empty or
-		// vulnerable). Source territories are visited in a fixed order: map
-		// iteration order varies between runs, which broke seeded replay.
+		// Choose the force first, then judge THAT force.
+		//
+		// The old flow approved the attack on the odds of every candidate in
+		// every adjacent territory, then sent a fraction of them -- so battles
+		// routinely went in at half the strength the estimate had priced, and
+		// the observed attack record across six games was a coin flip (134
+		// wins, 127 losses). Now the fraction-per-source and the vulnerability
+		// limits pick the actual force, the estimate is recomputed on it, and
+		// an attack that no longer clears the bar is not made at all.
+		type sortie struct {
+			piece *models.Piece
+			from  string
+		}
+		var force []sortie
+
+		// Source territories in a fixed order: map iteration order varies
+		// between runs, which broke seeded replay.
 		sourceNames := make([]string, 0, len(attackers))
 		for territoryName := range attackers {
 			sourceNames = append(sourceNames, territoryName)
@@ -401,12 +415,23 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 			}
 
 			for i := 0; i < numToMove && i < len(pieces); i++ {
-				pieceID := findPieceID(game, pieces[i])
-				err := controller.PlanMove(pieceID, territoryName, target.Name)
-				if err == nil {
-					transcript.LogMove(player.Name, pieces[i].Name, territoryName, target.Name, "combat")
-					movesMade++
-				}
+				force = append(force, sortie{pieces[i], territoryName})
+			}
+		}
+
+		// Judge the force actually going, not the force that might have.
+		chosen := make([]*models.Piece, len(force))
+		for i, s := range force {
+			chosen[i] = s.piece
+		}
+		if len(chosen) == 0 || EstimateAttackSuccess(chosen, defenders) < minProbability {
+			continue // the fraction that can actually march does not justify the attack
+		}
+
+		for _, s := range force {
+			if err := controller.PlanMove(s.piece.ID, s.from, target.Name); err == nil {
+				transcript.LogMove(player.Name, s.piece.Name, s.from, target.Name, "combat")
+				movesMade++
 			}
 		}
 
@@ -803,6 +828,14 @@ func (npc *NPCAIPlayer) findAttackersFor(controller *GameController, player *mod
 				// this the ordinary movement logic walks an invasion force back
 				// off the quayside every turn, and the plan never assembles.
 				if controller.Plans.Committed(player.Name, piece.ID) {
+					continue
+				}
+				// A unit that cannot roll a die contributes nothing to an
+				// attack. Transports and empty carriers (attack 0) used to be
+				// swept along -- one game opened with a lone carrier attacking
+				// a defended sea zone, rolling nothing for five rounds, and
+				// dying.
+				if piece.Attack <= 0 {
 					continue
 				}
 				if piece.Movement > 0 && !caps.IsStructure && !caps.IsAA {
