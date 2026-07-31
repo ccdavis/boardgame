@@ -571,3 +571,65 @@ func TestCombatWithAAA(t *testing.T) {
 		t.Error("Cannot have more casualties than starting units")
 	}
 }
+
+// Anti-aircraft artillery fires before the battle and then sits it out.
+//
+// It used to remain in the defender list, where it double-dipped: special
+// pre-combat shots, then defence dice every round like a normal unit -- and it
+// could be picked as a casualty or keep a lost battle technically alive.
+func TestAAA_FiresOnceAndDoesNotFight(t *testing.T) {
+	aaa := &models.Piece{Name: "AAA", Attack: 0, Defend: 1, Cost: 5}
+
+	// One AAA as the sole defence against a ground-only attack: it gets no
+	// pre-combat shots (no aircraft) and must not fight the ground battle, so
+	// the attacker wins without a single round of dice.
+	battle := NewBattle("Depot", LandBattle, "Germany", "UK")
+	battle.Attackers = []*models.Piece{{Name: "infantry", Attack: 1, Defend: 2, Cost: 3, Terrain: models.Land}}
+	battle.Defenders = []*models.Piece{aaa}
+
+	result, err := ResolveCombat(battle, NewSeededDiceRoller(1), 10)
+	if err != nil {
+		t.Fatalf("resolving: %v", err)
+	}
+	if !result.AttackerWins {
+		t.Error("an AAA alone held the territory; it is not a combat unit")
+	}
+	if len(result.DefenderCasualties) != 0 {
+		t.Errorf("AAA was destroyed in combat; it should be captured, not fought: %d casualties",
+			len(result.DefenderCasualties))
+	}
+}
+
+// With aircraft attacking, the AAA still gets its pre-combat shots.
+func TestAAA_StillFiresAtAircraft(t *testing.T) {
+	aaa := &models.Piece{Name: "AAA", Attack: 0, Defend: 1, Cost: 5}
+	fighters := []*models.Piece{
+		{Name: "fighter", Attack: 3, Defend: 4, Cost: 12, Terrain: models.Air},
+		{Name: "fighter", Attack: 3, Defend: 4, Cost: 12, Terrain: models.Air},
+		{Name: "fighter", Attack: 3, Defend: 4, Cost: 12, Terrain: models.Air},
+	}
+
+	// Find a seed whose first roll is a 1, so the AAA scores a hit.
+	seed := int64(-1)
+	for s := int64(1); s < 200; s++ {
+		if NewSeededDiceRoller(s).Roll() == 1 {
+			seed = s
+			break
+		}
+	}
+	if seed < 0 {
+		t.Fatal("no seed with an opening 1 in 200 tries")
+	}
+
+	battle := NewBattle("Depot", LandBattle, "Germany", "UK")
+	battle.Attackers = fighters
+	battle.Defenders = []*models.Piece{aaa}
+
+	result, err := ResolveCombat(battle, NewSeededDiceRoller(seed), 10)
+	if err != nil {
+		t.Fatalf("resolving: %v", err)
+	}
+	if len(result.AttackerCasualties) == 0 {
+		t.Error("the AAA's pre-combat fire scored no casualty despite rolling a 1")
+	}
+}

@@ -774,8 +774,14 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 	initialAttackerCount := len(attackers)
 	initialDefenderCount := len(defenders)
 
-	// AAA FIRE PHASE (before combat, only happens once)
-	// Find AAA units among defenders
+	// AAA FIRE PHASE (before combat, only happens once).
+	//
+	// Anti-aircraft artillery fires its pre-combat shots and then sits the
+	// battle out: it does not roll in the combat rounds, cannot be chosen as a
+	// casualty, and cannot keep a battle alive on its own. It used to stay in
+	// the defender list afterwards, where it double-dipped -- special shots
+	// first, then defence dice every round like any other unit. If the defence
+	// falls, the gun is captured with the territory, like a factory.
 	aaaUnits := make([]*models.Piece, 0)
 	airUnits := make([]*models.Piece, 0)
 
@@ -801,6 +807,10 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 			attackers = RemoveCasualties(attackers, aaaCasualties)
 		}
 	}
+
+	// Its shots fired, the AAA withdraws from the fight.
+	defenders = RemoveCasualties(defenders, aaaUnits)
+	initialDefenderCount = len(defenders)
 
 	// ARTILLERY SUPPORT (applied before combat begins, undone after -- the
 	// boost record covers casualties too, since it holds the boosted pieces
