@@ -380,6 +380,25 @@ func marchableTo(g *models.Game, player *models.Player, to string) map[string]bo
 	return reach
 }
 
+// hasCoastalProduction reports whether any of a power's factories borders the
+// sea -- the precondition for building a navy at all.
+func hasCoastalProduction(g *models.Game, player *models.Player) bool {
+	units := g.Units()
+	for _, territory := range player.Territories {
+		hasFactory := false
+		for _, id := range territory.Pieces {
+			if units.For(g.Pieces[id]).IsStructure {
+				hasFactory = true
+				break
+			}
+		}
+		if hasFactory && len(adjacentSeaZones(g, territory.Name)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // PlanPurchases returns what the active plans still need to buy, so the plan
 // drives production rather than production happening by habit.
 func (npc *NPCAIPlayer) PlanPurchases(gc *GameController, player *models.Player) map[string]int {
@@ -389,6 +408,15 @@ func (npc *NPCAIPlayer) PlanPurchases(gc *GameController, player *models.Player)
 	}
 
 	g := gc.Game
+
+	// A power with no coastal factory cannot launch a ship: buying one puts it
+	// in the mobilisation queue forever. The USSR -- one landlocked factory in
+	// Moscow -- bought sixteen transports this way, and its plans must make do
+	// with whatever shipping it already has afloat.
+	if !hasCoastalProduction(g, player) {
+		return wanted
+	}
+
 	transportName, _ := shippingNames(g)
 
 	for _, plan := range gc.Plans.Active(player.Name) {

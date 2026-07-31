@@ -749,53 +749,86 @@ func (npc *NPCAIPlayer) MobilizePhase(controller *GameController, transcript *Ga
 		return nil
 	}
 
-	// Mobilize all purchased units at the first available IC (simple strategy)
-	// In a more complex AI, would distribute based on strategic value
+	// Place every purchased unit that has anywhere to go. One unplaceable unit
+	// must not block the rest: the old loop always tried the head of the queue
+	// and gave up entirely on the first failure, so a single transport bought
+	// by a power with no coastal factory jammed the queue for the rest of the
+	// game -- the USSR ended one probe with 126 units in the backlog and a
+	// 41-unit army on the board.
 	unitsPlaced := 0
-	for len(game.PurchasedUnits[player.Name]) > 0 {
-		pending := game.PurchasedUnits[player.Name]
-		if len(pending) == 0 {
-			break
-		}
+	stuck := make(map[string]int)
+	for progress := true; progress; {
+		progress = false
 
-		unitType := pending[0].Type
-
-		// Land units appear at the factory; ships are launched into a sea zone
-		// beside it.
-		spots := make([]string, 0, len(icTerritories))
-		if template, ok := game.GlobalPieceTemplates[unitType]; ok && template.Terrain == models.Water {
-			for _, territory := range icTerritories {
-				spots = append(spots, adjacentSeaZones(game, territory.Name)...)
-			}
-		} else {
-			for _, territory := range icTerritories {
-				spots = append(spots, territory.Name)
+		// Distinct pending types, in queue order.
+		seen := make(map[string]bool)
+		types := make([]string, 0)
+		for _, unit := range game.PurchasedUnits[player.Name] {
+			if !seen[unit.Type] {
+				seen[unit.Type] = true
+				types = append(types, unit.Type)
 			}
 		}
 
-		placed := false
-		for _, spot := range spots {
-			err := controller.MobilizeUnit(spot, unitType)
-			if err == nil {
-				transcript.LogMobilize(player.Name, unitType, spot)
-				unitsPlaced++
-				placed = true
-				break
+		for _, unitType := range types {
+			for _, spot := range npc.placementSpots(controller, player, icTerritories, unitType) {
+				if err := controller.MobilizeUnit(spot, unitType); err == nil {
+					transcript.LogMobilize(player.Name, unitType, spot)
+					unitsPlaced++
+					progress = true
+					break
+				}
 			}
-		}
-
-		if !placed {
-			// Can't place this unit anywhere, skip it
-			transcript.LogAction(player.Name, fmt.Sprintf("Could not place %s", unitType))
-			break
 		}
 	}
 
+	for _, unit := range game.PurchasedUnits[player.Name] {
+		stuck[unit.Type]++
+	}
+	for _, unitType := range sortedWants(stuck) {
+		transcript.LogAction(player.Name, fmt.Sprintf(
+			"Could not place %dx %s (no valid location)", stuck[unitType], unitType))
+	}
 	if unitsPlaced == 0 {
 		transcript.LogAction(player.Name, "No units mobilized")
 	}
 
 	return nil
+}
+
+// placementSpots lists where a unit of this type could be placed, best first.
+func (npc *NPCAIPlayer) placementSpots(controller *GameController, player *models.Player, icTerritories []*models.Territory, unitType string) []string {
+	game := controller.Game
+	template, ok := game.GlobalPieceTemplates[unitType]
+	if !ok {
+		return nil
+	}
+
+	// A new factory goes where the purchase decided it should: the best
+	// factory-less territory. The old path placed every unit "at the first
+	// factory territory", which for a factory meant stacking it on top of an
+	// existing one -- the USA ended one probe with six factories in Eastern US.
+	if game.Units().Of(unitType).IsStructure {
+		if best := npc.findBestTerritoryForFactory(game, player); best != nil {
+			return []string{best.Name}
+		}
+		return nil
+	}
+
+	// Ships are launched into a sea zone beside a factory.
+	if template.Terrain == models.Water {
+		spots := make([]string, 0)
+		for _, territory := range icTerritories {
+			spots = append(spots, adjacentSeaZones(game, territory.Name)...)
+		}
+		return spots
+	}
+
+	spots := make([]string, 0, len(icTerritories))
+	for _, territory := range icTerritories {
+		spots = append(spots, territory.Name)
+	}
+	return spots
 }
 
 // CollectIncomePhase collects income

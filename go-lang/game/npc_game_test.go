@@ -434,3 +434,94 @@ func TestNPCGameRunnerLonger(t *testing.T) {
 	fmt.Println(runner.GetTranscriptString())
 	fmt.Println(runner.GetGameState())
 }
+
+// One unplaceable unit must not jam the whole mobilisation queue, and a power
+// with no coastal factory must not buy ships it can never launch.
+//
+// The USSR did both: its landlocked Moscow factory could never launch the
+// transport its invasion plan bought, the transport sat at the head of the
+// queue, and MobilizePhase gave up on first failure -- so every unit bought
+// after it was stuck too. One probe ended with 126 units in the backlog and a
+// 41-unit army on the board.
+func TestMobilize_UnplaceableUnitDoesNotJamTheQueue(t *testing.T) {
+	g := models.NewGame()
+	g.PlayerOrder = []string{"USSR", "Germany"}
+	ussr := g.GetOrCreatePlayer("USSR")
+	germany := g.GetOrCreatePlayer("Germany")
+	ussr.Side, germany.Side = "Allies", "Axis"
+	ussr.TakesTurns, germany.TakesTurns = true, true
+	ussr.IPCs = 60
+
+	g.AddTerritory("Moscow", models.Land, "USSR", 8) // landlocked
+	g.AddTerritory("Berlin", models.Land, "Germany", 10)
+	g.ConnectTerritories("Moscow", "Berlin")
+
+	g.AddPieceTemplate("infantry", models.Land, 1, 1, 2, 3)
+	g.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
+	g.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
+	g.PlacePieces("Moscow", "factory", 1)
+
+	gc := NewGameController(g)
+	gc.StartGame()
+
+	// A transport at the head of the queue, infantry behind it.
+	if err := gc.PurchaseUnit("transport", 1); err != nil {
+		t.Fatalf("buying transport: %v", err)
+	}
+	if err := gc.PurchaseUnit("infantry", 3); err != nil {
+		t.Fatalf("buying infantry: %v", err)
+	}
+
+	g.CurrentPhase = models.MobilizePhase
+	npc := NewSeededNPCAIPlayer("USSR", "normal", 1)
+	if err := npc.MobilizePhase(gc, NewGameTranscript("t")); err != nil {
+		t.Fatalf("mobilizing: %v", err)
+	}
+
+	placed := 0
+	for _, id := range g.Board["Moscow"].Pieces {
+		if g.Pieces[id].Name == "infantry" {
+			placed++
+		}
+	}
+	if placed != 3 {
+		t.Errorf("%d infantry placed, want 3 -- the unplaceable transport must not block them", placed)
+	}
+}
+
+// A power with no coastal factory asks its plans for no ships.
+func TestPlanPurchases_NoShipsWithoutACoastalYard(t *testing.T) {
+	g := models.NewGame()
+	g.PlayerOrder = []string{"USSR", "Japan"}
+	ussr := g.GetOrCreatePlayer("USSR")
+	japan := g.GetOrCreatePlayer("Japan")
+	ussr.Side, japan.Side = "Allies", "Axis"
+	ussr.TakesTurns, japan.TakesTurns = true, true
+
+	// A coastal staging territory and an island to covet -- but the only
+	// factory is inland, so no ship can ever be launched.
+	g.AddTerritory("Moscow", models.Land, "USSR", 8)
+	g.AddTerritory("Coast", models.Land, "USSR", 2)
+	g.AddTerritory("Island", models.Land, "Japan", 4)
+	g.AddTerritory("Strait", models.Water, "Neutral", 0)
+	g.ConnectTerritories("Moscow", "Coast")
+	g.ConnectTerritories("Coast", "Strait")
+	g.ConnectTerritories("Strait", "Island")
+
+	g.AddPieceTemplate("infantry", models.Land, 1, 1, 2, 3)
+	g.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
+	g.GlobalPieceTemplates["transport"].Capacity = 2
+	g.GlobalPieceTemplates["transport"].CanCarry = []string{"infantry"}
+	g.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
+	g.PlacePieces("Moscow", "factory", 1)
+	g.PlacePieces("Coast", "infantry", 4)
+
+	gc := NewGameController(g)
+	gc.StartGame()
+
+	npc := NewSeededNPCAIPlayer("USSR", "normal", 1)
+	npc.ReviewPlans(gc, ussr, NewGameTranscript("t"))
+	if wants := npc.PlanPurchases(gc, ussr); len(wants) != 0 {
+		t.Errorf("a power with no coastal yard wants to buy %v", wants)
+	}
+}
