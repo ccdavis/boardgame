@@ -15,7 +15,7 @@ func TestArtillerySupport(t *testing.T) {
 	units := []*models.Piece{infantry1, infantry2, artillery1, artillery2}
 
 	// Apply artillery support
-	ApplyArtillerySupport(units)
+	boosts := ApplyArtillerySupport(units)
 
 	// Both infantry should now have attack 2
 	if infantry1.Attack != 2 {
@@ -26,7 +26,7 @@ func TestArtillerySupport(t *testing.T) {
 	}
 
 	// Remove artillery support
-	RemoveArtillerySupport(units)
+	RemoveArtillerySupport(boosts)
 
 	// Both infantry should now have attack 1 again
 	if infantry1.Attack != 1 {
@@ -47,7 +47,7 @@ func TestArtillerySupportMoreInfantryThanArtillery(t *testing.T) {
 	units := []*models.Piece{infantry1, infantry2, infantry3, artillery}
 
 	// Apply artillery support
-	ApplyArtillerySupport(units)
+	boosts := ApplyArtillerySupport(units)
 
 	// Count how many infantry have attack 2
 	supportedCount := 0
@@ -65,6 +65,9 @@ func TestArtillerySupportMoreInfantryThanArtillery(t *testing.T) {
 	if supportedCount != 1 {
 		t.Errorf("Expected 1 infantry to be supported, got %d", supportedCount)
 	}
+	if len(boosts) != 1 {
+		t.Errorf("Expected 1 recorded boost, got %d", len(boosts))
+	}
 }
 
 func TestArtillerySupportMoreArtilleryThanInfantry(t *testing.T) {
@@ -77,11 +80,14 @@ func TestArtillerySupportMoreArtilleryThanInfantry(t *testing.T) {
 	units := []*models.Piece{infantry, artillery1, artillery2, artillery3}
 
 	// Apply artillery support
-	ApplyArtillerySupport(units)
+	boosts := ApplyArtillerySupport(units)
 
 	// The infantry should be supported
 	if infantry.Attack != 2 {
 		t.Errorf("Infantry should have attack 2, got %d", infantry.Attack)
+	}
+	if len(boosts) != 1 {
+		t.Errorf("Expected 1 recorded boost, got %d", len(boosts))
 	}
 }
 
@@ -93,7 +99,7 @@ func TestArtillerySupportNoInfantry(t *testing.T) {
 	units := []*models.Piece{artillery, tank}
 
 	// Apply artillery support
-	ApplyArtillerySupport(units)
+	boosts := ApplyArtillerySupport(units)
 
 	// Nothing should change
 	if artillery.Attack != 2 {
@@ -101,6 +107,9 @@ func TestArtillerySupportNoInfantry(t *testing.T) {
 	}
 	if tank.Attack != 3 {
 		t.Errorf("Tank attack should remain 3, got %d", tank.Attack)
+	}
+	if len(boosts) != 0 {
+		t.Errorf("Expected no recorded boosts, got %d", len(boosts))
 	}
 }
 

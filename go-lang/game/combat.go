@@ -241,7 +241,7 @@ func SelectCasualtiesAvoidingAir(units []*models.Piece, hitCount int, subsCannot
 	targetable := make([]*models.Piece, 0, len(units))
 	protected := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unitRules.For(unit).IsSubmarine {
+		if models.CapabilitiesOf(unit).IsSubmarine {
 			protected = append(protected, unit)
 		} else {
 			targetable = append(targetable, unit)
@@ -286,25 +286,18 @@ type SurpriseLosses struct {
 
 // Helper functions for submarine and destroyer mechanics.
 //
-// These ask the unit registry rather than comparing names. They used to test
-// for "submarine" and "destroyer" literally, which meant none of them ever
-// matched against aaa.gdf -- the board calls the unit "sub" and declares no
-// destroyer at all -- so submarine first strike and destroyer negation were
-// silently inert in every real game while their tests passed against fixtures
-// that used the other spelling.
-var unitRules = models.BuildUnitRegistry(nil)
-
-// SetUnitRegistry points combat at a board's unit roster.
-func SetUnitRegistry(registry *models.UnitRegistry) {
-	if registry != nil {
-		unitRules = registry
-	}
-}
+// These derive capabilities from the piece itself (models.CapabilitiesOf)
+// rather than comparing names at the call site or consulting shared state.
+// Two earlier designs both failed: literal name tests ("submarine",
+// "destroyer") never matched aaa.gdf's "sub", so the rules were silently
+// inert; and the package-global registry that replaced them was overwritten
+// by every controller and read during every battle, so concurrent games raced
+// it and games on different boards used each other's unit rules.
 
 // hasDestroyer checks whether any unit cancels submarine abilities
 func hasDestroyer(units []*models.Piece) bool {
 	for _, unit := range units {
-		if unitRules.For(unit).NegatesSubmarines {
+		if models.CapabilitiesOf(unit).NegatesSubmarines {
 			return true
 		}
 	}
@@ -315,7 +308,7 @@ func hasDestroyer(units []*models.Piece) bool {
 func getSubmarines(units []*models.Piece) []*models.Piece {
 	subs := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unitRules.For(unit).IsSubmarine {
+		if models.CapabilitiesOf(unit).IsSubmarine {
 			subs = append(subs, unit)
 		}
 	}
@@ -326,7 +319,7 @@ func getSubmarines(units []*models.Piece) []*models.Piece {
 func getNonSubmarines(units []*models.Piece) []*models.Piece {
 	nonSubs := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if !unitRules.For(unit).IsSubmarine {
+		if !models.CapabilitiesOf(unit).IsSubmarine {
 			nonSubs = append(nonSubs, unit)
 		}
 	}
@@ -348,7 +341,7 @@ func getAirUnits(units []*models.Piece) []*models.Piece {
 func getSeaUnits(units []*models.Piece) []*models.Piece {
 	seaUnits := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unit.Terrain == models.Water && !unitRules.For(unit).IsSubmarine {
+		if unit.Terrain == models.Water && !models.CapabilitiesOf(unit).IsSubmarine {
 			seaUnits = append(seaUnits, unit)
 		}
 	}
@@ -359,7 +352,7 @@ func getSeaUnits(units []*models.Piece) []*models.Piece {
 func getBombardmentShips(units []*models.Piece) []*models.Piece {
 	ships := make([]*models.Piece, 0)
 	for _, unit := range units {
-		if unitRules.For(unit).CanBombard {
+		if models.CapabilitiesOf(unit).CanBombard {
 			ships = append(ships, unit)
 		}
 	}
@@ -548,15 +541,19 @@ func GetEffectiveProduction(territory *models.Territory) int {
 	return effective
 }
 
-// ApplyArtillerySupport modifies infantry attack values when supported by artillery
-// For every artillery, one infantry gets +1 attack (from 1 to 2)
-func ApplyArtillerySupport(units []*models.Piece) {
+// ApplyArtillerySupport modifies infantry attack values when supported by
+// artillery: for every artillery, one infantry gets +1 attack (from 1 to 2).
+//
+// It returns the pre-boost attack values so RemoveArtillerySupport can undo
+// the boost exactly. The record used to live in a package-level map, which two
+// concurrent battles -- one per game session -- wrote without a lock.
+func ApplyArtillerySupport(units []*models.Piece) map[*models.Piece]int16 {
 	artilleryCount := 0
 	infantryNeedingSupport := make([]*models.Piece, 0)
 
 	// Count artillery and infantry
 	for _, unit := range units {
-		if unitRules.For(unit).SupportsInfantry {
+		if models.CapabilitiesOf(unit).SupportsInfantry {
 			artilleryCount++
 		} else if unit.Name == "infantry" && unit.Attack == 1 {
 			infantryNeedingSupport = append(infantryNeedingSupport, unit)
@@ -569,30 +566,24 @@ func ApplyArtillerySupport(units []*models.Piece) {
 		supportCount = len(infantryNeedingSupport)
 	}
 
+	boosted := make(map[*models.Piece]int16, supportCount)
 	for i := 0; i < supportCount; i++ {
-		boostedInfantry[infantryNeedingSupport[i]] = infantryNeedingSupport[i].Attack
+		boosted[infantryNeedingSupport[i]] = infantryNeedingSupport[i].Attack
 		infantryNeedingSupport[i].Attack = 2
 	}
+	return boosted
 }
 
-// RemoveArtillerySupport resets infantry attack values
 // RemoveArtillerySupport undoes the boost applied by ApplyArtillerySupport.
 //
 // It restores each boosted unit to the attack value it actually had. Matching
 // on "infantry with attack 2" instead would demote infantry whose base attack is
 // 2 on some other board, permanently weakening units that were never boosted.
-func RemoveArtillerySupport(units []*models.Piece) {
-	for _, unit := range units {
-		if original, boosted := boostedInfantry[unit]; boosted {
-			unit.Attack = original
-			delete(boostedInfantry, unit)
-		}
+func RemoveArtillerySupport(boosted map[*models.Piece]int16) {
+	for unit, original := range boosted {
+		unit.Attack = original
 	}
 }
-
-// boostedInfantry records the pre-boost attack value of each supported unit, so
-// the boost can be undone exactly.
-var boostedInfantry = make(map[*models.Piece]int16)
 
 // SelectCasualties selects which units to remove as casualties
 // Handles multi-hit units like battleships (require 2 hits to destroy)
@@ -617,7 +608,7 @@ func SelectCasualties(units []*models.Piece, hitCount int) []*models.Piece {
 		// Multi-hit units absorb a hit and stay in the fight. How many hits a
 		// unit takes comes from the registry rather than a name comparison, so a
 		// board that calls its capital ship something else still works.
-		maxHits := unitRules.For(unit).MaxHits
+		maxHits := models.CapabilitiesOf(unit).MaxHits
 		if maxHits > 1 {
 			unit.Hits++
 			hitCount--
@@ -783,17 +774,13 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 	initialAttackerCount := len(attackers)
 	initialDefenderCount := len(defenders)
 
-	// Store original attackers for cleanup
-	originalAttackers := make([]*models.Piece, len(battle.Attackers))
-	copy(originalAttackers, battle.Attackers)
-
 	// AAA FIRE PHASE (before combat, only happens once)
 	// Find AAA units among defenders
 	aaaUnits := make([]*models.Piece, 0)
 	airUnits := make([]*models.Piece, 0)
 
 	for _, unit := range defenders {
-		if unitRules.For(unit).IsAA {
+		if models.CapabilitiesOf(unit).IsAA {
 			aaaUnits = append(aaaUnits, unit)
 		}
 	}
@@ -815,8 +802,10 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 		}
 	}
 
-	// ARTILLERY SUPPORT (applied before combat begins)
-	ApplyArtillerySupport(attackers)
+	// ARTILLERY SUPPORT (applied before combat begins, undone after -- the
+	// boost record covers casualties too, since it holds the boosted pieces
+	// themselves rather than scanning a list of survivors)
+	boosted := ApplyArtillerySupport(attackers)
 
 	// Fight until one side is eliminated or max rounds reached
 	for result.Rounds < maxRounds {
@@ -863,8 +852,8 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 		result.Rounds++
 	}
 
-	// Remove artillery support from all original attackers (including casualties)
-	RemoveArtillerySupport(originalAttackers)
+	// Remove artillery support from every boosted unit, casualties included
+	RemoveArtillerySupport(boosted)
 
 	// Damage does not carry between battles.
 	RepairDamagedUnits(attackers)

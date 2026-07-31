@@ -102,6 +102,21 @@ func capabilitiesFor(template *Piece) UnitCapabilities {
 	return caps
 }
 
+// CapabilitiesOf derives a piece's abilities from the piece itself.
+//
+// A piece is cloned from its template and carries the template's name and
+// stats, so this gives the same answer as looking the name up in the board's
+// registry -- without any shared state. Combat uses this rather than a
+// package-level registry: the old global was overwritten by every controller
+// and read during every battle, so two concurrent games raced it, and two
+// games on different boards used each other's unit rules.
+func CapabilitiesOf(piece *Piece) UnitCapabilities {
+	if piece == nil {
+		return UnitCapabilities{MaxHits: 1}
+	}
+	return capabilitiesFor(piece)
+}
+
 // UnitRegistry answers capability questions for a board's unit roster.
 type UnitRegistry struct {
 	byName map[string]UnitCapabilities

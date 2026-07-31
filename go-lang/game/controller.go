@@ -20,10 +20,6 @@ type GameController struct {
 
 // NewGameController creates a new controller for a game
 func NewGameController(game *models.Game) *GameController {
-	// Point the combat rules at this board's unit roster, so capability checks
-	// use the names the board actually declares.
-	SetUnitRegistry(game.Units())
-
 	return &GameController{
 		Game:           game,
 		MoveTracker:    NewMovementTracker(),

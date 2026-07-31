@@ -29,7 +29,6 @@ func boardWithRoster(t *testing.T) *models.Game {
 			Attack: spec.atk, Defend: spec.def, Cost: spec.cost,
 		}
 	}
-	SetUnitRegistry(g.Units())
 	return g
 }
 
@@ -72,7 +71,6 @@ func TestBoardSpelling_DestroyerNegatesWhenDeclared(t *testing.T) {
 	g.GlobalPieceTemplates["destroyer"] = &models.Piece{
 		Name: "destroyer", Terrain: models.Water, Movement: 2, Attack: 2, Defend: 2, Cost: 8,
 	}
-	SetUnitRegistry(models.BuildUnitRegistry(g.GlobalPieceTemplates))
 
 	units := []*models.Piece{
 		{Name: "sub", Terrain: models.Water},

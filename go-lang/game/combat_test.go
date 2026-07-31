@@ -469,7 +469,7 @@ func TestApplyArtillerySupport(t *testing.T) {
 	units := []*models.Piece{inf1, inf2, inf3, art1, art2}
 
 	// Apply artillery support
-	ApplyArtillerySupport(units)
+	boosts := ApplyArtillerySupport(units)
 
 	// Check that 2 infantry got boosted (1 per artillery)
 	boostedCount := 0
@@ -496,7 +496,7 @@ func TestApplyArtillerySupport(t *testing.T) {
 	}
 
 	// Remove artillery support
-	RemoveArtillerySupport(units)
+	RemoveArtillerySupport(boosts)
 
 	// All infantry should be back to attack 1
 	for _, unit := range units {
