@@ -117,6 +117,11 @@ func (t *GameTranscript) LogBattleResult(territory string, result *BattleResult)
 		outcome = fmt.Sprintf("fighting in %s ended inconclusively", territory)
 	}
 
+	if n := len(result.BombardmentHits); n > 0 {
+		t.Log(0, "", models.ConductCombatPhase,
+			fmt.Sprintf("  shore bombardment: %d hit(s) before the assault", n))
+	}
+
 	action := fmt.Sprintf("  %s - %s after %d rounds (Att casualties: %d, Def casualties: %d)",
 		outcome, winner, result.Rounds, len(result.AttackerCasualties), len(result.DefenderCasualties))
 

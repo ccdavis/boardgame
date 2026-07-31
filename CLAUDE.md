@@ -103,6 +103,8 @@ Located in `game/combat.go`:
   mechanic is implemented and tested, but `aaa.gdf` declares no artillery
   unit, so it is inert on the real board)
 - Strategic bombing: Target industrial complexes to cause damage
+- Shore bombardment: bombardment-capable warships in the drop zone fire once
+  in support of an amphibious landing, capped at one shot per landed unit
 
 ### Movement Rules
 
@@ -144,9 +146,11 @@ Located in `game/npc_ai.go`:
 - **Carriers** (`game/movement.go`): Carry up to 2 fighters; a fighter may only
   end a noncombat move on friendly ground or a friendly carrier with room
 - **Transports** (`game/transport_test.go`): Carry infantry/artillery, enable amphibious assaults
-- **Battleships** (`game/battleship_test.go`): 2 hits to destroy. Shore
-  bombardment code exists (`RollBombardment`) but the amphibious landing flow
-  does not yet call it
+- **Battleships** (`game/battleship_test.go`, `game/bombardment_test.go`):
+  2 hits to destroy. Warships in the drop zone shell the beach before an
+  amphibious assault: one shot per unit offloaded, casualties removed before
+  they can fire back (Classic rule), forfeited if the drop zone itself is
+  being fought over
 - **Artillery** (`game/artillery_test.go`): Boost infantry attack from 1 to 2
 - **Anti-Aircraft Artillery** (`game/combat.go`): Pre-combat roll against aircraft
 - **Bombers** (`game/bombing_test.go`): Strategic bombing raids on industrial complexes

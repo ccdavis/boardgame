@@ -670,6 +670,20 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 	battle.Attackers = attackerPieces
 	battle.Defenders = defenderPieces
 
+	// Fire support was promised at landing time; keep only the ships that are
+	// still afloat. Battles resolve in a fixed order within the phase, and a
+	// sea battle in the drop zone can sink the bombarding squadron before the
+	// land battle it was covering is fought.
+	if len(battle.Bombarding) > 0 {
+		afloat := make([]*models.Piece, 0, len(battle.Bombarding))
+		for _, ship := range battle.Bombarding {
+			if _, ok := gc.Game.Pieces[ship.ID]; ok {
+				afloat = append(afloat, ship)
+			}
+		}
+		battle.Bombarding = afloat
+	}
+
 	// Resolve the combat with retreat option
 	result, err := ResolveCombatWithRetreat(battle, diceRoller, 100, retreatDecider)
 	if err != nil {

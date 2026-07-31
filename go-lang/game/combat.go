@@ -54,6 +54,18 @@ type Battle struct {
 	// out again on retreat -- they stayed inside enemy territory and were
 	// counted as *defenders* of that enemy in the next battle fought there.
 	AttackerOrigins map[int]string
+
+	// Bombarding are warships standing off shore in support of an amphibious
+	// landing. They fire once before the first round of land combat and take
+	// no further part -- they are not attackers, cannot be casualties here,
+	// and stay at sea whatever happens on the beach.
+	Bombarding []*models.Piece
+
+	// AmphibiousUnits is how many attackers came ashore from transports. Each
+	// supporting warship may fire one bombardment shot per unit offloaded, so
+	// this caps the barrage: three battleships covering a single landed
+	// infantry fire once, not three times.
+	AmphibiousUnits int
 }
 
 // Hit represents a successful hit in combat
@@ -73,6 +85,10 @@ type BattleResult struct {
 	DefendersRemaining []*models.Piece
 	Rounds             int
 	AttackerRetreated  bool
+
+	// BombardmentHits are the shore-bombardment shots that connected before
+	// the first round, when warships supported an amphibious landing.
+	BombardmentHits []Hit
 }
 
 // DiceRoller provides dice rolling functionality
@@ -815,6 +831,22 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 	// Its shots fired, the AAA withdraws from the fight.
 	defenders = RemoveCasualties(defenders, aaaUnits)
 	initialDefenderCount = len(defenders)
+
+	// SHORE BOMBARDMENT (once, before the first round).
+	//
+	// Warships covering an amphibious landing each fire one supporting shot,
+	// capped at one per unit that came ashore. Casualties are removed before
+	// combat begins and do not fire back -- the Classic rule, which this board
+	// follows; the 1942 second edition lets them return fire once.
+	if len(battle.Bombarding) > 0 && len(defenders) > 0 && battle.AmphibiousUnits > 0 {
+		bombardmentHits := diceRoller.RollBombardment(battle.Bombarding, battle.AmphibiousUnits)
+		result.BombardmentHits = bombardmentHits
+		if len(bombardmentHits) > 0 {
+			casualties := SelectCasualties(defenders, len(bombardmentHits))
+			result.DefenderCasualties = append(result.DefenderCasualties, casualties...)
+			defenders = RemoveCasualties(defenders, casualties)
+		}
+	}
 
 	// ARTILLERY SUPPORT (applied before combat begins, undone after -- the
 	// boost record covers casualties too, since it holds the boosted pieces

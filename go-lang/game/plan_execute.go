@@ -376,8 +376,47 @@ func (gc *GameController) LandAssaultTroops(power string, transcript *GameTransc
 			transcript.LogAction(power, fmt.Sprintf(
 				"%d troops landed in %s", landedHere, plan.Target))
 		}
+		if landedHere > 0 {
+			if guns := gc.attachShoreBombardment(plan, power); guns > 0 && transcript != nil {
+				transcript.LogAction(power, fmt.Sprintf(
+					"%d warship(s) stand off %s to bombard %s", guns, plan.DropZone, plan.Target))
+			}
+		}
 	}
 	return landed
+}
+
+// attachShoreBombardment enrols the attacker's bombardment-capable warships in
+// the drop zone as fire support for the landing battle. Returns how many.
+//
+// No support is attached while the drop zone itself is being fought over: a
+// fleet in action cannot also bombard the shore (and per the rules, sea combat
+// in the assault's sea zone forfeits the bombardment).
+func (gc *GameController) attachShoreBombardment(plan *AmphibiousPlan, power string) int {
+	battle, ok := gc.PendingBattles[plan.Target]
+	if !ok {
+		return 0 // the beach was undefended; nothing to soften up
+	}
+	if _, contested := gc.PendingBattles[plan.DropZone]; contested {
+		return 0
+	}
+	drop := gc.Game.Board[plan.DropZone]
+	if drop == nil {
+		return 0
+	}
+
+	units := gc.Game.Units()
+	for _, id := range drop.Pieces {
+		ship := gc.Game.Pieces[id]
+		if ship == nil || ship.Owner == nil || ship.Owner.Name != power {
+			continue
+		}
+		if !units.For(ship).CanBombard {
+			continue
+		}
+		battle.Bombarding = append(battle.Bombarding, ship)
+	}
+	return len(battle.Bombarding)
 }
 
 // registerAmphibiousAttacker enrols a landed unit in the battle for the target,
@@ -401,6 +440,9 @@ func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, piece
 		gc.PendingBattles[plan.Target] = battle
 	}
 	battle.AttackingPieceIDs = append(battle.AttackingPieceIDs, pieceID)
+	// Each unit that comes ashore entitles one supporting warship to one
+	// bombardment shot, so the battle counts its amphibious attackers.
+	battle.AmphibiousUnits++
 	if battle.AttackerOrigins == nil {
 		battle.AttackerOrigins = make(map[int]string)
 	}
