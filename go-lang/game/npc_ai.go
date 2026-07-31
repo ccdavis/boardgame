@@ -19,6 +19,13 @@ type NPCAIPlayer struct {
 	// never be replayed -- and a bug found by running one was a bug you could
 	// not reproduce.
 	roller *DiceRoller
+
+	// attacksThisTurn is how many attacks and landings this turn's combat move
+	// actually launched. The quartermaster reads it in the noncombat phase: an
+	// outproduced power that found nothing worth hitting falls back to the
+	// third rung of the ladder -- dig in, and hope to outlast an enemy who is
+	// busy elsewhere. Valid only within a single TakeTurn.
+	attacksThisTurn int
 }
 
 // NewNPCAIPlayer creates a new NPC AI player with unpredictable dice.
@@ -322,8 +329,8 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 			continue
 		}
 
-		// Get defenders
-		defenders := game.GetPiecesInTerritory(target.Name)
+		// Get defenders -- including the garrison a neutral would mobilise.
+		defenders := expectedDefenders(game, target)
 
 		// Estimate success probability
 		successProb := EstimateAttackSuccess(allAttackers, defenders)
@@ -456,6 +463,10 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 	// all happen in this phase, so an operation that has been forming for
 	// several turns executes here in one go.
 	launched := npc.ExecuteReadyPlans(controller, player, transcript)
+
+	// The quartermaster reads this later: an outproduced power that found
+	// nothing to hit this turn digs in instead (attack, expand, or fortify).
+	npc.attacksThisTurn = attacksPlanned + launched
 
 	// A convoy held up by a stationed fleet fights its way past, provided it
 	// has the cover to do so.
@@ -730,6 +741,69 @@ func (npc *NPCAIPlayer) CollectIncomePhase(controller *GameController, transcrip
 	return nil
 }
 
+// latentDefenders returns the garrison a neutral territory WILL raise when
+// attacked, as phantom pieces for the success estimator.
+//
+// A neutral has no standing army until the first attacker crosses the border,
+// so estimating against what is visibly there priced Turkey as a walkover --
+// and the attack then met four mobilised infantry. The estimator must fight
+// the country that will exist, not the one on the board.
+func latentDefenders(g *models.Game, territory *models.Territory) []*models.Piece {
+	if territory == nil || territory.Owner == nil || territory.Owner.Name != "Neutral" ||
+		territory.Terrain != models.Land || territory.NeutralType == models.NotNeutral {
+		return nil
+	}
+	for _, id := range territory.Pieces {
+		if piece := g.Pieces[id]; piece != nil && piece.Owner == territory.Owner {
+			return nil // already mobilised; the real garrison is on the board
+		}
+	}
+
+	name := bestDefenderName(g)
+	template, ok := g.GlobalPieceTemplates[name]
+	if !ok {
+		return nil
+	}
+	count := territory.Production
+	if count < 1 {
+		count = 1
+	}
+	phantoms := make([]*models.Piece, count)
+	for i := range phantoms {
+		phantoms[i] = &models.Piece{
+			Name: template.Name, Terrain: template.Terrain,
+			Attack: template.Attack, Defend: template.Defend, Cost: template.Cost,
+		}
+	}
+	return phantoms
+}
+
+// expectedDefenders is what an attack on a territory would actually fight:
+// the pieces present, plus the garrison a neutral would mobilise.
+func expectedDefenders(g *models.Game, territory *models.Territory) []*models.Piece {
+	defenders := g.GetPiecesInTerritory(territory.Name)
+	return append(defenders, latentDefenders(g, territory)...)
+}
+
+// strictChainCost is the production the OTHER strict neutrals would hand the
+// enemy side if this one were violated -- the diplomatic price of the attack.
+// Once the chain has already fired there are no unflipped strict neutrals
+// left and the price is zero.
+func strictChainCost(g *models.Game, exclude string) int {
+	cost := 0
+	for _, name := range sortedTerritoryNames(g) {
+		if name == exclude {
+			continue
+		}
+		territory := g.Board[name]
+		if territory.Owner != nil && territory.Owner.Name == "Neutral" &&
+			territory.NeutralType == models.StrictNeutral {
+			cost += territory.Production
+		}
+	}
+	return cost
+}
+
 // findAttackTargets finds enemy territories that are adjacent to our territories
 // Prioritizes victory cities and high-value territories
 func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Player) []*models.Territory {
@@ -740,6 +814,7 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 
 	targetScores := make([]targetScore, 0)
 	seen := make(map[string]bool)
+	pressure := timePressure(game, player)
 
 	for _, ourTerritory := range player.Territories {
 		for _, neighbor := range ourTerritory.ConnectedTo {
@@ -751,18 +826,26 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 					continue // Skip allies
 				}
 
-				// Policy, not rule: the AI does not violate strict neutrals.
-				// The rules allow it -- 3 IPCs to the bank, the country raises
-				// a garrison, and every other strict neutral turns hostile --
-				// but that diplomatic price is invisible to this scoring, so a
-				// dumb attacker would hand the whole neutral bloc to its enemy
-				// for a 4-IPC province.
-				if neighbor.Owner.Name == "Neutral" && neighbor.NeutralType == models.StrictNeutral {
-					continue
-				}
-
 				// Calculate strategic score
 				score := neighbor.Production
+
+				// Strict neutrals are on the table only for a power losing the
+				// production race with nothing better to hit, and only at their
+				// honest net worth: the province's production, minus what every
+				// OTHER strict neutral would hand the enemy side by turning
+				// hostile, minus a point for the toll. Enemy territory always
+				// outranks a neutral of the same value -- taking it swings the
+				// race twice, theirs down and ours up -- and a violation whose
+				// diplomacy costs more than it gains is skipped entirely.
+				if neighbor.Owner.Name == "Neutral" && neighbor.NeutralType == models.StrictNeutral {
+					if pressure <= 1.05 {
+						continue // time is not against us; leave the neutrals alone
+					}
+					score = neighbor.Production - strictChainCost(game, neighbor.Name) - 1
+					if score <= 0 {
+						continue // the chain would hand the enemy more than we gain
+					}
+				}
 
 				// Victory cities are MUCH more valuable
 				if neighbor.IsVictoryCity {
@@ -778,13 +861,13 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 				}
 				score += connectivityBonus
 
-				// Penalty for heavily defended territories (we'll still consider them but lower priority)
-				defenders := game.GetPiecesInTerritory(neighbor.Name)
+				// Penalty for heavily defended territories, counting the
+				// garrison a neutral would raise (we'll still consider them
+				// but lower priority)
 				defenseStrength := 0
-				for _, piece := range defenders {
+				for _, piece := range expectedDefenders(game, neighbor) {
 					defenseStrength += int(piece.Defend)
 				}
-				// Reduce score slightly for heavily defended territories
 				if defenseStrength > 10 {
 					score -= 2
 				}

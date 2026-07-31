@@ -139,3 +139,152 @@ func TestPressure_FavouredSideHoldsFrontsAboveEquality(t *testing.T) {
 			pressed[0].want, pressed[0].enemy)
 	}
 }
+
+// The second rung of the ladder: an outproduced power with no good direct
+// attack takes production from a neutral instead -- priced honestly, with
+// the toll, the garrison it will raise, and the neutrals the chain would
+// hand to the enemy.
+func TestPressure_OutproducedSideTurnsOnNeutrals(t *testing.T) {
+	targets := func(t *testing.T, germanProduction int, chainCost int) map[string]bool {
+		t.Helper()
+		g, gc := pressureBoard(t)
+		g.Board["Reich"].Production = germanProduction
+
+		// The direct front is hopeless: a Soviet wall.
+		g.PlacePieces("Border", "infantry", 30)
+
+		// A strict neutral next door worth 4, and optionally another strict
+		// neutral elsewhere whose defection the chain would gift the enemy.
+		g.AddTerritory("Turkey", models.Land, "Neutral", 4)
+		g.ConnectTerritories("Reich", "Turkey")
+		if chainCost > 0 {
+			g.AddTerritory("Helvetia", models.Land, "Neutral", chainCost)
+		}
+		g.Players["Germany"].IPCs = 20
+
+		out := make(map[string]bool)
+		for _, target := range NewSeededNPCAIPlayer("Germany", "normal", 1).
+			findAttackTargets(g, g.Players["Germany"]) {
+			out[target.Name] = true
+		}
+		_ = gc
+		return out
+	}
+
+	// Outproduced, no other strict neutrals: Turkey is on the table.
+	if got := targets(t, 6, 0); !got["Turkey"] {
+		t.Error("an outproduced Germany with a hopeless front left Turkey alone")
+	}
+	// Out-producing the enemy: the neutrals are left in peace.
+	if got := targets(t, 60, 0); got["Turkey"] {
+		t.Error("a favoured Germany considered violating a neutral")
+	}
+	// Outproduced, but the chain would hand the enemy more than Turkey yields:
+	// the diplomacy costs too much.
+	if got := targets(t, 6, 10); got["Turkey"] {
+		t.Error("violating Turkey gifts the enemy a 10-production neutral bloc; not worth it")
+	}
+}
+
+// The estimator prices the garrison a neutral WILL raise, not the empty
+// province on the board: a token force is refused the attack a mobilised
+// Turkey would slaughter.
+func TestPressure_NeutralAttackEstimatesTheLatentGarrison(t *testing.T) {
+	g, _ := pressureBoard(t)
+	g.AddTerritory("Turkey", models.Land, "Neutral", 4)
+	g.ConnectTerritories("Reich", "Turkey")
+
+	phantoms := latentDefenders(g, g.Board["Turkey"])
+	if len(phantoms) != 4 {
+		t.Fatalf("Turkey's latent garrison = %d, want 4 (one per production)", len(phantoms))
+	}
+
+	// One armor (attack 3) against the latent garrison (defence 8): the
+	// estimator must see a bad fight, not a walkover.
+	attacker := []*models.Piece{{Name: "armor", Attack: 3, Defend: 2}}
+	if prob := EstimateAttackSuccess(attacker, expectedDefenders(g, g.Board["Turkey"])); prob > 0.45 {
+		t.Errorf("attack on an 'empty' neutral estimated at %.2f; the garrison it raises makes it %d defence",
+			prob, 8)
+	}
+
+	// Once mobilised, the real garrison is on the board and the phantoms go.
+	g.PlacePieces("Turkey", "infantry", 4)
+	if extra := latentDefenders(g, g.Board["Turkey"]); extra != nil {
+		t.Errorf("a mobilised neutral still projects %d phantom defenders", len(extra))
+	}
+}
+
+// The third rung: an outproduced power whose combat phase found nothing to
+// hit digs in like the favoured side does.
+func TestPressure_NothingToHitMeansDigIn(t *testing.T) {
+	g, _ := pressureBoard(t)
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	germany := g.Players["Germany"]
+
+	npc.attacksThisTurn = 2 // striking: hold fronts at equality, spend on attack
+	if m := npc.frontMargin(g, germany); m != 1.0 {
+		t.Errorf("attacking under pressure: margin %.2f, want 1.0", m)
+	}
+	npc.attacksThisTurn = 0 // nothing worth hitting: fortify and outlast
+	if m := npc.frontMargin(g, germany); m != 1.25 {
+		t.Errorf("idle under pressure: margin %.2f, want 1.25", m)
+	}
+}
+
+// A landing pays the neutral's price like an overland attack: the garrison
+// rises and the toll is levied. The sea route used to dodge all of it.
+func TestNeutral_AmphibiousViolationPaysTheSamePrice(t *testing.T) {
+	g, gc := invasionBoard(t)
+	player := g.Players["Germany"]
+	player.IPCs = 20
+
+	// The island is a strict neutral, production 3.
+	models.ChangeOwnership(g.Board["Island"], g.GetOrCreatePlayer("Neutral"))
+	g.Board["Island"].Production = 3
+	g.Board["Island"].NeutralType = models.StrictNeutral
+
+	// A second strict neutral to watch the chain.
+	g.AddTerritory("Mongolia", models.Land, "Neutral", 1)
+	g.Board["Mongolia"].NeutralType = models.StrictNeutral
+
+	// A loaded transport in the drop zone, ready to land.
+	if err := g.PlacePieces("Home", "infantry", 1); err != nil {
+		t.Fatalf("troops: %v", err)
+	}
+	troopID := g.Board["Home"].Pieces[0]
+	if err := g.PlacePieces("Island Sea", "transport", 1); err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+	transportID := g.Board["Island Sea"].Pieces[0]
+	g.Pieces[transportID].Owner = player
+	g.Board["Home"].Pieces = nil
+	g.Pieces[transportID].Holding = []int{troopID}
+
+	plan := gc.Plans.Add(&AmphibiousPlan{
+		Power: "Germany", Target: "Island", Staging: "Home",
+		Embark: "Home Sea", DropZone: "Island Sea", State: PlanReady,
+	})
+	plan.Ships = []int{transportID}
+	plan.pendingLanding = []int{transportID}
+
+	g.CurrentPhase = models.CombatMovePhase
+	if landed := gc.LandAssaultTroops("Germany", NewGameTranscript("t")); landed != 1 {
+		t.Fatalf("landed %d, want 1", landed)
+	}
+
+	if player.IPCs != 20-NeutralViolationCost {
+		t.Errorf("treasury %d after the landing; the sea route dodged the toll", player.IPCs)
+	}
+	garrison := 0
+	for _, id := range g.Board["Island"].Pieces {
+		if piece := g.Pieces[id]; piece != nil && piece.Owner != nil && piece.Owner.Name == "Neutral" {
+			garrison++
+		}
+	}
+	if garrison != 3 {
+		t.Errorf("the island raised %d defenders, want 3", garrison)
+	}
+	if owner := g.Board["Mongolia"].Owner.Name; owner == "Neutral" {
+		t.Error("the chain did not fire for an amphibious violation")
+	}
+}

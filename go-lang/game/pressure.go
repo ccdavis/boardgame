@@ -99,3 +99,20 @@ func pressureFrontMargin(pressure float64) float64 {
 	}
 	return 1.0
 }
+
+// frontMargin is the strength multiplier this power holds its fronts to,
+// combining the production race with what this turn's combat phase found.
+//
+// The ladder for an outproduced power: attack the enemy directly (a double
+// swing -- their production down, ours up); failing that, take cheaper
+// production elsewhere; and when this turn found nothing worth hitting at
+// all, the third rung -- reinforce at home like the favoured side does, and
+// hope to outbuild an enemy who is busy with other fights.
+func (npc *NPCAIPlayer) frontMargin(g *models.Game, player *models.Player) float64 {
+	pressure := timePressure(g, player)
+	margin := pressureFrontMargin(pressure)
+	if pressure > 1.05 && npc.attacksThisTurn == 0 {
+		margin = 1.25
+	}
+	return margin
+}

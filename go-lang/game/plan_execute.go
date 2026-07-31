@@ -428,6 +428,15 @@ func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, piece
 
 	battle, exists := gc.PendingBattles[plan.Target]
 	if !exists {
+		// A neutral invaded from the sea pays the same price as one invaded
+		// overland: the garrison rises, the toll is levied, and violating a
+		// strict neutral rouses the rest. The sea route used to dodge all of
+		// it.
+		if gc.violateNeutral(target, gc.Game.Players[power]) {
+			if attacker := gc.Game.Players[power]; attacker != nil {
+				defer gc.TriggerStrictNeutralChainReaction(attacker)
+			}
+		}
 		defender := "Neutral"
 		if target.Owner != nil {
 			defender = target.Owner.Name

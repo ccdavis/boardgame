@@ -177,7 +177,7 @@ func (npc *NPCAIPlayer) surplusIn(gc *GameController, player *models.Player, ter
 // rather than accumulating at the factory that built it.
 func (npc *NPCAIPlayer) DisperseToFronts(gc *GameController, player *models.Player, transcript *GameTranscript) int {
 	g := gc.Game
-	fronts := findFronts(g, player, pressureFrontMargin(timePressure(g, player)))
+	fronts := findFronts(g, player, npc.frontMargin(g, player))
 	if len(fronts) == 0 {
 		return 0
 	}
@@ -288,7 +288,7 @@ func (npc *NPCAIPlayer) DisperseToFronts(gc *GameController, player *models.Play
 // afresh from where the cargo and the fronts actually are.
 func (npc *NPCAIPlayer) FerrySurplus(gc *GameController, player *models.Player, transcript *GameTranscript) int {
 	g := gc.Game
-	fronts := findFronts(g, player, pressureFrontMargin(timePressure(g, player)))
+	fronts := findFronts(g, player, npc.frontMargin(g, player))
 	if len(fronts) == 0 {
 		return 0
 	}

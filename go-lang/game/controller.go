@@ -622,31 +622,12 @@ func (gc *GameController) ExecuteCombatMoves() error {
 		// Check if move creates a battle
 		toTerritory := gc.Game.Board[move.To]
 		if toTerritory.Owner.Name != player.Name {
-			// A neutral under attack defends itself. When the first attacker
-			// crosses the border the country mobilises: a garrison of standing
-			// infantry, one per point of production. Violating a *strict*
-			// neutral additionally costs the attacker 3 IPCs paid to the bank
-			// and turns every other strict neutral hostile.
-			if toTerritory.Owner.Name == "Neutral" && toTerritory.Terrain == models.Land &&
-				toTerritory.NeutralType != models.NotNeutral && !violated[move.To] {
-				violated[move.To] = true
-
-				if toTerritory.NeutralType == models.StrictNeutral {
-					strictNeutralAttacked = true
-					player.IPCs -= NeutralViolationCost
-					if player.IPCs < 0 {
-						player.IPCs = 0 // gated at planning time; never overdraw
-					}
-				}
-
-				garrison := toTerritory.Production
-				if garrison < 1 {
-					garrison = 1
-				}
-				if defender := bestDefenderName(gc.Game); defender != "" {
-					gc.Game.PlacePieces(move.To, defender, garrison)
-				}
+			// A neutral under attack defends itself, and violating a strict
+			// one levies the toll and rouses the rest.
+			if !violated[move.To] && gc.violateNeutral(toTerritory, player) {
+				strictNeutralAttacked = true
 			}
+			violated[move.To] = true
 
 			// Moving into hostile territory - create battle
 			if _, exists := gc.PendingBattles[move.To]; !exists {
@@ -938,6 +919,47 @@ func (gc *GameController) CaptureTerritory(territoryName, newOwnerName string) e
 	}
 
 	return nil
+}
+
+// violateNeutral applies the price of attacking a neutral country: when the
+// first attacker crosses the border, the country mobilises a garrison of
+// standing infantry, one per point of production; violating a *strict*
+// neutral additionally costs the attacker 3 IPCs paid to the bank. Returns
+// whether a strict neutral was violated, so the caller can rouse the rest.
+//
+// Idempotent within an attack: once the country has defenders under its own
+// flag, a second attacker (or a landing joining an overland attack) neither
+// re-levies the toll nor doubles the garrison. Shared by overland movement
+// and amphibious landings -- the sea route used to dodge the entire price.
+func (gc *GameController) violateNeutral(territory *models.Territory, attacker *models.Player) bool {
+	if territory == nil || territory.Owner == nil || territory.Owner.Name != "Neutral" ||
+		territory.Terrain != models.Land || territory.NeutralType == models.NotNeutral {
+		return false
+	}
+
+	// Already mobilised: an earlier attacker paid the price this fight.
+	for _, id := range territory.Pieces {
+		if piece := gc.Game.Pieces[id]; piece != nil && piece.Owner == territory.Owner {
+			return false
+		}
+	}
+
+	strict := territory.NeutralType == models.StrictNeutral
+	if strict && attacker != nil {
+		attacker.IPCs -= NeutralViolationCost
+		if attacker.IPCs < 0 {
+			attacker.IPCs = 0 // gated at planning time; never overdraw
+		}
+	}
+
+	garrison := territory.Production
+	if garrison < 1 {
+		garrison = 1
+	}
+	if defender := bestDefenderName(gc.Game); defender != "" {
+		gc.Game.PlacePieces(territory.Name, defender, garrison)
+	}
+	return strict
 }
 
 // capitalHeldByEnemy reports whether a power's capital is in enemy hands.
