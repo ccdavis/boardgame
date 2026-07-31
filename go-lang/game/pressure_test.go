@@ -1,6 +1,7 @@
 package game
 
 import (
+	"fmt"
 	"testing"
 
 	"boardgame/models"
@@ -286,5 +287,94 @@ func TestNeutral_AmphibiousViolationPaysTheSamePrice(t *testing.T) {
 	}
 	if owner := g.Board["Mongolia"].Owner.Name; owner == "Neutral" {
 		t.Error("the chain did not fire for an amphibious violation")
+	}
+}
+
+// The scoreboard clock: a side may be winning the economy and losing the
+// game. Whichever race is going worse governs.
+func TestVictoryRacePressure_TrailingSideFeelsTheClock(t *testing.T) {
+	g, _ := pressureBoard(t)
+	g.VictoryCitiesEnabled = true
+
+	// Axis holds 2 victory cities (needs 9: 7 to go); Allies hold 8
+	// (need 10: 2 to go). The Allies are five cities closer.
+	mark := func(name, owner string, vc bool) {
+		g.AddTerritory(name, models.Land, owner, 1)
+		g.Board[name].IsVictoryCity = vc
+	}
+	for i, owner := range []string{"Germany", "Germany"} {
+		mark(fmt.Sprintf("AxisCity%d", i), owner, true)
+	}
+	for i := 0; i < 8; i++ {
+		mark(fmt.Sprintf("AlliedCity%d", i), "USSR", true)
+	}
+
+	germany, ussr := g.Players["Germany"], g.Players["USSR"]
+	if p := victoryRacePressure(g, germany); p < 1.9 || p > 2.1 {
+		t.Errorf("Germany trails by five cities: scoreboard pressure %.2f, want 2.0", p)
+	}
+	if p := victoryRacePressure(g, ussr); p != 1 {
+		t.Errorf("the USSR leads the victory race: scoreboard pressure %.2f, want calm 1.0", p)
+	}
+
+	// With the switch off, the scoreboard says nothing.
+	g.VictoryCitiesEnabled = false
+	if p := victoryRacePressure(g, germany); p != 1 {
+		t.Errorf("victory cities disabled but scoreboard pressure %.2f", p)
+	}
+}
+
+// strategicPressure is governed by whichever clock is worse: a production
+// lead does not excuse losing the victory race.
+func TestStrategicPressure_WorseClockGoverns(t *testing.T) {
+	g, _ := pressureBoard(t)
+	g.VictoryCitiesEnabled = true
+
+	// The USSR out-produces Germany fourfold (economic pressure 0.25 for it),
+	// but Germany is two cities from winning while the USSR needs ten.
+	for i := 0; i < 7; i++ {
+		g.AddTerritory(fmt.Sprintf("AxisCity%d", i), models.Land, "Germany", 0)
+		g.Board[fmt.Sprintf("AxisCity%d", i)].IsVictoryCity = true
+	}
+
+	ussr := g.Players["USSR"]
+	economic := timePressure(g, ussr)
+	if economic >= 1 {
+		t.Fatalf("fixture: USSR should be winning the economy, pressure %.2f", economic)
+	}
+	combined := strategicPressure(g, ussr)
+	if !outproduced(combined) {
+		t.Errorf("USSR wins the economy but trails the victory race by eight cities; "+
+			"strategic pressure %.2f should demand action", combined)
+	}
+}
+
+// A power with the clock against it spends nearly everything; a comfortable
+// one keeps its cushion.
+func TestPressure_UrgentPowersSpendDown(t *testing.T) {
+	spend := func(t *testing.T, germanProduction int) int {
+		t.Helper()
+		g, gc := pressureBoard(t)
+		g.Board["Reich"].Production = germanProduction
+		g.Players["Germany"].IPCs = 100
+
+		g.CurrentPower = "Germany"
+		g.CurrentPhase = models.PurchasePhase
+		npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+		if err := npc.PurchasePhase(gc, NewGameTranscript("t")); err != nil {
+			t.Fatalf("purchase: %v", err)
+		}
+		return 100 - g.Players["Germany"].IPCs
+	}
+
+	urgent := spend(t, 6)     // outproduced 4:1
+	comfortable := spend(t, 60) // out-producing
+
+	if urgent <= comfortable {
+		t.Errorf("urgent power spent %d, comfortable spent %d; the clock should open the purse",
+			urgent, comfortable)
+	}
+	if urgent < 90 {
+		t.Errorf("urgent power spent only %d of 100; want nearly all of it", urgent)
 	}
 }

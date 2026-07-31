@@ -30,7 +30,9 @@ import (
 // TRANSCRIPT_DIR puts the transcript somewhere durable instead of a temp dir.
 const (
 	defaultSeed = 20260731
-	maxTurns    = 25
+	// Batch observation put the median decided game at round 36, so a shorter
+	// cap truncated real endings; this horizon lets sustained victories land.
+	maxTurns = 40
 )
 
 func gameSeed() int64 {

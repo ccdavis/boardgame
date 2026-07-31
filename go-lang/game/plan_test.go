@@ -632,3 +632,56 @@ func TestProposePlan_SkipsHopelessTargets(t *testing.T) {
 		t.Errorf("proposed %q against defence %d", plan.Target, defenderStrength(g, plan.Target))
 	}
 }
+
+// A landing wants one ship that can shell the beach -- but lift comes first,
+// and one gun is enough.
+func TestPlanPurchases_WantsOneBombardier(t *testing.T) {
+	g, controller := invasionBoard(t)
+	player := g.Players["Germany"]
+	g.AddPieceTemplate("battleship", models.Water, 2, 4, 4, 24)
+	g.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
+	if err := g.PlacePieces("Home", "factory", 1); err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	if err := g.PlacePieces("Home", "infantry", 4); err != nil {
+		t.Fatalf("troops: %v", err)
+	}
+
+	npc := NewSeededNPCAIPlayer("Germany", "normal", 1)
+	npc.ReviewPlans(controller, player, NewGameTranscript("t"))
+	plans := controller.Plans.Active("Germany")
+	if len(plans) == 0 {
+		t.Fatal("no plan formed")
+	}
+	plan := plans[0]
+
+	// Short of transports: the shopping list must not ask for the gun yet.
+	if wants := npc.PlanPurchases(controller, player); wants["battleship"] > 0 {
+		t.Errorf("wants a battleship before the lift exists: %v", wants)
+	}
+
+	// Transports on hand: now exactly one bombardier is wanted.
+	for len(plan.Ships) < plan.WantTransports {
+		if err := g.PlacePieces("Home Sea", "transport", 1); err != nil {
+			t.Fatalf("transport: %v", err)
+		}
+		id := g.Board["Home Sea"].Pieces[len(g.Board["Home Sea"].Pieces)-1]
+		g.Pieces[id].Owner = player
+		plan.Ships = append(plan.Ships, id)
+	}
+	wants := npc.PlanPurchases(controller, player)
+	if wants["battleship"] != 1 {
+		t.Errorf("wants %d battleships with lift on hand, want exactly 1", wants["battleship"])
+	}
+
+	// A battleship already escorting: no second gun.
+	if err := g.PlacePieces("Home Sea", "battleship", 1); err != nil {
+		t.Fatalf("battleship: %v", err)
+	}
+	bb := g.Board["Home Sea"].Pieces[len(g.Board["Home Sea"].Pieces)-1]
+	g.Pieces[bb].Owner = player
+	plan.Escorts = append(plan.Escorts, bb)
+	if wants := npc.PlanPurchases(controller, player); wants["battleship"] != 0 {
+		t.Errorf("wants %d more battleships with one already on escort", wants["battleship"])
+	}
+}

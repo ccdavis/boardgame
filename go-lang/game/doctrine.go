@@ -98,8 +98,11 @@ const (
 // Purchasing: how the treasury is spent.
 const (
 	// treasurySpendPercent is how much of the treasury a power is willing to
-	// spend in one purchase phase; the remainder rides as a cushion.
+	// spend in one purchase phase; the remainder rides as a cushion. A power
+	// with the clock against it spends urgentSpendPercent instead -- money in
+	// the bank wins nothing.
 	treasurySpendPercent = 80
+	urgentSpendPercent   = 95
 
 	// factoryCashCushion is the money a power wants left over after buying a
 	// factory, so the new works does not bankrupt the army; a factory is only

@@ -133,6 +133,64 @@ func pressureFrontMargin(pressure float64) float64 {
 	return equalFrontMargin
 }
 
+// scoreboardUrgencyPerCity converts a victory-race deficit into pressure:
+// each city by which the enemy side is closer to its winning threshold than
+// we are to ours adds this much.
+const scoreboardUrgencyPerCity = 0.2
+
+// victoryRacePressure is the scoreboard's clock: how the race to the victory
+// thresholds is going, expressed on the same scale as timePressure. Above 1,
+// the enemy side is closer to winning than we are.
+//
+// One hundred observed games showed why this exists: the Allies, ahead on
+// production, obeyed the economic clock's advice to be patient -- while the
+// Axis ground its way to nine cities and won fifty games to nil. A production
+// lead is worth nothing if the enemy crosses their victory threshold first;
+// patience is only a virtue when the game state is also drifting your way.
+func victoryRacePressure(g *models.Game, player *models.Player) float64 {
+	if !g.VictoryCitiesEnabled || player == nil {
+		return 1
+	}
+
+	axis, allies := g.CountVictoryCities()
+	var ourRemaining, enemyRemaining int
+	switch player.Side {
+	case "Axis":
+		ourRemaining = axisVictoryCities - axis
+		enemyRemaining = alliesVictoryCities - allies
+	case "Allies":
+		ourRemaining = alliesVictoryCities - allies
+		enemyRemaining = axisVictoryCities - axis
+	default:
+		return 1
+	}
+	if ourRemaining < 0 {
+		ourRemaining = 0
+	}
+	if enemyRemaining < 0 {
+		enemyRemaining = 0
+	}
+
+	lead := ourRemaining - enemyRemaining
+	if lead <= 0 {
+		return 1 // we are at least as close to winning; the scoreboard is calm
+	}
+	return 1 + float64(lead)*scoreboardUrgencyPerCity
+}
+
+// strategicPressure is the clock the decisions actually consult: whichever of
+// the economic race and the victory race is going worse for this power. A
+// side may be out-producing the enemy and still losing the game; whichever
+// clock is against it governs.
+func strategicPressure(g *models.Game, player *models.Player) float64 {
+	economic := timePressure(g, player)
+	scoreboard := victoryRacePressure(g, player)
+	if scoreboard > economic {
+		return scoreboard
+	}
+	return economic
+}
+
 // frontMargin is the strength multiplier this power holds its fronts to,
 // combining the production race with what this turn's combat phase found.
 //
@@ -142,7 +200,7 @@ func pressureFrontMargin(pressure float64) float64 {
 // all, the third rung -- reinforce at home like the favoured side does, and
 // hope to outbuild an enemy who is busy with other fights.
 func (npc *NPCAIPlayer) frontMargin(g *models.Game, player *models.Player) float64 {
-	pressure := timePressure(g, player)
+	pressure := strategicPressure(g, player)
 	margin := pressureFrontMargin(pressure)
 	if outproduced(pressure) && npc.attacksThisTurn == 0 {
 		margin = fortifiedFrontMargin

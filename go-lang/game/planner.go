@@ -95,7 +95,7 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 	// somewhat unfavourable odds today beats the same expedition at hopeless
 	// odds after the enemy's factories have run for another five rounds.
 	defencePenalty := func(defence int) int { return defence }
-	if outproduced(timePressure(g, player)) {
+	if outproduced(strategicPressure(g, player)) {
 		defencePenalty = func(defence int) int { return defence / 2 }
 	}
 	score := func(c candidate) int {
@@ -368,9 +368,11 @@ func (npc *NPCAIPlayer) assignUnits(gc *GameController, player *models.Player, p
 				plan.Ships = append(plan.Ships, id)
 			case piece.Terrain == models.Water && !carriesLandUnits(g, piece) &&
 				combatValue(piece) > 0 &&
-				plan.EscortStrength(g) < plan.WantEscort:
+				(plan.EscortStrength(g) < plan.WantEscort ||
+					(units.For(piece).CanBombard && !plan.hasBombardier(g))):
 				// Escorts: something to fight with, taken up until the convoy
-				// has the cover the crossing calls for.
+				// has the cover the crossing calls for -- and one ship that can
+				// shell the beach, even when the cover is already sufficient.
 				plan.Escorts = append(plan.Escorts, id)
 			}
 		}
@@ -448,6 +450,16 @@ func (npc *NPCAIPlayer) PlanPurchases(gc *GameController, player *models.Player)
 			wanted[transportName] += plan.WantTransports - len(plan.Ships)
 		}
 
+		// A landing wants one ship that can shell the beach. Escorts are
+		// bought by fighting value per IPC, which picks submarines -- so once
+		// the starting battleships sank, late-game landings went in without
+		// naval gunfire. Lift comes first: the gun is only wanted once the
+		// transports are on hand.
+		if bombardier := bombardierName(g); bombardier != "" &&
+			len(plan.Ships) >= plan.WantTransports && !plan.hasBombardier(g) {
+			wanted[bombardier]++
+		}
+
 		// Buy cover in proportion to what is in the way. An unguarded crossing
 		// asks for nothing and the budget goes to troops instead.
 		short := plan.WantEscort - plan.EscortStrength(g)
@@ -486,6 +498,22 @@ func planPurchaseOrder(g *models.Game, wanted map[string]int) []string {
 		}
 	}
 	return order
+}
+
+// bombardierName is the cheapest ship on this board that can shell a beach.
+func bombardierName(g *models.Game) string {
+	units := g.Units()
+	best, bestCost := "", 0
+	for _, name := range sortedTemplateNames(g) {
+		template := g.GlobalPieceTemplates[name]
+		if template.Terrain != models.Water || !units.Of(name).CanBombard {
+			continue
+		}
+		if best == "" || int(template.Cost) < bestCost {
+			best, bestCost = name, int(template.Cost)
+		}
+	}
+	return best
 }
 
 // wantedCost totals what a shopping list would cost, which is the most a power

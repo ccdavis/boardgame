@@ -121,12 +121,19 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 
 	transcript.LogPhaseStart(player.Name, models.PurchasePhase)
 
-	// Spend about 80% of the treasury, divided by this power's temperament.
+	// Spend about 80% of the treasury, divided by this power's temperament --
+	// or nearly all of it when the clock is against us. The 20% cushion
+	// accumulated into 30-50 idle IPCs by the end of observed games; a power
+	// that needs to act now has no business sitting on a war chest.
 	//
 	// The split is what makes the computer players differ from one another:
 	// Germany presses and keeps a thin garrison, Italy garrisons and rarely
 	// sails, the United States and the Soviet Union build the largest forces.
-	budget := player.IPCs * treasurySpendPercent / 100
+	spendPercent := treasurySpendPercent
+	if outproduced(strategicPressure(game, player)) {
+		spendPercent = urgentSpendPercent
+	}
+	budget := player.IPCs * spendPercent / 100
 	posture := PostureFor(player.Name)
 	defenceBudget, _, offenceBudget := posture.Budget(budget)
 	spent := 0
@@ -306,11 +313,12 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 	// Find enemy territories adjacent to our territories
 	targets := npc.findAttackTargets(game, player)
 
-	// The production race sets the tempo. A side being outproduced accepts
-	// thinner odds now, because the same attack will only be worse later; a
-	// side winning the race declines marginal fights that patience will turn
-	// into sure ones.
-	pressure := timePressure(game, player)
+	// The clock sets the tempo -- whichever of the production race and the
+	// victory race is going worse for this side. Outproduced or behind on
+	// cities, thinner odds are accepted now, because the same attack will
+	// only be worse later; ahead on both, marginal fights are declined,
+	// since patience will turn them into sure ones.
+	pressure := strategicPressure(game, player)
 
 	// Evaluate each potential attack
 	movesMade := 0
@@ -709,7 +717,7 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 
 	targetScores := make([]targetScore, 0)
 	seen := make(map[string]bool)
-	pressure := timePressure(game, player)
+	pressure := strategicPressure(game, player)
 
 	// The chain cost is a board-wide sum; price it once, not per neighbour.
 	// Excluding the violated territory itself is handled below by adding its

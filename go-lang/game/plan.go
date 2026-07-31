@@ -502,6 +502,17 @@ func (p *AmphibiousPlan) EscortStrength(g *models.Game) int {
 	return friendlyNavalStrength(g, p.Escorts)
 }
 
+// hasBombardier reports whether any committed escort can shell the beach.
+func (p *AmphibiousPlan) hasBombardier(g *models.Game) bool {
+	units := g.Units()
+	for _, id := range p.Escorts {
+		if piece, ok := g.Pieces[id]; ok && units.For(piece).CanBombard {
+			return true
+		}
+	}
+	return false
+}
+
 // progressScore measures how far along the operation is, so a build-up that is
 // still making headway is not mistaken for a stalled one.
 func (p *AmphibiousPlan) progressScore(g *models.Game) int {

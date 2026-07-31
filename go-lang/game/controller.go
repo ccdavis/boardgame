@@ -169,6 +169,15 @@ func (gc *GameController) CollectIncome() error {
 	return nil
 }
 
+// The victory-city thresholds from the rulebook: either side wins outright at
+// immediateVictoryCities; the Axis wins by holding axisVictoryCities (and the
+// Allies alliesVictoryCities) across a full round of play.
+const (
+	immediateVictoryCities = 13
+	axisVictoryCities      = 9
+	alliesVictoryCities    = 10
+)
+
 // CheckVictoryCondition checks if any side has won the game.
 // Returns: winner ("Axis" or "Allies"), hasWon (bool), error.
 //
@@ -190,11 +199,11 @@ func (gc *GameController) CheckVictoryCondition() (string, bool, error) {
 	// - Allies win if they control 10 cities for a full round
 	// - Either side wins immediately if they control 13+ cities
 
-	// Immediate victory: 13+ cities
-	if axisCities >= 13 {
+	// Immediate victory
+	if axisCities >= immediateVictoryCities {
 		return "Axis", true, nil
 	}
-	if alliedCities >= 13 {
+	if alliedCities >= immediateVictoryCities {
 		return "Allies", true, nil
 	}
 
@@ -210,10 +219,10 @@ func (gc *GameController) CheckVictoryCondition() (string, bool, error) {
 	}
 
 	// Potential victory: at the threshold but not yet held for a full round.
-	if axisCities >= 9 {
+	if axisCities >= axisVictoryCities {
 		return "Axis", false, nil
 	}
-	if alliedCities >= 10 {
+	if alliedCities >= alliesVictoryCities {
 		return "Allies", false, nil
 	}
 
@@ -232,9 +241,9 @@ func (gc *GameController) recordVictoryHold() {
 	axis, allies := gc.Game.CountVictoryCities()
 	side := ""
 	switch {
-	case axis >= 9:
+	case axis >= axisVictoryCities:
 		side = "Axis"
-	case allies >= 10:
+	case allies >= alliesVictoryCities:
 		side = "Allies"
 	}
 
