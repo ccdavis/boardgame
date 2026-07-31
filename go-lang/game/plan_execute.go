@@ -508,6 +508,18 @@ func nextStepTowards(g *models.Game, piece *models.Piece, from, goal string, pla
 				occupiedByEnemy(g, next, player) {
 				continue
 			}
+			// A column marching overland keeps to friendly ground. The BFS used
+			// to route through enemy territory, and PlanMove then refused the
+			// step -- so the unit stood still instead of going the long way
+			// round.
+			if terrain == models.Land && next.Name != goal && player != nil {
+				if next.Owner != player && !areAllies(next.Owner, player) {
+					continue
+				}
+				if occupiedByEnemy(g, next, player) {
+					continue
+				}
+			}
 			cameFrom[next.Name] = current.Name
 			if next.Name == goal {
 				found = true

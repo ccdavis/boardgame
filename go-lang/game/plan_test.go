@@ -419,7 +419,13 @@ func poorInvaderBoard(t *testing.T) (*models.Game, *GameController) {
 	g.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
 	g.GlobalPieceTemplates["transport"].Capacity = 2
 	g.GlobalPieceTemplates["transport"].CanCarry = []string{"infantry"}
+	g.AddPieceTemplate("factory", models.Land, 0, 0, 0, 32)
 
+	// A coastal yard: a power with no way to launch a ship rightly refuses to
+	// buy one, and this test is about affording one, not launching one.
+	if err := g.PlacePieces("Home", "factory", 1); err != nil {
+		t.Fatalf("placing factory: %v", err)
+	}
 	if err := g.PlacePieces("Home", "infantry", 8); err != nil {
 		t.Fatalf("placing troops: %v", err)
 	}

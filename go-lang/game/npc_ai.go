@@ -533,7 +533,6 @@ func (npc *NPCAIPlayer) uncommittedPieces(controller *GameController, player *mo
 
 func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcript *GameTranscript) error {
 	player, _ := controller.GetCurrentPlayer()
-	game := controller.Game
 
 	transcript.LogPhaseStart(player.Name, models.NoncombatMovePhase)
 
@@ -544,171 +543,19 @@ func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcrip
 	movesMade := npc.GatherForPlans(controller, player, transcript)
 	movesMade += npc.SailNavalPlans(controller, player, transcript)
 
-	// Identify strategic targets (victory cities)
-	strategicTargets := npc.identifyStrategicTargets(game, player)
-
-	// Find territories that need reinforcement
-	threatenedTerritories := make([]*models.Territory, 0)
-	for _, territory := range player.Territories {
-		threat := npc.evaluateTerritoryThreat(game, territory, player)
-		if threat > 0 {
-			// High-value or threatened territories need reinforcement
-			if territory.IsVictoryCity || territory.Production >= 3 || threat > 5 {
-				threatenedTerritories = append(threatenedTerritories, territory)
-			}
-		}
-	}
-
-	// Strategy:
-	// 1. First priority: defend threatened high-value territories
-	// 2. Second priority: position units to attack victory cities
-	// 3. Third priority: general border consolidation
-
-	safeTerritories := npc.findSafeTerritories(game, player)
-
-	// PRIORITY 1: Reinforce threatened territories
-	for _, threatened := range threatenedTerritories {
-		if movesMade >= 8 {
-			break
-		}
-
-		for _, safe := range safeTerritories {
-			pieces := npc.uncommittedPieces(controller, player, safe.Name)
-
-			if len(pieces) <= 2 {
-				continue // Don't leave empty
-			}
-
-			// Calculate safe number to move
-			numToMove := len(pieces) / 3
-			if numToMove > 2 {
-				numToMove = 2
-			}
-
-			// Check if we'd leave this territory vulnerable
-			if npc.wouldLeaveTerritoryVulnerable(game, safe, numToMove, player) {
-				continue // Don't weaken this territory
-			}
-
-			// Try to move units to threatened territory
-			moved := 0
-			for i := 0; i < numToMove && i < len(pieces); i++ {
-				pieceID := findPieceID(game, pieces[i])
-				err := controller.PlanMove(pieceID, safe.Name, threatened.Name)
-				if err == nil {
-					transcript.LogMove(player.Name, pieces[i].Name, safe.Name, threatened.Name, "noncombat")
-					movesMade++
-					moved++
-				}
-			}
-
-			if moved > 0 {
-				break // Reinforced this threatened territory
-			}
-		}
-	}
-
-	// PRIORITY 2: Position units near victory cities for future attacks
-	if len(strategicTargets) > 0 && movesMade < 10 {
-		// For each strategic target, find staging territories (adjacent friendly territories)
-		for _, target := range strategicTargets {
-			if movesMade >= 10 {
-				break
-			}
-
-			// Find friendly territories adjacent to the target
-			stagingTerritories := make([]*models.Territory, 0)
-			for _, neighbor := range target.ConnectedTo {
-				if neighbor.Owner == player {
-					stagingTerritories = append(stagingTerritories, neighbor)
-				}
-			}
-
-			if len(stagingTerritories) == 0 {
-				continue // Can't stage near this target
-			}
-
-			// Move units toward staging territories
-			for _, safe := range safeTerritories {
-				if movesMade >= 10 {
-					break
-				}
-
-				pieces := npc.uncommittedPieces(controller, player, safe.Name)
-
-				if len(pieces) <= 2 {
-					continue
-				}
-
-				// Find nearest staging territory
-				nearestStaging := stagingTerritories[0]
-				// Try to move units there
-				numToMove := len(pieces) / 4 // Move fewer when positioning
-				if numToMove < 1 && len(pieces) > 3 {
-					numToMove = 1
-				}
-
-				// Check defensive vulnerability
-				if npc.wouldLeaveTerritoryVulnerable(game, safe, numToMove, player) {
-					continue
-				}
-
-				for i := 0; i < numToMove && i < len(pieces); i++ {
-					pieceID := findPieceID(game, pieces[i])
-					err := controller.PlanMove(pieceID, safe.Name, nearestStaging.Name)
-					if err == nil {
-						transcript.LogMove(player.Name, pieces[i].Name, safe.Name, nearestStaging.Name, "noncombat")
-						movesMade++
-					}
-				}
-			}
-		}
-	}
-
-	// PRIORITY 3: General border consolidation (if we haven't moved many units yet)
-	if movesMade < 5 {
-		borderTerritories := npc.findBorderTerritories(game, player)
-
-		for _, safeTerritory := range safeTerritories {
-			if movesMade >= 8 {
-				break
-			}
-
-			pieces := npc.uncommittedPieces(controller, player, safeTerritory.Name)
-
-			if len(pieces) <= 2 {
-				continue
-			}
-
-			numToMove := len(pieces) / 3
-			if numToMove > 2 {
-				numToMove = 2
-			}
-
-			// Check defensive vulnerability
-			if npc.wouldLeaveTerritoryVulnerable(game, safeTerritory, numToMove, player) {
-				continue
-			}
-
-			// Find nearest border territory
-			for _, borderTerritory := range borderTerritories {
-				moved := 0
-				for i := 0; i < numToMove && i < len(pieces); i++ {
-					pieceID := findPieceID(game, pieces[i])
-					err := controller.PlanMove(pieceID, safeTerritory.Name, borderTerritory.Name)
-					if err == nil {
-						transcript.LogMove(player.Name, pieces[i].Name, safeTerritory.Name, borderTerritory.Name, "noncombat")
-						movesMade++
-						moved++
-					}
-				}
-
-				if moved > 0 {
-					break
-				}
-			}
-		}
-	}
+	// The quartermaster's pass: everything not held back by a defence plan or
+	// an operation marches toward the fighting. Outnumbered fronts first,
+	// until at least equal with the enemy next door; leftover surplus walks
+	// forward anyway; surplus stranded on frontless islands goes by ferry.
+	//
+	// This replaced three priority loops that only ever sourced from "safe"
+	// territories -- defined so strictly that a capital bordering an ally, a
+	// neutral or someone else's nominal sea zone never qualified -- and were
+	// capped at a handful of moves a turn against a factory output twice
+	// that. Germany kept 135 of its 178 units in Berlin; the fronts starved
+	// on five or six; the war froze by round six of every observed game.
+	movesMade += npc.DisperseToFronts(controller, player, transcript)
+	movesMade += npc.FerrySurplus(controller, player, transcript)
 
 	// Execute noncombat moves
 	err := controller.ExecuteNoncombatMoves()
@@ -972,47 +819,7 @@ func (npc *NPCAIPlayer) findAttackersFor(controller *GameController, player *mod
 	return attackers
 }
 
-// findBorderTerritories finds our territories adjacent to enemy territories
-func (npc *NPCAIPlayer) findBorderTerritories(game *models.Game, player *models.Player) []*models.Territory {
-	borders := make([]*models.Territory, 0)
 
-	for _, territory := range player.Territories {
-		isBorder := false
-		for _, neighbor := range territory.ConnectedTo {
-			if neighbor.Owner != player {
-				isBorder = true
-				break
-			}
-		}
-
-		if isBorder {
-			borders = append(borders, territory)
-		}
-	}
-
-	return borders
-}
-
-// findSafeTerritories finds our territories not adjacent to enemy territories
-func (npc *NPCAIPlayer) findSafeTerritories(game *models.Game, player *models.Player) []*models.Territory {
-	safe := make([]*models.Territory, 0)
-
-	for _, territory := range player.Territories {
-		isSafe := true
-		for _, neighbor := range territory.ConnectedTo {
-			if neighbor.Owner != player {
-				isSafe = false
-				break
-			}
-		}
-
-		if isSafe {
-			safe = append(safe, territory)
-		}
-	}
-
-	return safe
-}
 
 // findPieceID finds the piece ID for a given piece in the game
 func findPieceID(game *models.Game, piece *models.Piece) int {
@@ -1060,76 +867,7 @@ func (npc *NPCAIPlayer) findBestTerritoryForFactory(game *models.Game, player *m
 	return bestTerritory
 }
 
-// findNearestVictoryCity finds the nearest enemy or neutral victory city
-// Returns the territory and distance, or nil if none found
-func (npc *NPCAIPlayer) findNearestVictoryCity(game *models.Game, fromTerritory *models.Territory, player *models.Player) (*models.Territory, int) {
-	// BFS to find nearest victory city
-	type node struct {
-		territory *models.Territory
-		distance  int
-	}
 
-	visited := make(map[string]bool)
-	queue := []node{{fromTerritory, 0}}
-	visited[fromTerritory.Name] = true
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		// Check if this is an enemy victory city
-		if current.territory.IsVictoryCity && current.territory.Owner != player && current.distance > 0 {
-			return current.territory, current.distance
-		}
-
-		// Explore neighbors
-		for _, neighbor := range current.territory.ConnectedTo {
-			if !visited[neighbor.Name] {
-				visited[neighbor.Name] = true
-				queue = append(queue, node{neighbor, current.distance + 1})
-			}
-		}
-	}
-
-	return nil, 0
-}
-
-// evaluateTerritoryThreat evaluates if a territory is under threat from enemy forces
-// Returns a threat score (0 = safe, higher = more threatened)
-func (npc *NPCAIPlayer) evaluateTerritoryThreat(game *models.Game, territory *models.Territory, player *models.Player) int {
-	threatScore := 0
-	friendlyPieces := game.GetPiecesInTerritory(territory.Name)
-
-	// Check all adjacent territories for enemy forces
-	for _, neighbor := range territory.ConnectedTo {
-		if neighbor.Owner == player || areAllies(player, neighbor.Owner) {
-			continue // Not a threat
-		}
-
-		enemyPieces := game.GetPiecesInTerritory(neighbor.Name)
-
-		// Count enemy mobile units (those that can attack)
-		enemyAttackPower := 0
-		for _, piece := range enemyPieces {
-			if piece.Movement > 0 && !game.Units().For(piece).IsStructure {
-				enemyAttackPower += int(piece.Attack)
-			}
-		}
-
-		// Count friendly defense power
-		friendlyDefensePower := 0
-		for _, piece := range friendlyPieces {
-			friendlyDefensePower += int(piece.Defend)
-		}
-
-		// If enemy has more attack power than we have defense, it's a threat
-		if enemyAttackPower > friendlyDefensePower {
-			threatScore += (enemyAttackPower - friendlyDefensePower)
-		}
-	}
-
-	return threatScore
-}
 
 // wouldLeaveTerritoryVulnerable checks if removing units would make territory vulnerable
 func (npc *NPCAIPlayer) wouldLeaveTerritoryVulnerable(game *models.Game, territory *models.Territory, numUnitsToRemove int, player *models.Player) bool {
@@ -1178,28 +916,6 @@ func (npc *NPCAIPlayer) wouldLeaveTerritoryVulnerable(game *models.Game, territo
 	return remainingDefense < int(float64(maxThreat)*0.6)
 }
 
-// identifyStrategicTargets identifies high-value targets to focus on
-func (npc *NPCAIPlayer) identifyStrategicTargets(game *models.Game, player *models.Player) []*models.Territory {
-	targets := make([]*models.Territory, 0)
-
-	// Find all enemy victory cities
-	for _, territory := range game.Board {
-		if territory.IsVictoryCity && territory.Owner != player && !areAllies(player, territory.Owner) {
-			targets = append(targets, territory)
-		}
-	}
-
-	// Sort by production value (higher first), then by name: the candidates come
-	// out of a map, so without a total order the list differs between runs.
-	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].Production != targets[j].Production {
-			return targets[i].Production > targets[j].Production
-		}
-		return targets[i].Name < targets[j].Name
-	})
-
-	return targets
-}
 
 
 // unitShare is one role in the general buildup and its slice of the budget.
