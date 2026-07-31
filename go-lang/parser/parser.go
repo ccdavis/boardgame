@@ -4,6 +4,7 @@ import (
 	"boardgame/models"
 	"boardgame/scanner"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -14,22 +15,30 @@ type Parser struct {
 	game      *models.Game
 }
 
+// NewParser opens a board definition file.
 func NewParser(filename string) (*Parser, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %v", err)
 	}
+	return NewParserFromReader(file), nil
+}
 
-	s := scanner.NewScanner(file)
+// NewParserFromReader parses from any source.
+//
+// The parser could previously only be constructed from a filename, which meant
+// no part of it could be unit-tested without writing a file to disk first --
+// and so none of it was tested at all.
+func NewParserFromReader(source io.Reader) *Parser {
 	p := &Parser{
-		scanner: s,
+		scanner: scanner.NewScanner(source),
 		game:    models.NewGame(),
 	}
 
 	// Prime the parser with the first token
 	p.lookahead = p.scanner.NextToken()
 
-	return p, nil
+	return p
 }
 
 func (p *Parser) match(tokenType scanner.TokenType) error {
@@ -140,6 +149,24 @@ func (p *Parser) Parse() (*models.Game, error) {
 		default:
 			return nil, p.error(fmt.Sprintf("unexpected token: %s", p.lookahead.Type))
 		}
+	}
+
+	// A parsed board must satisfy the same invariants any game does. The checks
+	// are self-gating: a board that declares no Sides marks nobody as playing, so
+	// the metadata checks stay quiet and only structural defects are reported.
+	if problems := p.game.Validate(); len(problems) > 0 {
+		detail := ""
+		for i, problem := range problems {
+			if i == 5 {
+				detail += fmt.Sprintf("; and %d more", len(problems)-5)
+				break
+			}
+			if i > 0 {
+				detail += "; "
+			}
+			detail += problem.Detail
+		}
+		return nil, fmt.Errorf("board is not valid: %s", detail)
 	}
 
 	return p.game, nil
