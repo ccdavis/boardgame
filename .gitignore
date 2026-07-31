@@ -1,0 +1,23 @@
+# Compiled binaries
+/tester
+/build/
+/go-lang/boardgame
+/go-lang/main
+/go-lang/npc_demo
+/go-lang/npc_game_demo
+/go-lang/webserver_bin
+/go-lang/webserver/main
+*.test
+
+# Generated during play / debugging
+/go-lang/transcript*.txt
+/go-lang/game/transcript*.txt
+/go-lang/webserver/*.png
+/go-lang/webserver/screenshots/
+
+# Python
+__pycache__/
+*.pyc
+
+# WSL download provenance
+*:Zone.Identifier
