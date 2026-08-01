@@ -596,9 +596,10 @@ func TestExecuteCombatMoves(t *testing.T) {
 	controller := NewGameController(game)
 	controller.StartGame()
 
-	// Setup
+	// Setup: Germany is defended, so attacking it means a battle.
 	game.ConnectTerritories("Moscow", "Germany")
 	game.PlacePieces("Moscow", "infantry", 1)
+	game.PlacePieces("Germany", "infantry", 1)
 
 	// Advance to combat move phase
 	controller.AdvancePhase()
@@ -620,13 +621,40 @@ func TestExecuteCombatMoves(t *testing.T) {
 		t.Errorf("Expected 0 pieces in Moscow, got %d", len(moscowPieces))
 	}
 
-	if len(germanyPieces) != 1 {
-		t.Errorf("Expected 1 piece in Germany, got %d", len(germanyPieces))
+	if len(germanyPieces) != 2 {
+		t.Errorf("Expected 2 pieces in Germany (attacker and defender), got %d", len(germanyPieces))
 	}
 
 	// Verify battle was created
 	if _, exists := controller.PendingBattles["Germany"]; !exists {
 		t.Error("Expected battle to be created for Germany")
+	}
+}
+
+// Marching into UNDEFENDED enemy territory captures it on the spot: no
+// battle is staged, and the flag changes at move execution. Every hostile
+// destination used to become a PendingBattle, so half the "battles" in an
+// observed game were fought against nobody.
+func TestExecuteCombatMoves_WalkInCapturesWithoutABattle(t *testing.T) {
+	game := createTestGame()
+	controller := NewGameController(game)
+	controller.StartGame()
+
+	game.ConnectTerritories("Moscow", "Germany")
+	game.PlacePieces("Moscow", "infantry", 1)
+
+	controller.AdvancePhase()
+	controller.PlanMove(1, "Moscow", "Germany")
+	if err := controller.ExecuteCombatMoves(); err != nil {
+		t.Fatalf("Failed to execute combat moves: %v", err)
+	}
+
+	if len(controller.PendingBattles) != 0 {
+		t.Errorf("a walk-in staged %d battle(s); empty territory is not fought over",
+			len(controller.PendingBattles))
+	}
+	if owner := game.Board["Germany"].Owner; owner == nil || owner.Name != "USSR" {
+		t.Error("walking into undefended Germany did not capture it")
 	}
 }
 

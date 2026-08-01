@@ -610,13 +610,19 @@ func TestPlan_ResizesAgainstAGrowingDefence(t *testing.T) {
 		t.Errorf("defence grew but WantTroops stayed at %d", plan.WantTroops)
 	}
 
-	// The defence becomes hopeless: the plan is abandoned, releasing its units.
+	// The defence becomes hopeless. A fresh plan spends its reconnaissance
+	// turns watching before it will pass that judgement, so move the clock
+	// past the watch window first.
 	g.PlacePieces("Island", "infantry", 20)
+	g.Turn += planReconTurns
 	if plan.Review(controller) {
 		t.Error("a plan against a fortress no landing can beat is still being worked")
 	}
 	if plan.State != PlanAbandoned {
 		t.Errorf("state = %v, want abandoned", plan.State)
+	}
+	if !plan.HopelessTarget {
+		t.Error("a hopeless abandonment should be marked for the cooling-off book")
 	}
 }
 

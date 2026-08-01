@@ -195,11 +195,20 @@ func (npc *NPCAIPlayer) ReviewDefences(gc *GameController, player *models.Player
 		gc.Plans = NewPlanBook()
 	}
 
+	// Intelligence: revealed enemy landings make their targets worth holding,
+	// and the counterforce is sized against the invasion actually being
+	// prepared. The garrison plan is itself an ordinary (secret) operation.
+	threats := gc.Plans.RevealedThreatsAgainst(gc.Game, player)
+
 	kept := make([]*DefencePlan, 0, len(gc.Plans.defences[player.Name]))
 	held := make(map[string]bool)
 	for _, plan := range gc.Plans.defences[player.Name] {
 		if !plan.Review(gc) {
 			continue // territory lost; forget the plan
+		}
+		if extra := threats[plan.Territory]; plan.WantStrength < extra {
+			plan.WantStrength = extra
+			plan.Satisfied = plan.GarrisonStrength(gc.Game) >= plan.WantStrength
 		}
 		kept = append(kept, plan)
 		held[plan.Territory] = true
@@ -211,7 +220,7 @@ func (npc *NPCAIPlayer) ReviewDefences(gc *GameController, player *models.Player
 		if held[territory.Name] || territory.Terrain != models.Land {
 			continue
 		}
-		if !worthDefending(gc.Game, territory) {
+		if !worthDefending(gc.Game, territory) && threats[territory.Name] == 0 {
 			continue
 		}
 		plan := gc.Plans.AddDefence(&DefencePlan{
@@ -221,7 +230,11 @@ func (npc *NPCAIPlayer) ReviewDefences(gc *GameController, player *models.Player
 			LastProgress: gc.Game.Turn,
 		})
 		plan.Review(gc)
-		transcript.LogAction(player.Name, "new "+plan.Describe(gc.Game))
+		if extra := threats[territory.Name]; plan.WantStrength < extra {
+			plan.WantStrength = extra
+			plan.Satisfied = plan.GarrisonStrength(gc.Game) >= plan.WantStrength
+		}
+		transcript.LogSecretAction(player.Name, "new "+plan.Describe(gc.Game))
 	}
 
 	for _, plan := range gc.Plans.Defences(player.Name) {

@@ -238,3 +238,137 @@ func TestPlanLanding_StrictNeutralPaysTheToll(t *testing.T) {
 		t.Errorf("garrison = %d defenders, want 4 (production value)", defenders)
 	}
 }
+
+// setupContestedLanding: Germany's loaded transport must fight its way into
+// the drop zone -- the North Sea is held by UK destroyers -- so executing the
+// combat moves stages BOTH a sea battle there and the landing battle on UK
+// soil, linked by AmphibiousFrom.
+func setupContestedLanding(t *testing.T) (*GameController, []int) {
+	t.Helper()
+	g := models.NewGame()
+
+	g.AddTerritory("France", models.Land, "Germany", 3)
+	g.AddTerritory("Home Sea", models.Water, "Neutral", 0)
+	g.AddTerritory("North Sea", models.Water, "Neutral", 0)
+	g.AddTerritory("UK", models.Land, "UK", 8)
+	g.ConnectTerritories("France", "Home Sea")
+	g.ConnectTerritories("Home Sea", "France")
+	g.ConnectTerritories("Home Sea", "North Sea")
+	g.ConnectTerritories("North Sea", "Home Sea")
+	g.ConnectTerritories("North Sea", "UK")
+	g.ConnectTerritories("UK", "North Sea")
+
+	g.AddPieceTemplate("infantry", models.Land, 1, 1, 2, 3)
+	g.AddPieceTemplate("transport", models.Water, 2, 0, 1, 8)
+	g.AddPieceTemplate("destroyer", models.Water, 2, 2, 2, 8)
+	g.SetContainerCapacity("transport", 2, []string{"infantry"})
+
+	g.PlacePieces("France", "infantry", 2)
+	g.PlacePieces("Home Sea", "transport", 1)
+	g.PlacePieces("North Sea", "destroyer", 2)
+	g.PlacePieces("UK", "infantry", 1)
+
+	g.PlayerOrder = []string{"Germany", "UK"}
+	g.CurrentPower = "Germany"
+	g.CurrentPhase = models.CombatMovePhase
+	germany := g.Players["Germany"]
+	uk := g.Players["UK"]
+	germany.Side = "Axis"
+	uk.Side = "Allies"
+
+	// Pieces placed in Neutral water belong to Neutral; hand them to their
+	// real owners. The destroyers guard the crossing for the UK, and the
+	// transport is Germany's.
+	for _, id := range g.Board["North Sea"].Pieces {
+		g.Pieces[id].Owner = uk
+	}
+	for _, id := range g.Board["Home Sea"].Pieces {
+		g.Pieces[id].Owner = germany
+	}
+
+	gc := NewGameController(g)
+
+	cargo := append([]int{}, g.Board["France"].Pieces...)
+	var transportID int
+	for _, id := range g.Board["Home Sea"].Pieces {
+		if g.Pieces[id].Name == "transport" {
+			transportID = id
+		}
+	}
+	for _, id := range cargo {
+		if err := gc.LoadUnit(transportID, id); err != nil {
+			t.Fatalf("loading infantry %d: %v", id, err)
+		}
+	}
+
+	// The transport fights its way into the drop zone and the troops land.
+	if err := gc.PlanMove(transportID, "Home Sea", "North Sea"); err != nil {
+		t.Fatalf("planning transport into contested water: %v", err)
+	}
+	if err := gc.PlanLanding(cargo, "UK"); err != nil {
+		t.Fatalf("planning landing: %v", err)
+	}
+	if err := gc.ExecuteCombatMoves(); err != nil {
+		t.Fatalf("executing combat moves: %v", err)
+	}
+	gc.Game.CurrentPhase = models.ConductCombatPhase
+	return gc, cargo
+}
+
+// The landing may not be fought while the sea battle covering it is pending.
+func TestLanding_SeaBattleResolvesFirst(t *testing.T) {
+	gc, _ := setupContestedLanding(t)
+
+	if _, ok := gc.PendingBattles["North Sea"]; !ok {
+		t.Fatal("no sea battle staged in the contested drop zone")
+	}
+	if _, ok := gc.PendingBattles["UK"]; !ok {
+		t.Fatal("no landing battle staged on UK soil")
+	}
+
+	if _, err := gc.ResolveBattle("UK", NewSeededDiceRoller(1)); err == nil {
+		t.Fatal("the landing resolved before the sea battle covering it")
+	}
+
+	// BattleOrder puts the sea fight first for the automatic resolvers.
+	order := gc.BattleOrder()
+	if len(order) != 2 || order[0] != "North Sea" {
+		t.Errorf("battle order = %v, want the North Sea first", order)
+	}
+}
+
+// Losing the fight off the beach drowns the landing force.
+func TestLanding_LostDropZoneDrownsTheTroops(t *testing.T) {
+	gc, cargo := setupContestedLanding(t)
+	g := gc.Game
+
+	// A lone transport (attack 0) against two destroyers: the covering
+	// action can only be lost.
+	seaResult, err := gc.ResolveBattle("North Sea", NewSeededDiceRoller(1))
+	if err != nil {
+		t.Fatalf("resolving sea battle: %v", err)
+	}
+	if seaResult.AttackerWins {
+		t.Fatal("fixture broke: a transport with attack 0 won a sea battle")
+	}
+
+	landResult, err := gc.ResolveBattle("UK", NewSeededDiceRoller(1))
+	if err != nil {
+		t.Fatalf("resolving landing: %v", err)
+	}
+	if !landResult.DefenderWins {
+		t.Error("the cut-off landing should be a defender victory")
+	}
+	if len(landResult.AttackerCasualties) != len(cargo) {
+		t.Errorf("attacker casualties = %d, want the whole landing force (%d) drowned",
+			len(landResult.AttackerCasualties), len(cargo))
+	}
+	for _, id := range cargo {
+		if _, alive := g.Pieces[id]; alive {
+			t.Errorf("landed infantry %d survived a drop zone in enemy hands", id)
+		}
+	}
+	if owner := g.Board["UK"].Owner; owner == nil || owner.Name != "UK" {
+		t.Error("UK changed hands despite the landing drowning")
+	}
+}

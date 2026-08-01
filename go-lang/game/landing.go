@@ -53,6 +53,10 @@ func (gc *GameController) PlanLanding(cargoIDs []int, targetName string) error {
 		return fmt.Errorf("%s may not attack %s, a %s territory",
 			player.Name, targetName, target.NeutralType)
 	}
+	// And every violation booked this phase must be payable together.
+	if err := gc.checkNeutralTollFunds(target, player); err != nil {
+		return err
+	}
 	if len(cargoIDs) == 0 {
 		return fmt.Errorf("no units to land")
 	}
@@ -168,7 +172,7 @@ func (gc *GameController) executePlannedLandings(player *models.Player) {
 			if err := gc.Game.UnloadPiece(transportID, cargoID, landing.Target); err != nil {
 				continue
 			}
-			gc.registerLandedAttacker(landing.Target, cargoID, player.Name, "")
+			gc.registerLandedAttacker(landing.Target, cargoID, player.Name, "", zone.Name)
 			if landedFrom[landing.Target] == nil {
 				landedFrom[landing.Target] = make(map[string]bool)
 			}

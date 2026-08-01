@@ -156,3 +156,44 @@ func TestProNeutral_RaisesAGarrisonWhenAttacked(t *testing.T) {
 		t.Errorf("attacking a pro-side neutral flipped Mongolia to %s; the chain is for strict neutrals", owner)
 	}
 }
+
+// Two strict neutrals may not be booked on one treasury that covers only one
+// toll: every violation planned in a phase must be payable together.
+func TestNeutralTolls_CumulativeAcrossBookings(t *testing.T) {
+	g := models.NewGame()
+	g.AddTerritory("Reich", models.Land, "Germany", 5)
+	g.AddTerritory("Alpinia", models.Land, "Neutral", 1)
+	g.AddTerritory("Anatolia", models.Land, "Neutral", 1)
+	g.ConnectTerritories("Reich", "Alpinia")
+	g.ConnectTerritories("Alpinia", "Reich")
+	g.ConnectTerritories("Reich", "Anatolia")
+	g.ConnectTerritories("Anatolia", "Reich")
+	g.Board["Alpinia"].NeutralType = models.StrictNeutral
+	g.Board["Anatolia"].NeutralType = models.StrictNeutral
+
+	g.AddPieceTemplate("infantry", models.Land, 1, 1, 2, 3)
+	g.PlacePieces("Reich", "infantry", 2)
+
+	g.PlayerOrder = []string{"Germany"}
+	g.CurrentPower = "Germany"
+	g.CurrentPhase = models.CombatMovePhase
+	germany := g.Players["Germany"]
+	germany.Side = "Axis"
+	germany.IPCs = NeutralViolationCost + 1 // covers one toll, not two
+
+	gc := NewGameController(g)
+	pieces := g.Board["Reich"].Pieces
+
+	if err := gc.PlanMove(pieces[0], "Reich", "Alpinia"); err != nil {
+		t.Fatalf("first violation should be affordable: %v", err)
+	}
+	if err := gc.PlanMove(pieces[1], "Reich", "Anatolia"); err == nil {
+		t.Fatal("booked a second strict-neutral violation the treasury cannot cover")
+	}
+
+	// With funds for both, both book.
+	germany.IPCs = 2 * NeutralViolationCost
+	if err := gc.PlanMove(pieces[1], "Reich", "Anatolia"); err != nil {
+		t.Fatalf("two tolls, two violations, funds for both: %v", err)
+	}
+}

@@ -48,6 +48,15 @@ func canAttackNeutral(territory *models.Territory, attacker *models.Player) bool
 		return true // Normal attack rules apply
 	}
 
+	// Owned by the Neutral power but not a declared neutral country: open
+	// water, in practice -- every ocean zone belongs to "Neutral" and is
+	// NotNeutral. Falling through to the final `false` here forbade every
+	// naval battle in a Neutral-flagged sea zone, which is why fleets never
+	// fought in open ocean.
+	if territory.NeutralType == models.NotNeutral {
+		return true
+	}
+
 	// Violating a strict neutral is allowed but not free: it costs 3 IPCs paid
 	// to the bank, the neutral raises a defending garrison, and every other
 	// strict neutral turns hostile. The attack was previously forbidden
@@ -73,6 +82,50 @@ func canAttackNeutral(territory *models.Territory, attacker *models.Player) bool
 // offers only shores the rules actually allow assaulting.
 func CanAttackNeutral(territory *models.Territory, attacker *models.Player) bool {
 	return canAttackNeutral(territory, attacker)
+}
+
+// bookedNeutralViolations lists the strict neutrals the current player has
+// already booked attacks against this phase -- planned combat moves and
+// booked landings both count.
+func (gc *GameController) bookedNeutralViolations() map[string]bool {
+	booked := make(map[string]bool)
+	note := func(name string) {
+		territory := gc.Game.Board[name]
+		if territory != nil && isUnclaimedNeutral(territory) &&
+			territory.NeutralType == models.StrictNeutral {
+			booked[name] = true
+		}
+	}
+	for _, move := range gc.MoveTracker.GetMovesByType(CombatMove) {
+		note(move.To)
+	}
+	for _, landing := range gc.PlannedLandings {
+		note(landing.Target)
+	}
+	return booked
+}
+
+// checkNeutralTollFunds refuses a NEW strict-neutral violation the treasury
+// cannot cover on top of the violations already booked this phase. Each
+// individual attack used to pass its own 3-IPC check, so two violations
+// booked with 3 IPCs in hand executed both and the bank was quietly shorted
+// -- the treasury floors at zero rather than overdrawing.
+func (gc *GameController) checkNeutralTollFunds(target *models.Territory, player *models.Player) error {
+	if target == nil || !isUnclaimedNeutral(target) ||
+		target.NeutralType != models.StrictNeutral {
+		return nil
+	}
+	booked := gc.bookedNeutralViolations()
+	if booked[target.Name] {
+		return nil // this violation is already priced in
+	}
+	needed := (len(booked) + 1) * NeutralViolationCost
+	if player.IPCs < needed {
+		return fmt.Errorf("violating %s needs %d IPCs -- %d for this toll and %d already committed to other neutrals -- and %s has only %d",
+			target.Name, needed, NeutralViolationCost,
+			len(booked)*NeutralViolationCost, player.Name, player.IPCs)
+	}
+	return nil
 }
 
 // CanActivateNeutral checks if a player can peacefully activate a neutral

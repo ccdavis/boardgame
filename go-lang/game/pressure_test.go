@@ -296,8 +296,8 @@ func TestVictoryRacePressure_TrailingSideFeelsTheClock(t *testing.T) {
 	g, _ := pressureBoard(t)
 	g.VictoryCitiesEnabled = true
 
-	// Axis holds 2 victory cities (needs 9: 7 to go); Allies hold 8
-	// (need 10: 2 to go). The Allies are five cities closer.
+	// Axis holds 2 victory cities (needs 9: 7 to go); Allies hold 7
+	// (need 9: 2 to go). The Allies are five cities closer.
 	mark := func(name, owner string, vc bool) {
 		g.AddTerritory(name, models.Land, owner, 1)
 		g.Board[name].IsVictoryCity = vc
@@ -305,7 +305,7 @@ func TestVictoryRacePressure_TrailingSideFeelsTheClock(t *testing.T) {
 	for i, owner := range []string{"Germany", "Germany"} {
 		mark(fmt.Sprintf("AxisCity%d", i), owner, true)
 	}
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 7; i++ {
 		mark(fmt.Sprintf("AlliedCity%d", i), "USSR", true)
 	}
 

@@ -17,7 +17,6 @@ package engine
 
 import (
 	"fmt"
-	"sort"
 
 	"boardgame/game"
 	"boardgame/models"
@@ -150,6 +149,14 @@ func (d *Driver) Warnings() []string {
 		if len(d.Controller.MoveTracker.GetMovesByType(game.CombatMove)) == 0 {
 			warnings = append(warnings,
 				"No combat moves planned - you won't attack any territories")
+		}
+	case models.NoncombatMovePhase:
+		// Aircraft with no legal landing place crash when the turn ends.
+		// Planned moves count, so this only names planes still in trouble.
+		for _, s := range d.Controller.StrandedAircraftFor(player) {
+			warnings = append(warnings, fmt.Sprintf(
+				"Your %s in %s has nowhere to land and will be lost at the end of the turn",
+				s.Piece.Name, s.Territory))
 		}
 	case models.MobilizePhase:
 		if pending := d.Controller.Game.PurchasedUnits[player.Name]; len(pending) > 0 {
@@ -297,13 +304,11 @@ func (d *Driver) ResolveBattle(territory string) (*game.BattleResult, error) {
 // The pending set is snapshotted first: resolving a battle deletes it from the
 // map, and one battle can create or capture territory that touches others.
 func (d *Driver) ResolveAllBattles() ([]*game.BattleResult, error) {
-	territories := make([]string, 0, len(d.Controller.PendingBattles))
-	for territory := range d.Controller.PendingBattles {
-		territories = append(territories, territory)
-	}
-	// Fixed order: map order varies run to run, and battle order decides which
-	// battle consumes which dice rolls.
-	sort.Strings(territories)
+	// Rules order: sea zones before the shores they cover, so a landing's
+	// covering action is decided before the landing itself. Also a fixed
+	// order for replay: battle order decides which battle consumes which
+	// dice rolls.
+	territories := d.Controller.BattleOrder()
 
 	results := make([]*game.BattleResult, 0, len(territories))
 	for _, territory := range territories {

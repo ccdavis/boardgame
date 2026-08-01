@@ -23,6 +23,11 @@ type GameController struct {
 	// rebuilt for each turn in some paths -- the web server constructs one per
 	// request -- so state held on the AI would be thrown away between turns.
 	Plans *PlanBook
+
+	// CrashLog records aircraft lost to the end-of-turn landing rule. The
+	// sweep runs inside AdvanceTurn, which has no transcript to write to;
+	// front ends and observers read (and may clear) this instead.
+	CrashLog []string
 }
 
 // NewGameController creates a new controller for a game
@@ -84,6 +89,12 @@ func (gc *GameController) AdvancePhase() error {
 func (gc *GameController) AdvanceTurn() error {
 	if len(gc.Game.PlayerOrder) == 0 {
 		return fmt.Errorf("no players in game")
+	}
+
+	// The outgoing power's aircraft must be parked somewhere legal -- friendly
+	// ground or a carrier seat. Whatever is not goes down with its fuel tanks.
+	if outgoing, err := gc.GetCurrentPlayer(); err == nil && outgoing != nil {
+		gc.crashStrandedAircraft(outgoing)
 	}
 
 	// Find current player index
@@ -183,13 +194,20 @@ func (gc *GameController) CollectIncome() error {
 	return nil
 }
 
-// The victory-city thresholds from the rulebook: either side wins outright at
-// immediateVictoryCities; the Axis wins by holding axisVictoryCities (and the
-// Allies alliesVictoryCities) across a full round of play.
+// Victory-city thresholds: either side wins outright at
+// immediateVictoryCities; a side wins by holding its threshold across a full
+// round of play.
+//
+// The printed rulebook says Axis 9, Allies 10 -- but that asymmetry was
+// priced for the printed board. This variant has FOURTEEN victory cities
+// split 7-7 at the start, and under the printed numbers the Axis needed +2
+// (Karelia and the Caucasus, next door to Germany) while the Allies needed
+// +3 across an ocean. Fifty observed games ran Axis 43, Allies 0. With a
+// symmetric start the thresholds are symmetric: +2 either way.
 const (
 	immediateVictoryCities = 13
 	axisVictoryCities      = 9
-	alliesVictoryCities    = 10
+	alliesVictoryCities    = 9
 )
 
 // CheckVictoryCondition checks if any side has won the game.
@@ -546,6 +564,14 @@ func (gc *GameController) PlanMove(pieceID int, from, to string) error {
 			piece.Name, to, from, distance, remaining)
 	}
 
+	// Every strict neutral booked this phase must be payable TOGETHER: the
+	// per-attack check in the pathfinder cannot see the other bookings.
+	if moveType == CombatMove {
+		if err := gc.checkNeutralTollFunds(gc.Game.Board[to], player); err != nil {
+			return err
+		}
+	}
+
 	// An aircraft landing at sea needs a carrier slot that is still free once
 	// every already-planned move is counted -- aircraft planned onto the same
 	// carrier, carriers planned to sail away, carriers planned to arrive. The
@@ -684,9 +710,30 @@ func (gc *GameController) ExecuteCombatMoves() error {
 			// A neutral under attack defends itself, and violating a strict
 			// one levies the toll and rouses the rest. violateNeutral is
 			// idempotent -- a mobilised country is not violated twice -- so a
-			// second attacker needs no separate bookkeeping here.
+			// second attacker needs no separate bookkeeping here. It runs
+			// before the defender check below because the garrison it raises
+			// IS the defence.
 			if gc.violateNeutral(toTerritory, player) {
 				strictNeutralAttacked = true
+			}
+
+			// A battle needs somebody to fight. Marching into territory
+			// nobody defends is a walk-in: land units capture it on the
+			// spot, and no battle is staged. (Every hostile destination
+			// used to become a PendingBattle, so about half the "battles"
+			// in an observed game were Attacker Victory after 0 rounds
+			// against nobody -- and a human had to click each one out.)
+			if !gc.hasHostileDefenders(toTerritory, player) {
+				piece := gc.Game.Pieces[move.PieceID]
+				if toTerritory.Terrain != models.Water &&
+					piece != nil && piece.Terrain == models.Land {
+					// Only ground troops take ground; an aircraft overhead
+					// or a fleet off an unmarked coast owns nothing.
+					if err := gc.CaptureTerritory(move.To, player.Name); err != nil {
+						return fmt.Errorf("failed to take undefended %s: %v", move.To, err)
+					}
+				}
+				continue
 			}
 
 			// Moving into hostile territory - create battle
@@ -821,6 +868,27 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 	territory := gc.Game.Board[territoryName]
 	attacker := gc.Game.Players[battle.AttackerID]
 
+	// The sea fight off the beach resolves before the landing it covers:
+	// whether the troops even reach the shore depends on it.
+	for _, zone := range battle.AmphibiousFrom {
+		if _, pending := gc.PendingBattles[zone]; pending {
+			return nil, fmt.Errorf("the sea battle in %s must be resolved before the landing in %s",
+				zone, territoryName)
+		}
+	}
+
+	// Troops whose drop zone stayed in enemy hands never made it ashore:
+	// the covering action was lost, and the landing force is lost with it.
+	drowned := gc.drownCutOffAttackers(battle, territoryName, attacker)
+	if len(battle.AttackingPieceIDs) == 0 {
+		// Every attacker drowned; there is nobody left to fight the battle.
+		delete(gc.PendingBattles, territoryName)
+		return &BattleResult{
+			DefenderWins:       true,
+			AttackerCasualties: drowned,
+		}, nil
+	}
+
 	// Populate battle with actual pieces using the tracked attacking piece IDs
 	attackerPieces := make([]*models.Piece, 0)
 	defenderPieces := make([]*models.Piece, 0)
@@ -882,6 +950,9 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 		return nil, err
 	}
 
+	// Troops that drowned short of the beach are the attacker's losses too.
+	result.AttackerCasualties = append(result.AttackerCasualties, drowned...)
+
 	// Remove casualties from the board
 	for _, casualty := range result.AttackerCasualties {
 		gc.removePieceFromBoard(casualty, territoryName)
@@ -897,8 +968,14 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 		gc.withdrawAttackers(battle, territoryName, result.AttackersRemaining)
 	}
 
-	// Handle territory capture (only if attacker won, not if they retreated)
-	if result.AttackerWins && !result.AttackerRetreated {
+	// Handle territory capture (only if attacker won, not if they retreated).
+	//
+	// Winning the fight is not the same as taking the ground. Only a surviving
+	// LAND unit captures a territory: aircraft cannot capture or hold anything
+	// (they must fly home in noncombat), and sea zones are never owned at all
+	// -- clearing one of enemy ships leaves it open water, not a possession.
+	if result.AttackerWins && !result.AttackerRetreated &&
+		territory.Terrain == models.Land && anyLandUnit(result.AttackersRemaining) {
 		err = gc.CaptureTerritory(territoryName, attacker.Name)
 		if err != nil {
 			return result, fmt.Errorf("failed to capture territory: %v", err)
@@ -909,6 +986,84 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 	delete(gc.PendingBattles, territoryName)
 
 	return result, nil
+}
+
+// drownCutOffAttackers removes amphibious attackers whose drop zone is still
+// held by the enemy: the sea battle covering their landing was lost, so they
+// never reached the beach. Returns the pieces lost this way.
+func (gc *GameController) drownCutOffAttackers(battle *Battle, territoryName string, attacker *models.Player) []*models.Piece {
+	if len(battle.AmphibiousFrom) == 0 {
+		return nil
+	}
+
+	drowned := make([]*models.Piece, 0)
+	kept := make([]int, 0, len(battle.AttackingPieceIDs))
+	for _, pieceID := range battle.AttackingPieceIDs {
+		zoneName, amphibious := battle.AmphibiousFrom[pieceID]
+		if amphibious {
+			zone := gc.Game.Board[zoneName]
+			if zone != nil && gc.hasHostileDefenders(zone, attacker) {
+				if piece := gc.Game.Pieces[pieceID]; piece != nil {
+					gc.removePieceFromBoard(piece, territoryName)
+					drowned = append(drowned, piece)
+				}
+				continue
+			}
+		}
+		kept = append(kept, pieceID)
+	}
+	battle.AttackingPieceIDs = kept
+	return drowned
+}
+
+// BattleOrder lists the pending battles in the order the rules resolve them:
+// sea zones before the shores they cover -- a landing's fate depends on the
+// fight off its beach -- alphabetical within each group for reproducibility.
+func (gc *GameController) BattleOrder() []string {
+	names := make([]string, 0, len(gc.PendingBattles))
+	for name := range gc.PendingBattles {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		seaI := gc.PendingBattles[names[i]].Type == SeaBattle
+		seaJ := gc.PendingBattles[names[j]].Type == SeaBattle
+		if seaI != seaJ {
+			return seaI
+		}
+		return names[i] < names[j]
+	})
+	return names
+}
+
+// hasHostileDefenders reports whether anything in the territory would
+// actually fight the attacker. Structures are captured with the ground, not
+// fought, so a territory holding only an enemy factory is undefended.
+func (gc *GameController) hasHostileDefenders(territory *models.Territory, attacker *models.Player) bool {
+	units := gc.Game.Units()
+	for _, id := range territory.Pieces {
+		piece := gc.Game.Pieces[id]
+		if piece == nil || piece.Owner == nil {
+			continue
+		}
+		if piece.Owner == attacker || areAllies(piece.Owner, attacker) {
+			continue
+		}
+		if units.For(piece).IsStructure {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// anyLandUnit reports whether any of the pieces is a ground unit.
+func anyLandUnit(pieces []*models.Piece) bool {
+	for _, piece := range pieces {
+		if piece != nil && piece.Terrain == models.Land {
+			return true
+		}
+	}
+	return false
 }
 
 // withdrawAttackers moves surviving attackers back to where they came from.

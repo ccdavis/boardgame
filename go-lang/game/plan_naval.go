@@ -135,7 +135,7 @@ func (npc *NPCAIPlayer) DisposeOfEscorts(gc *GameController, player *models.Play
 			CreatedTurn:  g.Turn,
 			LastProgress: g.Turn,
 		})
-		transcript.LogAction(player.Name, "new "+plan.Describe())
+		transcript.LogSecretAction(player.Name, "new "+plan.Describe())
 	}
 	if len(home) > 0 {
 		port := nearestFriendlyPort(g, player, done.DropZone)
@@ -150,7 +150,7 @@ func (npc *NPCAIPlayer) DisposeOfEscorts(gc *GameController, player *models.Play
 			CreatedTurn:  g.Turn,
 			LastProgress: g.Turn,
 		})
-		transcript.LogAction(player.Name, "new "+plan.Describe())
+		transcript.LogSecretAction(player.Name, "new "+plan.Describe())
 	}
 }
 
@@ -229,13 +229,13 @@ func (npc *NPCAIPlayer) ReviewNaval(gc *GameController, player *models.Player, t
 				plan.Mission = NavalReturn
 				plan.Station = nearestFriendlyPort(g, player, plan.Station)
 				plan.LastProgress = g.Turn
-				transcript.LogAction(player.Name, plan.Describe())
+				transcript.LogSecretAction(player.Name, plan.Describe())
 			}
 		case NavalReturn:
 			// Arrived: the ships rejoin the general pool, where they can be
 			// taken up by the next operation.
 			if allAt(g, plan.Ships, plan.Station) {
-				transcript.LogAction(player.Name, fmt.Sprintf(
+				transcript.LogSecretAction(player.Name, fmt.Sprintf(
 					"squadron %d reached %s and is available again", plan.ID, plan.Station))
 				continue
 			}

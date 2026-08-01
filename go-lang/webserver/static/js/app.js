@@ -700,7 +700,18 @@ const app = createApp({
             await this.selectTerritory(name);
 
             if (!this.gameState.isHumanTurn || this.gameState.gameOver) return;
-            if (!this.eligibleSources[name]) return;
+            if (!this.eligibleSources[name]) {
+                // Never fail silently: a click that cannot act flashes red,
+                // the same signal as an ineligible destination.
+                const phase = this.gameState.currentPhase;
+                if (phase === 'Combat Move' || phase === 'Noncombat Move') {
+                    const terr = this.territories.find(t => t.name === name);
+                    if (terr && terr.owner === this.gameState.humanPlayer) {
+                        this.flashBad(name);
+                    }
+                }
+                return;
+            }
 
             switch (this.gameState.currentPhase) {
                 case 'Purchase Units':

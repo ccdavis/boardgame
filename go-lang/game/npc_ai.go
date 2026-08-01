@@ -396,6 +396,13 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 			if successProb > cautiousOdds {
 				percentToMove = commitCautious // a sure thing should not strip the source
 			}
+			// A victory city is taken to be HELD. The cautious fraction won
+			// the fight and then lost the ground: fifty observed games saw
+			// the Caucasus change hands five times a game because each side
+			// retook it with a handful of units the other could brush aside.
+			if target.IsVictoryCity && percentToMove < commitPressing {
+				percentToMove = commitPressing
+			}
 
 			numToMove := int(float64(len(pieces)) * percentToMove)
 			if numToMove == 0 && len(pieces) > 0 && successProb >= minViableOdds {
@@ -496,11 +503,9 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 	// roller that meant each battle consumed different rolls on different runs
 	// -- so the same seed produced different games, and "replay with
 	// GAME_SEED=N" was a promise the code did not keep.
-	pending := make([]string, 0, len(controller.PendingBattles))
-	for territoryName := range controller.PendingBattles {
-		pending = append(pending, territoryName)
-	}
-	sort.Strings(pending)
+	// Sea fights first: a landing may only be fought once the battle in its
+	// drop zone is decided, and losing that one drowns the landing force.
+	pending := controller.BattleOrder()
 
 	for _, territoryName := range pending {
 		transcript.LogBattleStart(territoryName)
@@ -567,6 +572,16 @@ func (npc *NPCAIPlayer) NoncombatMovePhase(controller *GameController, transcrip
 	// on five or six; the war froze by round six of every observed game.
 	movesMade += npc.DisperseToFronts(controller, player, transcript)
 	movesMade += npc.FerrySurplus(controller, player, transcript)
+
+	// Stranded aircraft fly home LAST, once every other planned move is on
+	// the books. Rescuing them first looked safer but missed the commonest
+	// stranding of all: a fighter parked over a carrier that the plan logic
+	// then ordered away. The stranded check reads planned moves, so run
+	// after them it sees the deck leaving -- and can even follow the carrier
+	// to its destination, since arriving decks count as seats there too.
+	// Observed before this ordering: Japan ditched a fighter in the
+	// Philipines Sea in sixty-one turns out of fifty games.
+	movesMade += npc.RecoverAircraft(controller, player, transcript)
 
 	// Execute noncombat moves
 	err := controller.ExecuteNoncombatMoves()
@@ -724,18 +739,35 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 	// own production back.
 	allStrictProduction := strictChainCost(game, "")
 
-	for _, ourTerritory := range player.Territories {
+	// Targets are found from everywhere the power has a presence, not just
+	// what it owns: a fleet in open ocean holds no territory, but it still
+	// sees -- and can attack -- the enemy fleet one zone over.
+	for _, ourTerritory := range presenceTerritories(game, player) {
 		for _, neighbor := range ourTerritory.ConnectedTo {
-			if neighbor.Owner != player && !seen[neighbor.Name] {
+			// A sea zone's nominal flag means nothing: what makes it a target
+			// is the enemy fleet in it. Judging sea zones by owner meant a
+			// hostile fleet parked in "our" or an ally's coastal water could
+			// never be attacked, and navies simply refused battle forever.
+			hostileFleet := neighbor.Terrain == models.Water &&
+				enemyPieceCount(game, neighbor, player) > 0
+
+			if neighbor.Owner == player && !hostileFleet {
+				continue
+			}
+			if !seen[neighbor.Name] {
 				// Rulebook page 14: "At no time can an Allied power attack another Allied power,
 				// or an Axis power attack another Axis power"
 				// Skip allied territories - only target true enemies or neutrals
-				if areAllies(player, neighbor.Owner) {
+				if areAllies(player, neighbor.Owner) && !hostileFleet {
 					continue // Skip allies
 				}
 
 				// Calculate strategic score
 				score := neighbor.Production
+				if hostileFleet {
+					// Sea zones produce nothing; the prize is the tonnage.
+					score += navalTargetPerShip * enemyPieceCount(game, neighbor, player)
+				}
 
 				// Strict neutrals are on the table only for a power losing the
 				// production race with nothing better to hit, and only at their
@@ -804,49 +836,105 @@ func (npc *NPCAIPlayer) findAttackTargets(game *models.Game, player *models.Play
 	return targets
 }
 
+// presenceTerritories lists every territory the player owns or has pieces
+// in, deterministically ordered. Ownership alone misses fleets: ships live in
+// sea zones nobody ever owns.
+func presenceTerritories(game *models.Game, player *models.Player) []*models.Territory {
+	seen := make(map[string]bool, len(player.Territories))
+	out := make([]*models.Territory, 0, len(player.Territories))
+	for _, territory := range player.Territories {
+		seen[territory.Name] = true
+		out = append(out, territory)
+	}
+	for _, name := range sortedTerritoryNames(game) {
+		if seen[name] {
+			continue
+		}
+		territory := game.Board[name]
+		for _, id := range territory.Pieces {
+			piece := game.Pieces[id]
+			if piece != nil && piece.Owner == player {
+				out = append(out, territory)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// enemyPieceCount counts the pieces in a territory that belong to the other
+// side -- not ours, not an ally's, not the non-playing Neutral's.
+func enemyPieceCount(game *models.Game, territory *models.Territory, player *models.Player) int {
+	count := 0
+	for _, id := range territory.Pieces {
+		piece := game.Pieces[id]
+		if piece == nil || piece.Owner == nil || piece.Owner == player {
+			continue
+		}
+		if piece.Owner.Name == "Neutral" || areAllies(piece.Owner, player) {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 // findAttackersFor finds our pieces that can attack a target territory
 func (npc *NPCAIPlayer) findAttackersFor(controller *GameController, player *models.Player, target *models.Territory) map[string][]*models.Piece {
 	game := controller.Game
 	attackers := make(map[string][]*models.Piece)
 
-	for _, ourTerritory := range player.Territories {
-		// Check if this territory is adjacent to target
-		adjacent := false
-		for _, neighbor := range ourTerritory.ConnectedTo {
-			if neighbor == target {
-				adjacent = true
-				break
+	// Walk the target's neighbours rather than the player's holdings: a fleet
+	// in open ocean sits in a zone the player will never own, and sourcing
+	// attackers only from owned territory meant ships at sea could never be
+	// brought to battle.
+	for _, ourTerritory := range target.ConnectedTo {
+		pieces := game.GetPiecesInTerritory(ourTerritory.Name)
+		// Filter out immobile pieces and industrial complexes
+		attackingPieces := make([]*models.Piece, 0)
+		for _, piece := range pieces {
+			caps := game.Units().For(piece)
+			// Only the player's own pieces march. Neighbours can hold allied
+			// units, and an ally's army is not ours to order into battle.
+			if piece.Owner != player {
+				continue
+			}
+			// Units committed to a standing plan are left alone. Without
+			// this the ordinary movement logic walks an invasion force back
+			// off the quayside every turn, and the plan never assembles.
+			if controller.Plans.Committed(player.Name, piece.ID) {
+				continue
+			}
+			// A unit that cannot roll a die contributes nothing to an
+			// attack. Transports and empty carriers (attack 0) used to be
+			// swept along -- one game opened with a lone carrier attacking
+			// a defended sea zone, rolling nothing for five rounds, and
+			// dying.
+			if piece.Attack <= 0 {
+				continue
+			}
+			// A unit that cannot enter the target's terrain is not an
+			// attacker. Land units next to an enemy fleet used to be
+			// counted into the odds and then silently refused by
+			// PlanMove, so naval attacks were approved on the strength
+			// of infantry that never sailed.
+			if validateTerrain(piece, target) != nil {
+				continue
+			}
+			// Aircraft only attack a sea zone they can land after: no
+			// free carrier deck, no sortie. Winning the fight and then
+			// ditching in the ocean trades a fighter for nothing.
+			if piece.Terrain == models.Air && target.Terrain == models.Water &&
+				!controller.CarrierSlotFree(piece, target, player) {
+				continue
+			}
+			if piece.Movement > 0 && !caps.IsStructure && !caps.IsAA {
+				attackingPieces = append(attackingPieces, piece)
 			}
 		}
 
-		if adjacent {
-			pieces := game.GetPiecesInTerritory(ourTerritory.Name)
-			// Filter out immobile pieces and industrial complexes
-			attackingPieces := make([]*models.Piece, 0)
-			for _, piece := range pieces {
-				caps := game.Units().For(piece)
-				// Units committed to a standing plan are left alone. Without
-				// this the ordinary movement logic walks an invasion force back
-				// off the quayside every turn, and the plan never assembles.
-				if controller.Plans.Committed(player.Name, piece.ID) {
-					continue
-				}
-				// A unit that cannot roll a die contributes nothing to an
-				// attack. Transports and empty carriers (attack 0) used to be
-				// swept along -- one game opened with a lone carrier attacking
-				// a defended sea zone, rolling nothing for five rounds, and
-				// dying.
-				if piece.Attack <= 0 {
-					continue
-				}
-				if piece.Movement > 0 && !caps.IsStructure && !caps.IsAA {
-					attackingPieces = append(attackingPieces, piece)
-				}
-			}
-
-			if len(attackingPieces) > 0 {
-				attackers[ourTerritory.Name] = attackingPieces
-			}
+		if len(attackingPieces) > 0 {
+			attackers[ourTerritory.Name] = attackingPieces
 		}
 	}
 

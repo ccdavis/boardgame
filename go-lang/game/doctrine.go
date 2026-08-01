@@ -93,6 +93,16 @@ const (
 	// maxAttacksPerTurn bounds how many separate battles one power opens in
 	// a single combat phase.
 	maxAttacksPerTurn = 5
+
+	// navalTargetPerShip prices an enemy fleet as an attack target: sea zones
+	// produce nothing, so each enemy ship in the zone stands in for the
+	// production a land target would offer.
+	navalTargetPerShip = 2
+
+	// operationLeakChance is the per-turn probability that a live operation's
+	// details reach the other side. Plans stay secret and in force until they
+	// leak; a leak lets the enemy garrison against the landing.
+	operationLeakChance = 0.05
 )
 
 // Purchasing: how the treasury is spent.

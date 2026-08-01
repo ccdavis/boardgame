@@ -66,6 +66,13 @@ type Battle struct {
 	// this caps the barrage: three battleships covering a single landed
 	// infantry fire once, not three times.
 	AmphibiousUnits int
+
+	// AmphibiousFrom records, per attacker that came ashore, the sea zone it
+	// landed out of. The sea fight there resolves before the landing it
+	// covers; if the zone is still in enemy hands when this battle is
+	// fought, the covering action was lost and those troops drown instead
+	// of fighting.
+	AmphibiousFrom map[int]string
 }
 
 // Hit represents a successful hit in combat

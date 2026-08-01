@@ -80,9 +80,16 @@ func (npc *NPCAIPlayer) embarkTroops(gc *GameController, player *models.Player, 
 		}
 	}
 	if loaded > 0 {
-		transcript.LogAction(player.Name, fmt.Sprintf(
-			"plan %d: %d troops embarked at %s, bound for %s",
-			plan.ID, loaded, plan.Staging, plan.Target))
+		// Loading is visible from the shore; where the convoy is BOUND is
+		// not. The destination stays secret until the operation leaks or the
+		// troops hit the beach.
+		text := fmt.Sprintf("plan %d: %d troops embarked at %s, bound for %s",
+			plan.ID, loaded, plan.Staging, plan.Target)
+		if plan.Revealed {
+			transcript.LogAction(player.Name, text)
+		} else {
+			transcript.LogSecretAction(player.Name, text)
+		}
 	}
 	return loaded
 }
@@ -434,15 +441,19 @@ func (gc *GameController) attachShoreBombardmentAt(targetName, dropZone, power s
 // registerAmphibiousAttacker enrols a landed unit in the battle for the target,
 // creating the battle if this is the first attacker to arrive.
 func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, pieceID int, power string) {
-	// Troops that break off a landing go back aboard conceptually; there is no
-	// beach to retreat to, so the NPC's origin is its staging port.
-	gc.registerLandedAttacker(plan.Target, pieceID, power, plan.Staging)
+	// No retreat origin: troops landed from the sea have no line of retreat
+	// (recording the staging port here let a broken-off NPC landing teleport
+	// its survivors back across the water). The drop zone is recorded so the
+	// sea fight there gates this landing.
+	gc.registerLandedAttacker(plan.Target, pieceID, power, "", plan.DropZone)
 }
 
 // registerLandedAttacker is the plan-free core, shared with human landings.
 // An empty origin means the unit cannot retreat -- the rule for amphibious
 // attackers -- and withdrawAttackers already leaves such pieces in place.
-func (gc *GameController) registerLandedAttacker(targetName string, pieceID int, power string, origin string) {
+// dropZone names the sea zone the unit came ashore from; the battle there,
+// if any, must be won before this landing is fought.
+func (gc *GameController) registerLandedAttacker(targetName string, pieceID int, power string, origin string, dropZone string) {
 	target := gc.Game.Board[targetName]
 	if target == nil {
 		return
@@ -462,6 +473,18 @@ func (gc *GameController) registerLandedAttacker(targetName string, pieceID int,
 				defer gc.TriggerStrictNeutralChainReaction(attacker)
 			}
 		}
+
+		// An undefended beach is walked up, not fought over: the troops take
+		// the territory on the spot and no battle is staged. The garrison a
+		// violated neutral just raised counts as a defence, so this applies
+		// only to genuinely empty ground.
+		if !gc.hasHostileDefenders(target, gc.Game.Players[power]) {
+			if target.Terrain != models.Water {
+				gc.CaptureTerritory(targetName, power)
+			}
+			return
+		}
+
 		defender := "Neutral"
 		if target.Owner != nil {
 			defender = target.Owner.Name
@@ -482,6 +505,12 @@ func (gc *GameController) registerLandedAttacker(targetName string, pieceID int,
 	}
 	if origin != "" {
 		battle.AttackerOrigins[pieceID] = origin
+	}
+	if dropZone != "" {
+		if battle.AmphibiousFrom == nil {
+			battle.AmphibiousFrom = make(map[int]string)
+		}
+		battle.AmphibiousFrom[pieceID] = dropZone
 	}
 }
 

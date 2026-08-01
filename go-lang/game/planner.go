@@ -40,13 +40,19 @@ const maxCrossing = 4
 // runs through water -- and we hold a coastal territory with a sea path to it.
 func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *AmphibiousPlan {
 	g := gc.Game
-	claimed := gc.Plans.Targets(player.Name)
+	// The whole side's claims, not just our own: allied powers coordinate,
+	// so two of them do not build invasions of the same island.
+	claimed := gc.Plans.SideTargets(player.Name)
 	pressure := strategicPressure(g, player)
 	troopCap := maxPlanTroopsFor(pressure)
 
 	var options []candidate
 	for name, territory := range g.Board {
 		if territory.Terrain != models.Land || claimed[name] {
+			continue
+		}
+		// A target recently judged hopeless cools off before being redrawn.
+		if gc.Plans.CoolingOff(player.Name, name, g.Turn) {
 			continue
 		}
 		if territory.Owner == nil || territory.Owner.Name == player.Name {
@@ -128,6 +134,7 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 		State:          PlanForming,
 		WantTroops:     troops,
 		WantTransports: (troops + transportCapacity - 1) / transportCapacity,
+		InitialDefence: pick.defence,
 		CreatedTurn:    g.Turn,
 		LastProgress:   g.Turn,
 	}
@@ -175,8 +182,17 @@ func territoryValue(territory *models.Territory) int {
 	return value
 }
 
-// reachableOverland reports whether a power can march to a territory from any
-// land it holds, without crossing water.
+// reachableOverland reports whether a power can march to a territory from
+// land it can actually march THROUGH -- its own and its allies'. The target
+// counts as overland-reachable when it borders that friendly landmass, where
+// an ordinary attack can already reach it.
+//
+// The walk used to cross ANY land, enemy and neutral alike: from UK-held
+// Egypt there was a "land path" to Western Europe through the whole
+// Axis-held continent, so the UK never once planned a landing in Europe --
+// every European target was dismissed as "not an amphibious problem". Fifty
+// observed games: the Allies captured Axis victory cities six times, all
+// but one of them Pacific islands.
 func reachableOverland(g *models.Game, player *models.Player, targetName string) bool {
 	seen := make(map[string]bool)
 	var queue []string
@@ -199,7 +215,13 @@ func reachableOverland(g *models.Game, player *models.Player, targetName string)
 				continue
 			}
 			if next.Name == targetName {
-				return true
+				return true // it borders ground we can march across
+			}
+			// March only across our own side's soil; enemy or neutral
+			// country in the way is exactly what makes a target an
+			// amphibious problem.
+			if next.Owner != player && !areAllies(next.Owner, player) {
+				continue
 			}
 			seen[next.Name] = true
 			queue = append(queue, next.Name)
@@ -306,6 +328,30 @@ func (npc *NPCAIPlayer) ReviewPlans(gc *GameController, player *models.Player, t
 		gc.Plans = NewPlanBook()
 	}
 
+	// Loose lips: every live operation runs a small risk each turn of its
+	// details reaching the other side. A leaked operation stays in force --
+	// cancelling it would tell the enemy their intelligence was good -- but
+	// its reports are no longer redacted, and enemy powers may prepare.
+	for _, plan := range gc.Plans.Active(player.Name) {
+		if plan.Revealed || npc.rng == nil {
+			continue
+		}
+		if npc.rng.Float64() < operationLeakChance {
+			plan.Revealed = true
+			transcript.LogAction(player.Name,
+				"Intelligence leak: the enemy has learned of "+plan.Describe())
+		}
+	}
+
+	// A plan's details are secret from the other side until they leak.
+	logPlan := func(plan *AmphibiousPlan, text string) {
+		if plan.Revealed {
+			transcript.LogAction(player.Name, text)
+		} else {
+			transcript.LogSecretAction(player.Name, text)
+		}
+	}
+
 	for _, plan := range gc.Plans.For(player.Name) {
 		before, movedOn := plan.State, plan.LastProgress
 		plan.Review(gc)
@@ -316,12 +362,15 @@ func (npc *NPCAIPlayer) ReviewPlans(gc *GameController, player *models.Player, t
 		if plan.State == before && plan.LastProgress == movedOn {
 			continue
 		}
-		transcript.LogAction(player.Name, plan.Describe())
+		logPlan(plan, plan.Describe())
 
 		// A finished operation leaves warships in a foreign sea. Give them
 		// orders rather than letting them drift out of the war.
 		if plan.State == PlanSucceeded || plan.State == PlanAbandoned {
 			npc.DisposeOfEscorts(gc, player, plan, transcript)
+		}
+		if plan.State == PlanAbandoned && plan.HopelessTarget {
+			gc.Plans.RecordHopeless(player.Name, plan.Target, gc.Game.Turn)
 		}
 	}
 
@@ -337,7 +386,7 @@ func (npc *NPCAIPlayer) ReviewPlans(gc *GameController, player *models.Player, t
 			break // nothing else worth invading
 		}
 		gc.Plans.Add(plan)
-		transcript.LogAction(player.Name, "new "+plan.Describe())
+		transcript.LogSecretAction(player.Name, "new "+plan.Describe())
 	}
 
 	// Take up whatever is available for the plans that still need it.

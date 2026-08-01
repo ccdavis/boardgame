@@ -45,7 +45,16 @@ func (s *Server) Start() error {
 			log.Printf("Warning: static directory not found, static files will not be served")
 		}
 	}
-	s.mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+	// no-cache means "revalidate before use", not "don't cache": the browser
+	// asks with If-Modified-Since and gets a cheap 304 when nothing changed.
+	// Without it browsers apply heuristic freshness and keep serving old CSS
+	// and JS for days after a rebuild -- the dark ocean shipped and players
+	// kept seeing the old white one.
+	static := http.FileServer(http.Dir(staticDir))
+	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		static.ServeHTTP(w, r)
+	}))
 
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("Starting web server on %s", addr)
@@ -310,7 +319,11 @@ func (s *Server) handleTerritory(w http.ResponseWriter, r *http.Request, session
 
 	for _, pieceID := range territory.Pieces {
 		piece := session.Controller.Game.Pieces[pieceID]
-		canMove := !movedPieceIDs[pieceID]
+		// A piece is offered for movement when it has no commitment AND some
+		// allowance left this turn -- a unit that spent everything attacking
+		// is done until next turn, and the picker must say so.
+		canMove := !movedPieceIDs[pieceID] &&
+			session.Controller.MoveTracker.Remaining(pieceID, int(piece.Movement)) > 0
 		dto.Units = append(dto.Units, ToUnitDTO(pieceID, piece, canMove))
 
 		// Cargo lives in the transport's hold, not the territory's piece list;

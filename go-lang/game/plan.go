@@ -114,6 +114,22 @@ type AmphibiousPlan struct {
 	// rather than only that something did.
 	Reason string
 
+	// Revealed means the other side has learned of this operation: its
+	// reports are no longer redacted from enemy viewers, and enemy powers may
+	// garrison against it. Operations run a small leak risk every turn.
+	Revealed bool
+
+	// InitialDefence is what held the target when the plan was drawn. With
+	// CreatedTurn it gives the garrison's observed growth rate, so the plan
+	// is sized against the defence expected AT LANDING TIME, not today's.
+	InitialDefence int
+
+	// HopelessTarget marks a plan abandoned because no liftable force could
+	// beat the projected defence. The book gives such targets a short
+	// cooling-off before they may be proposed again -- churn is wasteful,
+	// but a grand invasion should never be off the table for good.
+	HopelessTarget bool
+
 	// bestProgress is the furthest this plan has got, used to tell a slow
 	// build-up from a stalled one.
 	bestProgress int
@@ -145,6 +161,11 @@ type PlanBook struct {
 	naval    map[string][]*NavalPlan
 	reserve  map[string]int
 	nextID   int
+
+	// hopeless records, per power, targets recently judged beyond reach and
+	// the round that judgement was made, so they cool off before being
+	// proposed again.
+	hopeless map[string]map[string]int
 
 	// sideOf answers which side a power fights for, so a new operation can be
 	// christened from that side's codename list. Set by the controller; a
@@ -200,13 +221,14 @@ func (pb *PlanBook) Defences(power string) []*DefencePlan {
 	return pb.defences[power]
 }
 
-// christen picks an operation's codename from its side's list.
+// christen picks an operation's codename: the power's own list when it has
+// one, its side's list otherwise.
 func (pb *PlanBook) christen(power string, id int) string {
 	side := ""
 	if pb.sideOf != nil {
 		side = pb.sideOf(power)
 	}
-	return operationName(side, id)
+	return operationName(power, side, id)
 }
 
 // AddDefence records a new garrison plan.
@@ -264,6 +286,32 @@ func (pb *PlanBook) Add(plan *AmphibiousPlan) *AmphibiousPlan {
 	return plan
 }
 
+// RecordHopeless notes that a target was judged beyond a power's reach, so
+// ProposePlan lets it cool off instead of re-drawing the same doomed
+// operation every turn.
+func (pb *PlanBook) RecordHopeless(power, target string, turn int) {
+	if pb == nil {
+		return
+	}
+	if pb.hopeless == nil {
+		pb.hopeless = make(map[string]map[string]int)
+	}
+	if pb.hopeless[power] == nil {
+		pb.hopeless[power] = make(map[string]int)
+	}
+	pb.hopeless[power][target] = turn
+}
+
+// CoolingOff reports whether a target is still in its post-abandonment
+// cooling-off period for this power.
+func (pb *PlanBook) CoolingOff(power, target string, turn int) bool {
+	if pb == nil || pb.hopeless == nil {
+		return false
+	}
+	when, ok := pb.hopeless[power][target]
+	return ok && turn-when < hopelessRetryCooldown
+}
+
 // Targets returns the territories a power is already planning against, so two
 // plans do not chase the same place.
 func (pb *PlanBook) Targets(power string) map[string]bool {
@@ -272,6 +320,63 @@ func (pb *PlanBook) Targets(power string) map[string]bool {
 		claimed[plan.Target] = true
 	}
 	return claimed
+}
+
+// SideTargets returns every territory the power's whole side is planning
+// against. Sides share operational planning: when the UK is forming up
+// against Midway, the USA finds another objective rather than mounting the
+// same invasion twice.
+func (pb *PlanBook) SideTargets(power string) map[string]bool {
+	claimed := pb.Targets(power)
+	if pb == nil || pb.sideOf == nil {
+		return claimed
+	}
+	side := pb.sideOf(power)
+	if side == "" {
+		return claimed
+	}
+	for other := range pb.plans {
+		if other == power || pb.sideOf(other) != side {
+			continue
+		}
+		for _, plan := range pb.Active(other) {
+			claimed[plan.Target] = true
+		}
+	}
+	return claimed
+}
+
+// RevealedThreatsAgainst reports, per territory the defender owns, the size
+// of any REVEALED enemy landing being prepared against it. Unrevealed plans
+// contribute nothing: the computer players honour the fog of war and only act
+// on intelligence they have actually received.
+func (pb *PlanBook) RevealedThreatsAgainst(g *models.Game, defender *models.Player) map[string]int {
+	threats := make(map[string]int)
+	if pb == nil || defender == nil {
+		return threats
+	}
+	for power := range pb.plans {
+		attacker := g.Players[power]
+		if attacker == nil || attacker == defender || areAllies(attacker, defender) {
+			continue
+		}
+		for _, plan := range pb.Active(power) {
+			if !plan.Revealed {
+				continue
+			}
+			target, ok := g.Board[plan.Target]
+			if !ok || target.Owner != defender {
+				continue
+			}
+			force := plan.WantTroops
+			if n := len(plan.Troops); n > force {
+				force = n
+			}
+			// Troops attack at roughly a pip each; garrison with a margin.
+			threats[plan.Target] += force * 2
+		}
+	}
+	return threats
 }
 
 // Committed reports whether a piece is already assigned to some plan, so
@@ -421,23 +526,40 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 	p.Contested = contested
 	p.WantEscort = escortNeeded(g, p, power)
 
-	// Re-read the defence while the force assembles. WantTroops was set once
-	// at proposal, so a plan drawn against a thinly held coast in round one
-	// sailed ten rounds later with eight troops against what had become a
-	// 159-unit fortress -- twelve such landings at Eastern US across six
-	// games, every one annihilated, each abandonment starting the next. A
-	// defence the largest liftable force cannot beat ends the plan; a defence
-	// that merely grew raises the force to match while still liftable. Both
-	// limits scale with the clock: a power that must win soon lifts more and
-	// judges fewer targets hopeless.
+	// Re-read the defence while the force assembles -- and read its TREND,
+	// not only its size. WantTroops was set once at proposal, so a plan
+	// drawn against a thinly held coast in round one sailed ten rounds later
+	// with eight troops against what had become a 159-unit fortress --
+	// twelve such landings at Eastern US across six games, every one
+	// annihilated, each abandonment starting the next.
+	//
+	// So the plan spends its first couple of turns watching: the garrison's
+	// growth rate is measured, projected forward to roughly when the troops
+	// would hit the beach, and the force is sized against THAT. A projection
+	// no liftable force can beat ends the plan early -- before the build-up
+	// is paid for -- and marks the target for a cooling-off rather than a
+	// ban. Both limits scale with the clock: a power that must win soon
+	// lifts more and judges fewer targets hopeless.
 	if p.State == PlanForming || p.State == PlanEmbarked {
 		troopCap := maxPlanTroopsFor(strategicPressure(g, power))
 		defence := defenderStrength(g, p.Target)
-		if defence > hopelessDefenceFor(troopCap) {
-			p.abandon(fmt.Sprintf("%s is too strongly held (defence %d)", p.Target, defence))
+
+		age := g.Turn - p.CreatedTurn
+		growth := 0
+		if age > 0 && defence > p.InitialDefence {
+			growth = (defence - p.InitialDefence) / age
+		}
+		// Rough turns until the landing: cross the route, plus the watch.
+		horizon := len(p.Route) + planReconTurns
+		projected := defence + growth*horizon
+
+		if age >= planReconTurns && projected > hopelessDefenceFor(troopCap) {
+			p.HopelessTarget = true
+			p.abandon(fmt.Sprintf("%s is too strongly held (defence %d, growing %d a turn)",
+				p.Target, defence, growth))
 			return false
 		}
-		if want := troopsNeeded(defence, nil, troopCap); want > p.WantTroops {
+		if want := troopsNeeded(projected, nil, troopCap); want > p.WantTroops {
 			p.WantTroops = want
 			p.WantTransports = (want + transportCapacity - 1) / transportCapacity
 		}
@@ -456,6 +578,17 @@ func hopelessDefenceFor(troopCap int) int {
 }
 
 const hopelessDefenceMultiple = 3
+
+// planReconTurns is how long a fresh plan watches its target before judging
+// it: long enough to read the garrison's growth, short enough that the
+// operation is not stuck in reconnaissance.
+const planReconTurns = 2
+
+// hopelessRetryCooldown is how many rounds a target abandoned as hopeless
+// waits before it may be proposed again. A cooling-off, not a ban -- the
+// invasion of Eastern US is too interesting to forbid, it just must not be
+// re-drawn every other turn while the garrison only grows.
+const hopelessRetryCooldown = 6
 
 // advanceState moves a plan along according to where its force actually is.
 func (p *AmphibiousPlan) advanceState(g *models.Game) {
@@ -711,9 +844,17 @@ func seaRouteCost(g *models.Game, from, to string, power *models.Player) ([]stri
 	settled := map[string]bool{}
 
 	for {
+		// The next node is chosen by (distance, name), never by map order.
+		// Ranging the map alone broke seeded replay: equal-cost frontiers
+		// were settled in random order, equal-cost routes came out with
+		// different lengths and contested counts, and the same seed planned
+		// different invasions on different runs.
 		current, best := "", -1
 		for name, d := range dist {
-			if !settled[name] && (best == -1 || d < best) {
+			if settled[name] {
+				continue
+			}
+			if best == -1 || d < best || (d == best && name < current) {
 				current, best = name, d
 			}
 		}

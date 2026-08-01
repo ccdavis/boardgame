@@ -22,6 +22,44 @@ type TranscriptEntry struct {
 	Phase     models.Phase
 	Action    string
 	Timestamp time.Time
+
+	// Move is set on entries produced by LogMove so that identical moves can
+	// be counted up instead of listed one piece at a time.
+	Move *MoveRecord
+
+	// Secret marks an entry whose details must not be shown to the other
+	// side: operation plans, orders of battle, intentions. The full text is
+	// always recorded -- the saved transcript is the archive -- and whoever
+	// presents a transcript decides what a given viewer may read.
+	Secret bool
+}
+
+// MoveRecord is the structured form of a movement entry.
+type MoveRecord struct {
+	Unit  string
+	From  string
+	To    string
+	Kind  string // "combat" or "noncombat"
+	Count int
+}
+
+// text renders the record as one transcript line, aggregated.
+func (m *MoveRecord) text() string {
+	return fmt.Sprintf("Moving %d %s from %s to %s (%s)",
+		m.Count, pluralUnit(m.Unit, m.Count), m.From, m.To, m.Kind)
+}
+
+// pluralUnit pluralises a unit-type name for a count. Most unit names take a
+// plain s; the ones that do not are their own plural.
+func pluralUnit(unit string, count int) string {
+	if count == 1 {
+		return unit
+	}
+	switch unit {
+	case "infantry", "armor", "artillery", "aaa":
+		return unit
+	}
+	return unit + "s"
 }
 
 // NewGameTranscript creates a new transcript
@@ -77,14 +115,44 @@ func (t *GameTranscript) LogPurchase(player string, purchases map[string]int, to
 	t.Log(0, player, models.PurchasePhase, action)
 }
 
-// LogMove logs a unit movement
+// LogMove logs a unit movement.
+//
+// Identical moves aggregate: eight infantry walking from Western U.S. to
+// Mexico read as one line, "Moving 8 infantry from Western U.S. to Mexico",
+// not eight repetitions. The scan runs back only through the current run of
+// move entries -- any other entry ends the run -- so movement stays in order
+// around battles, phase headers and everything else.
 func (t *GameTranscript) LogMove(player string, unitType string, from string, to string, moveType string) {
-	action := fmt.Sprintf("Move %s: %s → %s (%s)", unitType, from, to, moveType)
+	if t == nil {
+		return
+	}
 	phase := models.CombatMovePhase
 	if moveType == "noncombat" {
 		phase = models.NoncombatMovePhase
 	}
-	t.Log(0, player, phase, action)
+
+	for i := len(t.Entries) - 1; i >= 0; i-- {
+		entry := &t.Entries[i]
+		if entry.Move == nil {
+			break
+		}
+		if entry.Player == player && entry.Move.Unit == unitType &&
+			entry.Move.From == from && entry.Move.To == to && entry.Move.Kind == moveType {
+			entry.Move.Count++
+			entry.Action = entry.Move.text()
+			return
+		}
+	}
+
+	record := &MoveRecord{Unit: unitType, From: from, To: to, Kind: moveType, Count: 1}
+	t.Entries = append(t.Entries, TranscriptEntry{
+		Turn:      0,
+		Player:    player,
+		Phase:     phase,
+		Action:    record.text(),
+		Timestamp: time.Now(),
+		Move:      record,
+	})
 }
 
 // LogBattleStart logs the beginning of a battle
@@ -143,6 +211,22 @@ func (t *GameTranscript) LogIncomeCollection(player string, income int, totalIPC
 // LogAction logs a generic action
 func (t *GameTranscript) LogAction(player string, action string) {
 	t.Log(0, player, models.PurchasePhase, action)
+}
+
+// LogSecretAction logs an action the enemy side must not read: operation
+// details, garrison targets, squadron orders. The entry is recorded in full;
+// it is the presenter's job to withhold it from the wrong audience.
+func (t *GameTranscript) LogSecretAction(player string, action string) {
+	if t == nil {
+		return
+	}
+	t.Entries = append(t.Entries, TranscriptEntry{
+		Player:    player,
+		Phase:     models.PurchasePhase,
+		Action:    action,
+		Timestamp: time.Now(),
+		Secret:    true,
+	})
 }
 
 // LogVictory logs a victory condition being met

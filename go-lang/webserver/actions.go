@@ -427,11 +427,16 @@ func reachableForPiece(session *GameSession, pieceID int, from string) (map[stri
 		moveType = game.CombatMove
 	}
 
+	// Judge range by what the piece has LEFT this turn, not its printed
+	// allowance: movement spent attacking in the combat phase is gone. The
+	// full allowance lit up destinations that PlanMove then refused.
+	remaining := session.Controller.MoveTracker.Remaining(pieceID, int(piece.Movement))
+
 	out := make(map[string]ReachableTerritoryDTO, len(reachable))
 	for _, territory := range reachable {
 		distance, _, err := game.CalculateMovementPathForPiece(
 			session.Controller.Game, piece, from, territory.Name, player, moveType)
-		if err != nil || distance > int(piece.Movement) {
+		if err != nil || distance > remaining {
 			continue // not actually reachable under the movement rules
 		}
 
@@ -459,6 +464,32 @@ func reachableForPiece(session *GameSession, pieceID int, from string) (map[stri
 	return out, nil
 }
 
+// transcriptLines renders a turn's transcript for a particular viewer. A
+// viewer on the acting power's side reads everything; an enemy viewer has the
+// secret entries withheld and replaced with a single count, so they learn
+// that operations exist but never what they are.
+func transcriptLines(entries []game.TranscriptEntry, sameSide bool, power string) []string {
+	lines := make([]string, 0, len(entries))
+	secrets := 0
+	secretAt := -1
+	for _, entry := range entries {
+		if entry.Secret && !sameSide {
+			if secrets == 0 {
+				secretAt = len(lines)
+			}
+			secrets++
+			continue
+		}
+		lines = append(lines, entry.Action)
+	}
+	if secrets > 0 {
+		notice := fmt.Sprintf("%s is working on %d secret operation(s) — details unknown",
+			power, secrets)
+		lines = append(lines[:secretAt], append([]string{notice}, lines[secretAt:]...)...)
+	}
+	return lines
+}
+
 // handleExecuteNPCTurn handles POST /api/game/:sessionId/action/execute-npc-turn
 func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, session *GameSession) {
 	// Check if current player is NPC
@@ -478,10 +509,16 @@ func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 
-	lines := make([]string, 0, len(transcript.Entries))
-	for _, entry := range transcript.Entries {
-		lines = append(lines, entry.Action)
-	}
+	// Fog of war. Allies share operational planning, so a viewer on the same
+	// side reads everything -- including allied operations, which is how a
+	// human avoids planning an invasion an NPC ally is already mounting. An
+	// enemy viewer gets the secret entries withheld and replaced with a
+	// single count: they learn that plans exist, never what they are.
+	// (Entries for REVEALED operations are logged as public and pass
+	// through: a leak is exactly the enemy learning the details.)
+	human := session.Controller.Game.Players[session.HumanPlayer]
+	sameSide := human != nil && human.Side != "" && human.Side == currentPlayer.Side
+	lines := transcriptLines(transcript.Entries, sameSide, currentPlayer.Name)
 
 	response := map[string]interface{}{
 		"success":          true,

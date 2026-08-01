@@ -210,7 +210,7 @@ func summarise(t *testing.T, g *models.Game, runner *game.GameRunner, turnsPlaye
 	transcript := runner.GetTranscriptString()
 	count := func(needle string) int { return strings.Count(transcript, needle) }
 
-	moves := count("Move ")
+	moves := count("Moving ")
 	battles := count("Battle begins")
 	captures := count("captured")
 
