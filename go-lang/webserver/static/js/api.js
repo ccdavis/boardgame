@@ -207,6 +207,103 @@ class GameAPI {
     }
 
     /**
+     * Get territories reachable by EVERY piece in a group moving together
+     * from the same territory. The server returns the intersection.
+     */
+    async getReachableForPieces(pieceIds, fromTerritory) {
+        this._ensureSession();
+        const response = await fetch(`${API_BASE}/game/${this.sessionId}/action/get-reachable`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                pieceIds,
+                fromTerritory
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to get reachable territories');
+        }
+
+        return await response.json();
+    }
+
+    /**
+     * Board a group of land units onto transports in an adjacent sea zone.
+     * Takes effect immediately; the server assigns pieces to transports.
+     */
+    async loadTransports(pieceIds, seaZone) {
+        this._ensureSession();
+        const response = await fetch(`${API_BASE}/game/${this.sessionId}/action/load-transports`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                pieceIds,
+                seaZone
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to load transports');
+        }
+
+        return await response.json();
+    }
+
+    /**
+     * Unload cargo from transports onto an adjacent friendly territory.
+     */
+    async unloadTransport(pieceIds, territory) {
+        this._ensureSession();
+        const response = await fetch(`${API_BASE}/game/${this.sessionId}/action/unload-transport`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                pieceIds,
+                territory
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to unload transport');
+        }
+
+        return await response.json();
+    }
+
+    /**
+     * Take a booked amphibious unit off its landing (it stays aboard).
+     */
+    async cancelLanding(pieceId) {
+        this._ensureSession();
+        const response = await fetch(`${API_BASE}/game/${this.sessionId}/action/cancel-landing`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                pieceId
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to cancel landing');
+        }
+
+        return await response.json();
+    }
+
+    /**
      * Mobilize (place) units
      */
     async mobilizeUnits(unitType, territory, quantity = 1) {

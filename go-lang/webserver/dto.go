@@ -18,6 +18,18 @@ type TerritoryDTO struct {
 	NeutralType   string   `json:"neutralType"`
 	UnitCount     int      `json:"unitCount"`
 	ConnectedTo   []string `json:"connectedTo"`
+
+	// HasFactory and FriendlyUnits drive the map's phase highlighting: which
+	// territories light up as production sites, and which hold units the human
+	// player could move. FriendlyUnits counts the human's pieces here excluding
+	// structures, which are captured with the territory rather than moved.
+	HasFactory    bool `json:"hasFactory"`
+	FriendlyUnits int  `json:"friendlyUnits"`
+
+	// PieceOwner is the power owning (the plurality of) the units here. In sea
+	// zones it is the only ownership that matters: the zone itself is Neutral,
+	// but the fleet in it belongs to someone, and the map badge shows whom.
+	PieceOwner string `json:"pieceOwner,omitempty"`
 }
 
 // TerritoryDetailDTO includes unit information
@@ -46,6 +58,13 @@ type UnitDTO struct {
 	Terrain  string `json:"terrain"`
 	CanMove  bool   `json:"canMove"`
 	Hits     int    `json:"hits"`
+	// Owner matters in shared spaces: a sea zone holds ships from several
+	// powers, and the unit picker must offer only the human player's.
+	Owner string `json:"owner"`
+	// Aboard is the ID of the transport carrying this piece, when it is cargo.
+	// Cargo lives in the transport's hold, not the territory's piece list, so
+	// without this the browser would never see loaded units at all.
+	Aboard int `json:"aboard,omitempty"`
 }
 
 // PlayerDTO is a JSON-serializable player representation
@@ -85,6 +104,9 @@ type MoveDTO struct {
 	From    string `json:"from"`
 	To      string `json:"to"`
 	Type    string `json:"type"` // "combat" or "noncombat"
+	// Landing marks a booked amphibious assault rather than an ordinary
+	// move: cancelled through cancel-landing, not cancel-move.
+	Landing bool `json:"landing,omitempty"`
 }
 
 // BattleResultDTO represents the result of a battle
@@ -99,6 +121,27 @@ type BattleResultDTO struct {
 	TerritoryCaptured   bool     `json:"territoryCaptured"`
 }
 
+// UnitGroupDTO is a stack of identical units, as shown on a battle screen.
+type UnitGroupDTO struct {
+	Type   string `json:"type"`
+	Count  int    `json:"count"`
+	Attack int    `json:"attack"`
+	Defend int    `json:"defend"`
+}
+
+// PendingBattleDTO describes a battle waiting to be fought: both rosters, so
+// the battle screen can show the two sides face to face before any dice roll.
+type PendingBattleDTO struct {
+	Territory string         `json:"territory"`
+	Attacker  string         `json:"attacker"`
+	Defender  string         `json:"defender"`
+	Attackers []UnitGroupDTO `json:"attackers"`
+	Defenders []UnitGroupDTO `json:"defenders"`
+	// Bombarding are the warships standing off shore in support of an
+	// amphibious landing -- shown so the player knows the beach is covered.
+	Bombarding []UnitGroupDTO `json:"bombarding,omitempty"`
+}
+
 // ReachableTerritoryDTO represents a territory a unit can reach
 type ReachableTerritoryDTO struct {
 	Name      string `json:"name"`
@@ -106,6 +149,10 @@ type ReachableTerritoryDTO struct {
 	Owner     string `json:"owner"`
 	IsAttack  bool   `json:"isAttack"`
 	UnitCount int    `json:"unitCount"`
+	// IsBoard: a sea zone where the selected land units can board transports.
+	IsBoard bool `json:"isBoard,omitempty"`
+	// IsUnload: a land territory the selected cargo can be unloaded onto.
+	IsUnload bool `json:"isUnload,omitempty"`
 }
 
 // AvailableUnitDTO represents a unit type that can be purchased
@@ -129,11 +176,41 @@ type PurchasedUnitDTO struct {
 
 // Conversion Functions
 
-// ToTerritoryDTO converts a Territory to a DTO
-func ToTerritoryDTO(t *models.Territory) TerritoryDTO {
+// ToTerritoryDTO converts a Territory to a DTO. The game and the human
+// player's name are needed to fill the highlighting fields: what counts as a
+// factory comes from the unit registry, and "friendly" means the human's.
+func ToTerritoryDTO(t *models.Territory, g *models.Game, humanPlayer string) TerritoryDTO {
 	connectedNames := make([]string, len(t.ConnectedTo))
 	for i, conn := range t.ConnectedTo {
 		connectedNames[i] = conn.Name
+	}
+
+	units := g.Units()
+	hasFactory := false
+	friendly := 0
+	ownerCounts := make(map[string]int)
+	for _, pieceID := range t.Pieces {
+		piece := g.Pieces[pieceID]
+		if piece == nil {
+			continue
+		}
+		if units.For(piece).IsStructure {
+			hasFactory = true
+			continue
+		}
+		if piece.Owner != nil {
+			ownerCounts[piece.Owner.Name]++
+			if piece.Owner.Name == humanPlayer {
+				friendly++
+			}
+		}
+	}
+	pieceOwner := ""
+	for owner, n := range ownerCounts {
+		if pieceOwner == "" || n > ownerCounts[pieceOwner] ||
+			(n == ownerCounts[pieceOwner] && owner < pieceOwner) {
+			pieceOwner = owner
+		}
 	}
 
 	return TerritoryDTO{
@@ -146,11 +223,18 @@ func ToTerritoryDTO(t *models.Territory) TerritoryDTO {
 		NeutralType:   t.NeutralType.String(),
 		UnitCount:     len(t.Pieces),
 		ConnectedTo:   connectedNames,
+		HasFactory:    hasFactory,
+		FriendlyUnits: friendly,
+		PieceOwner:    pieceOwner,
 	}
 }
 
 // ToUnitDTO converts a Piece to a DTO
 func ToUnitDTO(pieceID int, piece *models.Piece, canMove bool) UnitDTO {
+	owner := ""
+	if piece.Owner != nil {
+		owner = piece.Owner.Name
+	}
 	return UnitDTO{
 		ID:       pieceID,
 		Name:     piece.Name,
@@ -160,6 +244,71 @@ func ToUnitDTO(pieceID int, piece *models.Piece, canMove bool) UnitDTO {
 		Terrain:  piece.Terrain.String(),
 		CanMove:  canMove,
 		Hits:     piece.Hits,
+		Owner:    owner,
+	}
+}
+
+// ToPendingBattleDTO summarises a pending battle's rosters by unit type.
+//
+// The rosters are derived here rather than read from the Battle: Attackers and
+// Defenders are only populated when the battle is resolved. The split mirrors
+// ResolveBattle's -- pieces on the tracked attacking-ID list attack, structures
+// are captured with the territory rather than fought, everything else defends.
+func ToPendingBattleDTO(g *models.Game, b *game.Battle) PendingBattleDTO {
+	group := func(pieces []*models.Piece) []UnitGroupDTO {
+		counts := make(map[string]int)
+		stats := make(map[string]*models.Piece)
+		for _, piece := range pieces {
+			counts[piece.Name]++
+			stats[piece.Name] = piece
+		}
+		names := make([]string, 0, len(counts))
+		for name := range counts {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out := make([]UnitGroupDTO, 0, len(names))
+		for _, name := range names {
+			out = append(out, UnitGroupDTO{
+				Type:   name,
+				Count:  counts[name],
+				Attack: int(stats[name].Attack),
+				Defend: int(stats[name].Defend),
+			})
+		}
+		return out
+	}
+
+	attackingIDs := make(map[int]bool, len(b.AttackingPieceIDs))
+	for _, id := range b.AttackingPieceIDs {
+		attackingIDs[id] = true
+	}
+
+	units := g.Units()
+	var attackers, defenders []*models.Piece
+	if territory, ok := g.Board[b.Location]; ok {
+		for _, pieceID := range territory.Pieces {
+			piece := g.Pieces[pieceID]
+			switch {
+			case piece == nil:
+				continue
+			case attackingIDs[pieceID]:
+				attackers = append(attackers, piece)
+			case units.For(piece).IsStructure:
+				// captured with the territory, not fought over
+			default:
+				defenders = append(defenders, piece)
+			}
+		}
+	}
+
+	return PendingBattleDTO{
+		Territory:  b.Location,
+		Attacker:   b.AttackerID,
+		Defender:   b.DefenderID,
+		Attackers:  group(attackers),
+		Defenders:  group(defenders),
+		Bombarding: group(b.Bombarding),
 	}
 }
 
@@ -251,6 +400,17 @@ func ToAvailableUnitDTOs(templates map[string]*models.Piece, currentIPCs int) []
 			Available: currentIPCs >= int(template.Cost),
 		})
 	}
+
+	// A stable order matters more than which order: this list is re-fetched by
+	// the browser's poll every couple of seconds, and Go's map iteration is
+	// deliberately random, so without the sort the purchase menu reshuffled
+	// its rows under the player's cursor.
+	sort.Slice(units, func(i, j int) bool {
+		if units[i].Cost != units[j].Cost {
+			return units[i].Cost < units[j].Cost
+		}
+		return units[i].Type < units[j].Type
+	})
 
 	return units
 }

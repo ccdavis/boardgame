@@ -189,8 +189,13 @@ func TestE2E_CompleteGameFlow(t *testing.T) {
 
 	// Territory search narrows the sidebar, and selecting from it fills the
 	// details panel. The NPC turn just opened its transcript dialog; close it
-	// first, since a modal blocks everything beneath.
+	// first, since a modal blocks everything beneath. The list itself starts
+	// rolled up; the map-corner toggle unrolls it.
 	closeGuidance(page)
+	if err := page.Locator(".list-toggle").Click(); err != nil {
+		t.Fatalf("Failed to open the territory list: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
 	search := page.Locator("input[placeholder*='Search']")
 	if err := search.Fill("Karelia"); err != nil {
 		t.Fatalf("Failed to fill search: %v", err)
@@ -303,7 +308,20 @@ func TestE2E_PurchaseFlow(t *testing.T) {
 	}
 
 	closeGuidance(page)
-	clickAction(t, page, "Buy Units")
+
+	// The production menu opens by clicking one's own factory on the map --
+	// there is no generic "Buy Units" button. Germany's factory is at home.
+	if err := page.Locator(`path[data-territory="Germany"]`).Click(playwright.LocatorClickOptions{
+		Timeout: playwright.Float(5000),
+	}); err != nil {
+		t.Fatalf("Failed to click the German factory on the map: %v", err)
+	}
+	if err := page.Locator("#purchaseModal").WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	}); err != nil {
+		t.Fatalf("Purchase modal never opened after clicking the factory: %v", err)
+	}
 
 	buy := func(unit string, times int) {
 		t.Helper()
@@ -322,7 +340,7 @@ func TestE2E_PurchaseFlow(t *testing.T) {
 	buy("infantry", 2)
 	buy("armor", 1)
 
-	if err := page.Locator("#purchaseModal button:has-text('Close')").Click(); err != nil {
+	if err := page.Locator("#purchaseModal button:has-text('Done')").Click(); err != nil {
 		t.Fatalf("Failed to close purchase modal: %v", err)
 	}
 
@@ -336,15 +354,11 @@ func TestE2E_PurchaseFlow(t *testing.T) {
 	clickAction(t, page, "Execute Moves")
 	expectPhase(t, page, "Mobilize New Units")
 
-	// Three actual units to place, in two groups.
+	// Three actual units to place.
 	closeGuidance(page)
-	countText, _ := page.Locator(".units-count").TextContent()
+	countText, _ := page.Locator(".action-bar").TextContent()
 	if !strings.Contains(countText, "3 units to place") {
 		t.Errorf("Mobilize bar says %q, want 3 units to place", countText)
-	}
-	groups := page.Locator(".mobilize-group")
-	if n, _ := groups.Count(); n != 2 {
-		t.Errorf("Mobilize bar shows %d groups, want 2 (infantry, armor)", n)
 	}
 
 	// Ending the phase with units unplaced must be refused, with the reason
@@ -358,29 +372,31 @@ func TestE2E_PurchaseFlow(t *testing.T) {
 		t.Errorf("Blocked advance never explained itself; notice shows %q", noticeText)
 	}
 	expectPhase(t, page, "Mobilize New Units")
-
-	// Place everything in Germany (the only German factory on the real board).
 	closeGuidance(page) // the refusal notice is still up and blocks the page
-	for _, unit := range []string{"infantry", "armor"} {
-		group := page.Locator(".mobilize-group", playwright.PageLocatorOptions{
-			HasText: unit,
-		}).First()
-		if _, err := group.Locator("select").SelectOption(playwright.SelectOptionValues{
-			Values: &[]string{"Germany"},
-		}); err != nil {
-			t.Fatalf("Failed to choose territory for %s: %v", unit, err)
-		}
-		label := "Place all"
-		if unit == "armor" {
-			label = "Place 1"
-		}
-		if err := group.Locator(fmt.Sprintf("button:has-text('%s')", label)).Click(playwright.LocatorClickOptions{
-			Timeout: playwright.Float(5000),
-		}); err != nil {
-			t.Fatalf("Failed to place %s: %v", unit, err)
-		}
-		time.Sleep(400 * time.Millisecond)
+
+	// Place the armor by hand: click the factory on the map, use its dialog.
+	if err := page.Locator(`path[data-territory="Germany"]`).Click(playwright.LocatorClickOptions{
+		Timeout: playwright.Float(5000),
+	}); err != nil {
+		t.Fatalf("Failed to click the German factory on the map: %v", err)
 	}
+	armorRow := page.Locator("#placeModal .picker-row", playwright.PageLocatorOptions{
+		HasText: "armor",
+	}).First()
+	if err := armorRow.Locator("button:has-text('Place 1')").Click(playwright.LocatorClickOptions{
+		Timeout: playwright.Float(5000),
+	}); err != nil {
+		t.Fatalf("Failed to place armor from the factory dialog: %v", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+	if err := page.Locator("#placeModal button:has-text('Close')").Click(); err != nil {
+		t.Fatalf("Failed to close placement dialog: %v", err)
+	}
+
+	// The infantry were bought at the German factory, so the one-click path
+	// puts them exactly there.
+	clickAction(t, page, "Place All As Bought")
+	time.Sleep(500 * time.Millisecond)
 
 	// With the backlog cleared, the phase ends normally.
 	clickAction(t, page, "Done Placing")

@@ -69,6 +69,12 @@ func canAttackNeutral(territory *models.Territory, attacker *models.Player) bool
 	return false
 }
 
+// CanAttackNeutral is the exported face of canAttackNeutral, so the web layer
+// offers only shores the rules actually allow assaulting.
+func CanAttackNeutral(territory *models.Territory, attacker *models.Player) bool {
+	return canAttackNeutral(territory, attacker)
+}
+
 // CanActivateNeutral checks if a player can peacefully activate a neutral
 // territory during noncombat move phase. Exported so the web layer can tell
 // the client which neighbours are genuinely enterable, instead of guessing.

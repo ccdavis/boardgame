@@ -123,7 +123,12 @@ func TestMap_SelectingTerritoryUpdatesApp(t *testing.T) {
 	defer page.Close()
 
 	for _, name := range []string{"Germany", "Russia", "Japan", "Brazil"} {
+		// Clicking an actionable territory legitimately opens a dialog (the
+		// game opens in Purchase, so the player's own factory brings up its
+		// production menu). An open modal owns the top layer and would swallow
+		// the next probe, so close everything before clicking.
 		if _, err := page.Evaluate(`(name) => {
+			document.querySelectorAll('dialog[open]').forEach(d => d.close());
 			const svg = document.getElementById('gameMap');
 			const ctm = svg.getScreenCTM();
 			const geo = MAP.byName[name];

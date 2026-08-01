@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"boardgame/engine"
 	"boardgame/game"
@@ -120,6 +121,13 @@ func (s *Server) handleAdvancePhaseAction(w http.ResponseWriter, r *http.Request
 	// computed for the wrong player.
 	driver := session.Driver()
 
+	// Warnings describe the phase being LEFT ("you have 40 unspent IPCs" as
+	// you end Purchase), so they must be read before the advance. Read after,
+	// they describe the phase that just began -- warning the player about
+	// unplaced units the moment the placing phase starts, before they had any
+	// chance to place anything.
+	warnings := driver.Warnings()
+
 	result, err := driver.AdvancePhase()
 	if err != nil {
 		var blockers engine.Blockers
@@ -152,7 +160,7 @@ func (s *Server) handleAdvancePhaseAction(w http.ResponseWriter, r *http.Request
 		"newCurrentPower": result.NewPower,
 		"turn":            result.NewTurn,
 		"turnAdvanced":    result.TurnAdvanced,
-		"warnings":        driver.Warnings(),
+		"warnings":        warnings,
 	}
 	if len(result.BattlesCreated) > 0 {
 		response["battles"] = result.BattlesCreated
@@ -300,9 +308,15 @@ func (s *Server) handleAutoResolveBattlesAction(w http.ResponseWriter, r *http.R
 }
 
 // handleGetReachableAction handles POST /api/game/:sessionId/action/get-reachable
+//
+// Accepts either a single pieceId or a list of pieceIds moving together from
+// the same territory. With a list, the response is the INTERSECTION: only
+// territories every one of those pieces can legally reach, which is what the
+// map should highlight when the player has checked off a group to move.
 func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
 	var req struct {
 		PieceID       int    `json:"pieceId"`
+		PieceIDs      []int  `json:"pieceIds"`
 		FromTerritory string `json:"fromTerritory"`
 	}
 
@@ -311,10 +325,89 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	piece, exists := session.Controller.Game.Pieces[req.PieceID]
+	pieceIDs := req.PieceIDs
+	if len(pieceIDs) == 0 {
+		pieceIDs = []int{req.PieceID}
+	}
+
+	// Cargo has no moves of its own -- it goes where its transport goes, or it
+	// unloads. The ordinary pathfinder does not know about holds and would
+	// happily offer a loaded infantry a stroll out of the sea zone (including
+	// onto hostile shores), so loaded pieces skip it entirely and get only the
+	// unload options computed below.
+	anyCargo := false
+	for _, pieceID := range pieceIDs {
+		if session.Controller.Game.IsLoaded(pieceID) {
+			anyCargo = true
+			break
+		}
+	}
+
+	var common map[string]ReachableTerritoryDTO
+	for _, pieceID := range pieceIDs {
+		if anyCargo {
+			break
+		}
+		reachable, err := reachableForPiece(session, pieceID, req.FromTerritory)
+		if err != nil {
+			s.sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if common == nil {
+			common = reachable
+			continue
+		}
+		for name, dto := range common {
+			other, ok := reachable[name]
+			if !ok {
+				delete(common, name)
+				continue
+			}
+			// Report the longest path any of the group needs, so "distance"
+			// stays honest for the slowest member.
+			if other.Distance > dto.Distance {
+				common[name] = other
+			}
+		}
+	}
+
+	names := make([]string, 0, len(common))
+	for name := range common {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	reachableDTOs := make([]ReachableTerritoryDTO, 0, len(names))
+	for _, name := range names {
+		reachableDTOs = append(reachableDTOs, common[name])
+	}
+
+	// Transport options are group-level, not per-piece: land units together in
+	// one territory may board adjacent transports; cargo together aboard
+	// transports in this sea zone may unload onto adjacent friendly shores.
+	reachableDTOs = append(reachableDTOs, transportOptions(session, pieceIDs, req.FromTerritory)...)
+
+	response := map[string]interface{}{
+		"pieceIds":  pieceIDs,
+		"reachable": reachableDTOs,
+	}
+	if len(pieceIDs) == 1 {
+		if piece, exists := session.Controller.Game.Pieces[pieceIDs[0]]; exists {
+			response["piece"] = map[string]interface{}{
+				"id":       pieceIDs[0],
+				"type":     piece.Name,
+				"movement": piece.Movement,
+			}
+		}
+	}
+
+	s.sendJSON(w, response, http.StatusOK)
+}
+
+// reachableForPiece answers where one piece may legally end a move this phase.
+func reachableForPiece(session *GameSession, pieceID int, from string) (map[string]ReachableTerritoryDTO, error) {
+	piece, exists := session.Controller.Game.Pieces[pieceID]
 	if !exists {
-		s.sendError(w, fmt.Sprintf("Piece %d not found", req.PieceID), http.StatusNotFound)
-		return
+		return nil, fmt.Errorf("piece %d not found", pieceID)
 	}
 
 	// Candidate territories in range by terrain alone, then checked against
@@ -322,10 +415,9 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 	// and reported every distance as 1, so the UI highlighted moves the
 	// server would then refuse -- blocked paths, hostile waypoints, aircraft
 	// with nowhere to land.
-	reachable, err := game.GetReachableTerritories(session.Controller.Game, req.PieceID, req.FromTerritory)
+	reachable, err := game.GetReachableTerritories(session.Controller.Game, pieceID, from)
 	if err != nil {
-		s.sendError(w, fmt.Sprintf("Failed to get reachable territories: %v", err), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("failed to get reachable territories: %v", err)
 	}
 
 	player := session.Controller.Game.Players[session.HumanPlayer]
@@ -335,10 +427,10 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 		moveType = game.CombatMove
 	}
 
-	reachableDTOs := make([]ReachableTerritoryDTO, 0, len(reachable))
+	out := make(map[string]ReachableTerritoryDTO, len(reachable))
 	for _, territory := range reachable {
 		distance, _, err := game.CalculateMovementPathForPiece(
-			session.Controller.Game, piece, req.FromTerritory, territory.Name, player, moveType)
+			session.Controller.Game, piece, from, territory.Name, player, moveType)
 		if err != nil || distance > int(piece.Movement) {
 			continue // not actually reachable under the movement rules
 		}
@@ -356,25 +448,15 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 			isAttack = len(territory.Pieces) > 0
 		}
 
-		reachableDTOs = append(reachableDTOs, ReachableTerritoryDTO{
+		out[territory.Name] = ReachableTerritoryDTO{
 			Name:      territory.Name,
 			Distance:  distance,
 			Owner:     territory.Owner.Name,
 			IsAttack:  isAttack,
 			UnitCount: len(territory.Pieces),
-		})
+		}
 	}
-
-	response := map[string]interface{}{
-		"piece": map[string]interface{}{
-			"id":       req.PieceID,
-			"type":     piece.Name,
-			"movement": piece.Movement,
-		},
-		"reachable": reachableDTOs,
-	}
-
-	s.sendJSON(w, response, http.StatusOK)
+	return out, nil
 }
 
 // handleExecuteNPCTurn handles POST /api/game/:sessionId/action/execute-npc-turn
@@ -413,3 +495,389 @@ func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, se
 	s.sendJSON(w, response, http.StatusOK)
 }
 
+
+// transportOptions lists the extra destinations a picked group has by way of
+// transports. Both directions are group-level judgements:
+//
+//   - a group of land units standing in FROM can board in an adjacent sea zone
+//     when the player's transports there can actually take the whole group;
+//   - a group of cargo pieces aboard transports in FROM can unload onto an
+//     adjacent shore: immediately if the shore is friendly, or as a booked
+//     amphibious assault (executed with the combat moves) if it is hostile.
+//     See unloadOptions for the split.
+func transportOptions(session *GameSession, pieceIDs []int, from string) []ReachableTerritoryDTO {
+	g := session.Controller.Game
+	player := g.Players[session.HumanPlayer]
+	fromTerr, ok := g.Board[from]
+	if !ok || player == nil || len(pieceIDs) == 0 {
+		return nil
+	}
+
+	pieces := make([]*models.Piece, 0, len(pieceIDs))
+	cargoCount := 0
+	for _, id := range pieceIDs {
+		piece, ok := g.Pieces[id]
+		if !ok {
+			return nil
+		}
+		pieces = append(pieces, piece)
+		if g.IsLoaded(id) {
+			cargoCount++
+		}
+	}
+
+	switch {
+	case cargoCount == len(pieces):
+		return unloadOptions(session, g, player, fromTerr, pieceIDs)
+	case cargoCount == 0 && fromTerr.Terrain != models.Water:
+		return boardOptions(g, player, fromTerr, pieces)
+	default:
+		// A mix of cargo and free units has no shared destination.
+		return nil
+	}
+}
+
+// boardOptions: adjacent sea zones whose friendly transports can take the
+// whole group.
+func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territory, group []*models.Piece) []ReachableTerritoryDTO {
+	for _, piece := range group {
+		if piece.Terrain != models.Land {
+			return nil
+		}
+	}
+
+	var out []ReachableTerritoryDTO
+	for _, zone := range fromTerr.ConnectedTo {
+		if zone.Terrain != models.Water {
+			continue
+		}
+
+		// Loading under the guns of an enemy fleet is not allowed (the same
+		// rule ValidateLoad enforces per piece).
+		hostile := false
+		freeSlots := make(map[*models.Piece]int)
+		for _, pieceID := range zone.Pieces {
+			ship := g.Pieces[pieceID]
+			if ship == nil || ship.Owner == nil {
+				continue
+			}
+			if ship.Owner.Side != player.Side {
+				hostile = true
+				break
+			}
+			if ship.Owner == player && ship.Capacity > 0 {
+				freeSlots[ship] = int(ship.Capacity) - len(ship.Holding)
+			}
+		}
+		if hostile || len(freeSlots) == 0 {
+			continue
+		}
+
+		// Greedy assignment: every unit in the group must find a transport
+		// with a free slot that is allowed to carry its type.
+		fits := true
+		for _, piece := range group {
+			assigned := false
+			for ship, free := range freeSlots {
+				if free <= 0 || !canCarry(ship, piece.Name) {
+					continue
+				}
+				freeSlots[ship] = free - 1
+				assigned = true
+				break
+			}
+			if !assigned {
+				fits = false
+				break
+			}
+		}
+		if !fits {
+			continue
+		}
+
+		out = append(out, ReachableTerritoryDTO{
+			Name:      zone.Name,
+			Distance:  1,
+			Owner:     zone.Owner.Name,
+			UnitCount: len(zone.Pieces),
+			IsBoard:   true,
+		})
+	}
+	return out
+}
+
+// unloadOptions: the shores this cargo can come out on.
+//
+// Friendly shores adjacent to the transports' CURRENT zone unload immediately.
+// During the combat-move phase, hostile shores are offered too -- an
+// amphibious assault, booked through the move planner and executed with the
+// other combat moves. Because a transport may sail and land in the same
+// phase, assault shores adjacent to a transport's PLANNED destination count
+// as well as those adjacent to where it sits now.
+func unloadOptions(session *GameSession, g *models.Game, player *models.Player, fromTerr *models.Territory, cargoIDs []int) []ReachableTerritoryDTO {
+	combatPhase := g.CurrentPhase == models.CombatMovePhase
+
+	// The sea zones the cargo's transports will be adjacent-capable from:
+	// where they are, plus where they are planned to sail.
+	zones := map[string]*models.Territory{fromTerr.Name: fromTerr}
+	if combatPhase {
+		for _, cargoID := range cargoIDs {
+			transportID := g.GetTransportForPiece(cargoID)
+			if transportID == -1 {
+				continue
+			}
+			for _, move := range session.Controller.MoveTracker.Moves {
+				if move.PieceID == transportID {
+					if dest := g.Board[move.To]; dest != nil {
+						zones[dest.Name] = dest
+					}
+				}
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
+	var out []ReachableTerritoryDTO
+	for _, zone := range zones {
+		for _, shore := range zone.ConnectedTo {
+			if shore.Terrain == models.Water || seen[shore.Name] {
+				continue
+			}
+
+			if friendlyGround(shore, player) {
+				// Immediate unload: only legal from the transports' current
+				// position, which is what ValidateUnload checks.
+				if zone != fromTerr {
+					continue
+				}
+				allValid := true
+				for _, cargoID := range cargoIDs {
+					transportID := g.GetTransportForPiece(cargoID)
+					if transportID == -1 || game.ValidateUnload(g, transportID, cargoID, shore.Name) != nil {
+						allValid = false
+						break
+					}
+				}
+				if !allValid {
+					continue
+				}
+				seen[shore.Name] = true
+				out = append(out, ReachableTerritoryDTO{
+					Name:      shore.Name,
+					Distance:  1,
+					Owner:     shore.Owner.Name,
+					UnitCount: len(shore.Pieces),
+					IsUnload:  true,
+				})
+				continue
+			}
+
+			// Hostile or neutral shore: an assault landing, combat phase only,
+			// and only where the neutral rules allow this power to attack --
+			// the same gate an overland invasion passes through.
+			if !combatPhase || !game.CanAttackNeutral(shore, player) {
+				continue
+			}
+			seen[shore.Name] = true
+			out = append(out, ReachableTerritoryDTO{
+				Name:      shore.Name,
+				Distance:  1,
+				Owner:     shore.Owner.Name,
+				UnitCount: len(shore.Pieces),
+				IsUnload:  true,
+				IsAttack:  true,
+			})
+		}
+	}
+	return out
+}
+
+func canCarry(ship *models.Piece, unitType string) bool {
+	for _, allowed := range ship.CanCarry {
+		if allowed == unitType {
+			return true
+		}
+	}
+	return false
+}
+
+// friendlyGround: owned by the player or a power on the same side.
+func friendlyGround(t *models.Territory, player *models.Player) bool {
+	if t.Owner == nil {
+		return false
+	}
+	return t.Owner == player || (player.Side != "" && t.Owner.Side == player.Side)
+}
+
+// handleLoadTransportsAction handles POST .../action/load-transports.
+// Boards each listed piece onto some transport of the player's in the given
+// sea zone, greedily. Loading takes effect immediately (it is not a planned
+// move); the client refreshes its state afterwards.
+func (s *Server) handleLoadTransportsAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	var req struct {
+		PieceIDs []int  `json:"pieceIds"`
+		SeaZone  string `json:"seaZone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	g := session.Controller.Game
+	player := g.Players[session.HumanPlayer]
+	zone, ok := g.Board[req.SeaZone]
+	if !ok {
+		s.sendError(w, fmt.Sprintf("Sea zone %s not found", req.SeaZone), http.StatusBadRequest)
+		return
+	}
+
+	loaded := 0
+	for _, pieceID := range req.PieceIDs {
+		piece := g.Pieces[pieceID]
+		if piece == nil {
+			s.sendError(w, fmt.Sprintf("Piece %d not found", pieceID), http.StatusBadRequest)
+			return
+		}
+		boarded := false
+		for _, shipID := range zone.Pieces {
+			ship := g.Pieces[shipID]
+			if ship == nil || ship.Owner != player || ship.Capacity == 0 ||
+				len(ship.Holding) >= int(ship.Capacity) || !canCarry(ship, piece.Name) {
+				continue
+			}
+			if err := session.Controller.LoadUnit(shipID, pieceID); err == nil {
+				boarded = true
+				break
+			}
+		}
+		if !boarded {
+			s.sendError(w, fmt.Sprintf(
+				"No transport in %s can take the %s (loaded %d of %d)",
+				req.SeaZone, piece.Name, loaded, len(req.PieceIDs)), http.StatusBadRequest)
+			return
+		}
+		loaded++
+	}
+
+	s.sendJSON(w, map[string]interface{}{"success": true, "loaded": loaded}, http.StatusOK)
+}
+
+// handleUnloadTransportAction handles POST .../action/unload-transport.
+// Unloads each listed cargo piece onto the given friendly territory.
+func (s *Server) handleUnloadTransportAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	var req struct {
+		PieceIDs  []int  `json:"pieceIds"`
+		Territory string `json:"territory"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	g := session.Controller.Game
+	player := g.Players[session.HumanPlayer]
+	shore, ok := g.Board[req.Territory]
+	if !ok {
+		s.sendError(w, fmt.Sprintf("Territory %s not found", req.Territory), http.StatusBadRequest)
+		return
+	}
+	// A hostile shore is an amphibious assault: booked through the move
+	// planner and executed with the combat moves, so the troops arrive as
+	// registered attackers with bombardment support -- exactly as the NPC's
+	// landings do. Only friendly shores unload immediately.
+	if !friendlyGround(shore, player) {
+		if err := session.Controller.PlanLanding(req.PieceIDs, req.Territory); err != nil {
+			s.sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.sendJSON(w, map[string]interface{}{
+			"success": true,
+			"planned": true,
+			"landing": len(req.PieceIDs),
+		}, http.StatusOK)
+		return
+	}
+
+	unloaded := 0
+	for _, pieceID := range req.PieceIDs {
+		transportID := g.GetTransportForPiece(pieceID)
+		if transportID == -1 {
+			s.sendError(w, fmt.Sprintf("Piece %d is not aboard a transport (unloaded %d of %d)",
+				pieceID, unloaded, len(req.PieceIDs)), http.StatusBadRequest)
+			return
+		}
+		if err := session.Controller.UnloadUnit(transportID, pieceID, req.Territory); err != nil {
+			s.sendError(w, fmt.Sprintf("%v (unloaded %d of %d)", err, unloaded, len(req.PieceIDs)),
+				http.StatusBadRequest)
+			return
+		}
+		unloaded++
+	}
+
+	s.sendJSON(w, map[string]interface{}{"success": true, "unloaded": unloaded}, http.StatusOK)
+}
+
+// handleCancelLandingAction handles POST .../action/cancel-landing.
+// Takes a booked amphibious unit off its landing; it stays aboard.
+func (s *Server) handleCancelLandingAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	var req struct {
+		PieceID int `json:"pieceId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := session.Controller.CancelLanding(req.PieceID); err != nil {
+		s.sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.sendJSON(w, map[string]interface{}{"success": true}, http.StatusOK)
+}
+
+// plannedLandingDTOs renders booked landings in the same shape as planned
+// moves, so the browser can draw arrows and list them for review. The arrow
+// starts where the assault actually launches from: the transport's planned
+// destination if it is booked to sail, else its current zone.
+func plannedLandingDTOs(session *GameSession) []MoveDTO {
+	g := session.Controller.Game
+	var out []MoveDTO
+	for _, landing := range session.Controller.GetPlannedLandings() {
+		for _, cargoID := range landing.CargoIDs {
+			transportID := g.GetTransportForPiece(cargoID)
+			if transportID == -1 {
+				continue
+			}
+			from := ""
+			for _, move := range session.Controller.MoveTracker.Moves {
+				if move.PieceID == transportID {
+					from = move.To
+				}
+			}
+			if from == "" {
+				if zone := territoryNameOf(g, transportID); zone != "" {
+					from = zone
+				}
+			}
+			out = append(out, MoveDTO{
+				PieceID: cargoID,
+				From:    from,
+				To:      landing.Target,
+				Type:    "combat",
+				Landing: true,
+			})
+		}
+	}
+	return out
+}
+
+// territoryNameOf finds which territory currently lists a piece.
+func territoryNameOf(g *models.Game, pieceID int) string {
+	for name, territory := range g.Board {
+		for _, id := range territory.Pieces {
+			if id == pieceID {
+				return name
+			}
+		}
+	}
+	return ""
+}

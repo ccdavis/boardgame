@@ -71,9 +71,14 @@
             </dialog>
 
             <!-- Main Content Area -->
-            <main class="game-main">
-                <!-- Left Sidebar: Map and Territory List -->
-                <aside class="territory-sidebar" role="navigation" aria-label="Territory Navigation">
+            <main class="game-main" :class="{ 'list-collapsed': !showTerritoryList }">
+                <!-- Left Sidebar: Territory List (rolled up by default; the
+                     toggle in the map's top-left corner unrolls it) -->
+                <!-- v-show, not v-if: the map-corner toggle names this element
+                     via aria-controls, and a reference to a node that has been
+                     removed from the DOM is invalid ARIA. -->
+                <aside v-show="showTerritoryList" id="territorySidebar" class="territory-sidebar"
+                       role="navigation" aria-label="Territory Navigation">
                     <h2>Territories</h2>
                     <div class="territory-controls">
                         <input type="text" v-model="territoryFilter"
@@ -122,19 +127,41 @@
                          :view-box.camel="viewBoxStr" preserveAspectRatio="xMidYMid meet"
                          role="application" aria-label="Game map"
                          @wheel.prevent="onWheel" @pointerdown="onPanStart">
+                        <defs>
+                            <!-- Arrowheads for planned-move arrows. -->
+                            <marker id="arrowMove" viewBox="0 0 10 10" refX="9" refY="5"
+                                    markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                                <path d="M0,0 L10,5 L0,10 z" fill="#2f8f4e"/>
+                            </marker>
+                            <marker id="arrowAttack" viewBox="0 0 10 10" refX="9" refY="5"
+                                    markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                                <path d="M0,0 L10,5 L0,10 z" fill="#c8342a"/>
+                            </marker>
+                        </defs>
+
                         <rect class="ocean-bg" x="0" y="0" :width="mapSize.w" :height="mapSize.h"/>
 
                         <g id="seaLayer">
                             <path v-for="t in seaShapes" :key="t.name" :d="t.d"
                                   :class="territoryClass(t)" :data-territory="t.name"
-                                  @click="selectTerritory(t.name)"/>
+                                  @click="onTerritoryClick(t.name)"/>
                         </g>
                         <g id="landLayer">
                             <path v-for="t in landShapes" :key="t.name" :d="t.d"
                                   :class="territoryClass(t)" :data-territory="t.name"
                                   tabindex="0" role="button" :aria-label="territoryAria(t.name)"
-                                  @click="selectTerritory(t.name)"
-                                  @keydown.enter="selectTerritory(t.name)"/>
+                                  @click="onTerritoryClick(t.name)"
+                                  @keydown.enter="onTerritoryClick(t.name)"/>
+                        </g>
+
+                        <!-- Phase highlights: stroke-only copies of eligible and
+                             destination territories, re-drawn above ALL the land.
+                             Styling the territory paths themselves cannot work --
+                             SVG paints in document order, so neighbours drawn
+                             later overpaint the glowing border. -->
+                        <g id="highlightLayer" pointer-events="none">
+                            <path v-for="h in highlightShapes" :key="'hl-' + h.name"
+                                  :d="h.d" :class="h.cls"/>
                         </g>
 
                         <!-- Connections the geometry cannot express as a shared
@@ -143,6 +170,14 @@
                         <g id="linkLayer" pointer-events="none">
                             <line v-for="l in visibleLinks" :key="l.key" class="terr-link"
                                   :x1="l.x1" :y1="l.y1" :x2="l.x2" :y2="l.y2"/>
+                        </g>
+
+                        <!-- Planned moves, drawn as arrows so the turn's plan is
+                             visible on the board itself. Combat moves are red. -->
+                        <g id="arrowLayer" pointer-events="none">
+                            <line v-for="a in moveArrows" :key="a.key" :class="a.cls"
+                                  :x1="a.x1" :y1="a.y1" :x2="a.x2" :y2="a.y2"
+                                  :marker-end="a.cls.includes('combat') ? 'url(#arrowAttack)' : 'url(#arrowMove)'"/>
                         </g>
 
                         <g id="labelLayer" pointer-events="none">
@@ -165,7 +200,39 @@
                                 <text :x="m.x" :y="m.y + m.r * 0.36" class="unit-badge-count">{{ m.count }}</text>
                             </g>
                         </g>
+
+                        <!-- Industrial complexes: a factory silhouette on a
+                             contrasting disc, gold for the player's own. Drawn
+                             AFTER the unit badges and offset beside them --
+                             both anchor at the marker point, and under the
+                             badge layer the factory was hidden in exactly the
+                             territories that matter. -->
+                        <g id="factoryLayer" pointer-events="none">
+                            <g v-for="f in factoryMarkers" :key="f.name"
+                               :class="f.mine ? 'factory-marker mine' : 'factory-marker'"
+                               :transform="'translate(' + f.x + ',' + f.y + ')'">
+                                <circle r="4.6" class="factory-disc"/>
+                                <path class="factory-icon"
+                                      d="M-3.4,2.4 L-3.4,-1.2 L-1.4,0.2 L-1.4,-1.2 L0.6,0.2 L0.6,-1.2 L1.4,-1.2 L1.4,-3.2 L2.6,-3.2 L2.6,2.4 Z"/>
+                            </g>
+                        </g>
+
+                        <!-- Battles waiting to be fought: pulsing crossed swords. -->
+                        <g id="battleLayer" pointer-events="none">
+                            <g v-for="b in battleMarkers" :key="b.name" class="battle-marker">
+                                <circle :cx="b.x" :cy="b.y" r="7" class="battle-halo"/>
+                                <text :x="b.x" :y="b.y + 2.4" class="battle-swords">&#9876;</text>
+                            </g>
+                        </g>
                     </svg>
+
+                    <button type="button" class="list-toggle"
+                            @click="showTerritoryList = !showTerritoryList"
+                            :aria-expanded="showTerritoryList ? 'true' : 'false'"
+                            aria-controls="territorySidebar"
+                            :title="showTerritoryList ? 'Hide the territory list' : 'Show the territory list'">
+                        &#9776; Territories
+                    </button>
 
                     <div class="map-toolbar" v-if="mapReady">
                         <button type="button" @click="resetView" title="Fit the whole map">Fit</button>
@@ -180,8 +247,8 @@
                     </div>
                 </section>
 
-                <!-- Right Sidebar: Territory Details and Actions -->
-                <aside class="action-sidebar" role="complementary" aria-label="Territory Details and Actions">
+                <!-- Right Sidebar: Territory Details -->
+                <aside class="action-sidebar" role="complementary" aria-label="Territory Details">
                     <div v-if="selectedTerritory">
                         <h2>{{ selectedTerritory }}</h2>
                         <div v-if="territoryDetails" class="territory-details">
@@ -196,6 +263,10 @@
                                     <dd>{{ territoryDetails.terrain }}</dd>
                                     <dt>Production:</dt>
                                     <dd>{{ territoryDetails.production }}</dd>
+                                    <div v-if="territoryDetails.hasFactory">
+                                        <dt>Industry:</dt>
+                                        <dd>Industrial complex</dd>
+                                    </div>
                                     <div v-if="territoryDetails.icDamage > 0">
                                         <dt>IC Damage:</dt>
                                         <dd class="damage">{{ territoryDetails.icDamage }}</dd>
@@ -214,28 +285,11 @@
                                         <span class="unit-type">{{ unitType }}</span>
                                     </div>
                                 </div>
-
-                                <!-- Show detailed unit list only if it's your territory and during movement phases -->
-                                <details v-if="isMyTerritory(territoryDetails) && (gameState.currentPhase === 'Combat Move' || gameState.currentPhase === 'Noncombat Move')"
-                                         class="unit-details-toggle">
-                                    <summary>Detailed Unit List</summary>
-                                    <ul class="unit-list">
-                                        <li v-for="unit in territoryDetails.units" :key="unit.id" class="unit-item">
-                                            <div class="unit-info">
-                                                <strong>{{ unit.name }}</strong> (ID: {{ unit.id }})
-                                                <span class="unit-stats">
-                                                    A:{{ unit.attack }} D:{{ unit.defend }} M:{{ unit.movement }}
-                                                </span>
-                                            </div>
-                                            <div v-if="canInteractWithUnit(unit)" class="unit-actions">
-                                                <button @click="moveUnit(unit)" class="btn btn-sm"
-                                                        v-if="unit.canMove">
-                                                    Move
-                                                </button>
-                                            </div>
-                                        </li>
-                                    </ul>
-                                </details>
+                                <p v-if="eligibleSources[selectedTerritory] &&
+                                         (gameState.currentPhase === 'Combat Move' || gameState.currentPhase === 'Noncombat Move')"
+                                   class="sidebar-hint">
+                                    Click this territory on the map to move units from here.
+                                </p>
                             </div>
 
                             <!-- Empty Territory -->
@@ -250,21 +304,12 @@
                                     <li v-for="conn in territoryDetails.connectedTerritories" :key="conn.name">
                                         <button @click="selectTerritory(conn.name)"
                                                 class="territory-link"
-                                                :class="{'can-attack-link': conn.canAttack, 'same-owner': conn.owner === territoryDetails.owner}">
+                                                :class="{'same-owner': conn.owner === territoryDetails.owner}">
                                             <div class="territory-link-header">
                                                 <span class="territory-link-name">{{ conn.name }}</span>
                                                 <span class="conn-owner" :class="'owner-' + conn.owner.toLowerCase()">
                                                     {{ conn.owner }}
                                                 </span>
-                                            </div>
-                                            <div v-if="conn.canAttack" class="territory-link-action">
-                                                <span class="action-icon">⚔️</span>
-                                                <span class="action-label">Attack Available</span>
-                                            </div>
-                                            <div v-else-if="conn.owner === territoryDetails.owner && (gameState.currentPhase === 'Noncombat Move' || gameState.currentPhase === 'Combat Move')"
-                                                 class="territory-link-action friendly-move">
-                                                <span class="action-icon">→</span>
-                                                <span class="action-label">Can Move Here</span>
                                             </div>
                                             <div v-if="conn.unitCount" class="territory-link-units">
                                                 {{ conn.unitCount }} units
@@ -276,7 +321,10 @@
                         </div>
                     </div>
                     <div v-else class="no-selection">
-                        <p>Select a territory to view details and available actions</p>
+                        <p>Select a territory to view details</p>
+                        <p v-if="gameState.isHumanTurn" class="sidebar-hint">
+                            Glowing territories are where you can act this phase.
+                        </p>
                     </div>
                 </aside>
             </main>
@@ -305,32 +353,44 @@
 
                     <!-- Purchase Phase -->
                     <div v-else-if="gameState.currentPhase === 'Purchase Units' && gameState.isHumanTurn">
-                        <button @click="openPurchaseModal" class="btn btn-action">
-                            Buy Units ({{ currentPlayer.ipcs }} IPCs)
-                        </button>
+                        <span class="bar-hint">Click a glowing factory to buy units
+                            &mdash; {{ currentPlayer.ipcs }} IPCs available</span>
+                        <span class="moves-count" v-if="unplacedCount > 0">{{ unplacedCount }} bought</span>
                         <button @click="advancePhase" class="btn btn-advance">
                             Done Purchasing →
                         </button>
                     </div>
 
-                    <!-- Combat Move Phase -->
+                    <!-- Combat Move Phase. While a destination is awaited the
+                         bar carries the status; nothing overlays the map. -->
                     <div v-else-if="gameState.currentPhase === 'Combat Move' && gameState.isHumanTurn">
-                        <span class="moves-count">{{ plannedMoves.length }} moves planned</span>
-                        <button @click="showPlannedMoves" class="btn btn-action" v-if="plannedMoves.length > 0">
-                            Review Moves
-                        </button>
-                        <button @click="advancePhase" class="btn btn-advance">
-                            Execute Moves →
-                        </button>
+                        <template v-if="ui.mode === 'pickDest'">
+                            <span class="bar-status">{{ modeBanner }}</span>
+                            <button @click="cancelTargeting" class="btn btn-secondary">Cancel</button>
+                        </template>
+                        <template v-else>
+                            <span class="bar-hint" v-if="plannedMoves.length === 0">
+                                Click a glowing territory to move its units</span>
+                            <span class="moves-count" v-else>{{ plannedMoves.length }} moves planned</span>
+                            <button @click="showPlannedMoves" class="btn btn-action" v-if="plannedMoves.length > 0">
+                                Review Moves
+                            </button>
+                            <button @click="undoLastMove" class="btn btn-action" v-if="plannedMoves.length > 0">
+                                Undo Last
+                            </button>
+                            <button @click="advancePhase" class="btn btn-advance">
+                                Execute Moves →
+                            </button>
+                        </template>
                     </div>
 
                     <!-- Conduct Combat Phase -->
                     <div v-else-if="gameState.currentPhase === 'Conduct Combat' && gameState.isHumanTurn">
-                        <span class="battles-count" v-if="pendingBattles.length > 0">
-                            {{ pendingBattles.length }} battles pending
-                        </span>
+                        <span class="bar-hint" v-if="pendingBattles.length > 0">
+                            {{ pendingBattles.length }} battle{{ pendingBattles.length === 1 ? '' : 's' }}
+                            &mdash; click a &#9876; territory to fight</span>
                         <button @click="autoResolveBattles" class="btn btn-action" v-if="pendingBattles.length > 0">
-                            Auto-Resolve All Battles
+                            Resolve All Battles
                         </button>
                         <button @click="advancePhase" class="btn btn-advance" v-if="pendingBattles.length === 0">
                             Done with Combat →
@@ -339,33 +399,35 @@
 
                     <!-- Noncombat Move Phase -->
                     <div v-else-if="gameState.currentPhase === 'Noncombat Move' && gameState.isHumanTurn">
-                        <span class="moves-count">{{ plannedMoves.length }} moves planned</span>
-                        <button @click="advancePhase" class="btn btn-advance">
-                            Execute Moves →
-                        </button>
+                        <template v-if="ui.mode === 'pickDest'">
+                            <span class="bar-status">{{ modeBanner }}</span>
+                            <button @click="cancelTargeting" class="btn btn-secondary">Cancel</button>
+                        </template>
+                        <template v-else>
+                            <span class="bar-hint" v-if="plannedMoves.length === 0">
+                                Click a glowing territory to reposition its units</span>
+                            <span class="moves-count" v-else>{{ plannedMoves.length }} moves planned</span>
+                            <button @click="showPlannedMoves" class="btn btn-action" v-if="plannedMoves.length > 0">
+                                Review Moves
+                            </button>
+                            <button @click="undoLastMove" class="btn btn-action" v-if="plannedMoves.length > 0">
+                                Undo Last
+                            </button>
+                            <button @click="advancePhase" class="btn btn-advance">
+                                Execute Moves →
+                            </button>
+                        </template>
                     </div>
 
-                    <!-- Mobilize Phase: one row per pending unit type, with a
-                         choice of every legal destination. The server computes
-                         the destinations; this only offers them. -->
-                    <div v-else-if="gameState.currentPhase === 'Mobilize New Units' && gameState.isHumanTurn"
-                         class="mobilize-bar">
-                        <span class="units-count" v-if="unplacedCount > 0">
+                    <!-- Mobilize Phase -->
+                    <div v-else-if="gameState.currentPhase === 'Mobilize New Units' && gameState.isHumanTurn">
+                        <span class="bar-hint" v-if="unplacedCount > 0">
                             {{ unplacedCount }} unit{{ unplacedCount === 1 ? '' : 's' }} to place
-                        </span>
-                        <div v-for="group in purchasedUnits" :key="group.type" class="mobilize-group">
-                            <span class="mobilize-label">{{ group.quantity }} × {{ group.type }}</span>
-                            <template v-if="group.targets && group.targets.length > 0">
-                                <select v-model="mobilizeTargets[group.type]" class="mobilize-select"
-                                        :aria-label="'Territory to place ' + group.type + ' in'">
-                                    <option v-for="t in group.targets" :key="t" :value="t">{{ t }}</option>
-                                </select>
-                                <button @click="placeUnits(group.type, 1)" class="btn btn-sm">Place 1</button>
-                                <button @click="placeUnits(group.type, group.quantity)" class="btn btn-sm"
-                                        v-if="group.quantity > 1">Place all</button>
-                            </template>
-                            <span v-else class="mobilize-warning">no legal territory</span>
-                        </div>
+                            &mdash; click a glowing factory</span>
+                        <button @click="placeAllAsBought" class="btn btn-action"
+                                v-if="unplacedCount > 0 && placeAsBoughtPlan.length > 0">
+                            Place All As Bought
+                        </button>
                         <button @click="advancePhase" class="btn btn-advance">
                             Done Placing →
                         </button>
@@ -402,31 +464,151 @@
             </div>
         </dialog>
 
-        <!-- Move Destination Modal: replaces the prompt() that asked the
-             player to type a territory name. -->
-        <dialog id="moveModal" class="modal">
+        <!-- Unit Picker: which pieces move from the clicked territory. -->
+        <dialog id="unitPickerModal" class="modal">
             <div class="modal-content">
-                <h2>Move {{ movePicker.unitName }}</h2>
-                <p>From <strong>{{ movePicker.from }}</strong> to:</p>
-                <ul class="destination-list">
-                    <li v-for="dest in movePicker.destinations" :key="dest.name">
-                        <button @click="confirmMove(dest.name)" class="btn destination-choice"
-                                :class="{'destination-attack': dest.isAttack}">
-                            {{ dest.name }}
-                            <span class="dest-owner">{{ dest.owner }}</span>
-                            <span v-if="dest.isAttack" class="dest-attack-label">⚔️ attack</span>
-                        </button>
+                <h2>Move units from {{ unitPicker.territory }}</h2>
+                <p class="modal-sub">Choose how many of each, then pick a destination on the map.</p>
+                <ul class="picker-list">
+                    <li v-for="group in unitPicker.groups" :key="group.type" class="picker-row">
+                        <span class="picker-name">
+                            <strong>{{ group.type }}</strong>
+                            <span v-if="group.cargo" class="earmark-tag">aboard transport</span>
+                            <span class="unit-stats">A:{{ group.attack }} D:{{ group.defend }} M:{{ group.movement }}</span>
+                        </span>
+                        <span class="picker-controls">
+                            <button @click="adjustTake(group, -1)" class="btn btn-sm"
+                                    :disabled="group.take === 0">&minus;</button>
+                            <span class="picker-count">{{ group.take }} / {{ group.ids.length }}</span>
+                            <button @click="adjustTake(group, 1)" class="btn btn-sm"
+                                    :disabled="group.take === group.ids.length">+</button>
+                            <button @click="group.take = 0" class="btn btn-sm"
+                                    :disabled="group.take === 0">None</button>
+                            <button @click="group.take = group.ids.length" class="btn btn-sm"
+                                    :disabled="group.take === group.ids.length">All</button>
+                        </span>
                     </li>
                 </ul>
-                <button @click="closeMovePicker" class="btn btn-secondary">Cancel</button>
+                <div class="modal-actions">
+                    <button @click="confirmUnitPicker" class="btn btn-primary"
+                            :disabled="pickerTotal === 0">
+                        OK — pick destination
+                    </button>
+                    <button @click="closeUnitPicker" class="btn btn-secondary">Cancel</button>
+                </div>
             </div>
         </dialog>
 
-        <!-- Purchase Modal -->
+        <!-- Planned Moves: review and cancel individual moves. -->
+        <dialog id="movesModal" class="modal">
+            <div class="modal-content">
+                <h2>Planned moves</h2>
+                <ul class="moves-list">
+                    <li v-for="m in plannedMoves" :key="m.pieceId" class="moves-row">
+                        <span :class="m.type === 'combat' ? 'move-desc combat' : 'move-desc'">
+                            {{ m.from }} → {{ m.to }}
+                            <span class="move-type">{{ m.landing ? 'amphibious assault' : m.type }}</span>
+                        </span>
+                        <button @click="cancelPlannedMove(m)" class="btn btn-sm">Cancel</button>
+                    </li>
+                </ul>
+                <p v-if="plannedMoves.length === 0" class="modal-sub">No moves planned.</p>
+                <button @click="closePlannedMoves" class="btn btn-secondary">Close</button>
+            </div>
+        </dialog>
+
+        <!-- Battle Screen: both sides face to face, then the dice. -->
+        <dialog id="battleModal" class="modal battle-modal">
+            <div class="modal-content" v-if="battleView.battle">
+                <h2>Battle for {{ battleView.battle.territory }}</h2>
+                <div class="battle-board">
+                    <div class="battle-side attacker">
+                        <h3>{{ battleView.battle.attacker }} <span class="side-role">attacking</span></h3>
+                        <ul>
+                            <li v-for="g in battleView.battle.attackers" :key="g.type">
+                                <span class="battle-count">{{ g.count }}×</span> {{ g.type }}
+                                <span class="unit-stats">attacks on {{ g.attack }}</span>
+                            </li>
+                            <li v-for="g in (battleView.battle.bombarding || [])" :key="'bomb-' + g.type"
+                                class="bombard-note">
+                                <span class="battle-count">{{ g.count }}×</span> {{ g.type }}
+                                <span class="unit-stats">shore bombardment</span>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="battle-vs">⚔</div>
+                    <div class="battle-side defender">
+                        <h3>{{ battleView.battle.defender }} <span class="side-role">defending</span></h3>
+                        <ul>
+                            <li v-for="g in battleView.battle.defenders" :key="g.type">
+                                <span class="battle-count">{{ g.count }}×</span> {{ g.type }}
+                                <span class="unit-stats">defends on {{ g.defend }}</span>
+                            </li>
+                            <li v-if="battleView.battle.defenders.length === 0" class="undefended">
+                                undefended
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div v-if="battleView.result" class="battle-result"
+                     :class="battleView.result.attackerWins ? 'won' : 'lost'">
+                    <h3 v-if="battleView.result.attackerWins">
+                        {{ battleView.battle.attacker }} takes {{ battleView.battle.territory }}!
+                    </h3>
+                    <h3 v-else-if="battleView.result.attackerRetreated">Attackers retreated</h3>
+                    <h3 v-else>Defenders hold</h3>
+                    <p>{{ battleView.result.rounds }} round{{ battleView.result.rounds === 1 ? '' : 's' }} of combat.</p>
+                    <p>Attacker losses: {{ casualtySummary(battleView.result.attackerCasualties) }}</p>
+                    <p>Defender losses: {{ casualtySummary(battleView.result.defenderCasualties) }}</p>
+                </div>
+
+                <div class="modal-actions">
+                    <button v-if="!battleView.result" @click="fightBattle" class="btn btn-primary"
+                            :disabled="battleView.busy">
+                        {{ battleView.busy ? 'Rolling…' : 'Fight it out' }}
+                    </button>
+                    <button @click="closeBattle" class="btn btn-secondary">
+                        {{ battleView.result ? 'Close' : 'Not yet' }}
+                    </button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Placement dialog for one factory during Mobilize. -->
+        <dialog id="placeModal" class="modal">
+            <div class="modal-content">
+                <h2>Place units — {{ placePicker.territory }}</h2>
+                <ul class="picker-list">
+                    <li v-for="group in placeableGroups" :key="group.type" class="picker-row">
+                        <span class="picker-name">
+                            <strong>{{ group.type }}</strong> × {{ group.quantity }}
+                            <span v-if="earmarks[group.type] === placePicker.territory"
+                                  class="earmark-tag">bought here</span>
+                        </span>
+                        <span class="picker-controls">
+                            <button @click="placeUnits(group.type, placePicker.territory, 1)"
+                                    class="btn btn-sm">Place 1</button>
+                            <button @click="placeUnits(group.type, placePicker.territory, group.quantity)"
+                                    class="btn btn-sm" v-if="group.quantity > 1">Place all</button>
+                        </span>
+                    </li>
+                </ul>
+                <p v-if="placeableGroups.length === 0" class="modal-sub">
+                    Nothing left that can be placed here.
+                </p>
+                <button @click="closePlacePicker" class="btn btn-secondary">Close</button>
+            </div>
+        </dialog>
+
+        <!-- Purchase Modal: the production menu of one factory. -->
         <dialog id="purchaseModal" class="modal">
             <div class="modal-content">
-                <h2>Purchase Units</h2>
-                <p>Available IPCs: {{ currentPlayer.ipcs }}</p>
+                <h2>Production — {{ purchaseFor || 'Purchase Units' }}</h2>
+                <p class="modal-sub">
+                    {{ currentPlayer.ipcs }} IPCs available.
+                    Units bought here will be offered here when you place them.
+                </p>
                 <div v-if="availableUnits" class="unit-purchase-list">
                     <div v-for="unit in availableUnits" :key="unit.type" class="unit-purchase-item">
                         <div class="unit-purchase-info">
@@ -441,7 +623,18 @@
                         </div>
                     </div>
                 </div>
-                <button @click="closePurchaseModal" class="btn btn-secondary">Close</button>
+                <div v-if="purchasedUnits.length > 0" class="purchase-cart">
+                    <h3>Bought this turn</h3>
+                    <ul>
+                        <li v-for="group in purchasedUnits" :key="group.type">
+                            {{ group.quantity }} × {{ group.type }}
+                            <span v-if="earmarks[group.type]" class="earmark-tag">
+                                → {{ earmarks[group.type] }}
+                            </span>
+                        </li>
+                    </ul>
+                </div>
+                <button @click="closePurchaseModal" class="btn btn-secondary">Done</button>
             </div>
         </dialog>
     </div>

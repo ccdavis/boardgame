@@ -12,6 +12,12 @@ type GameController struct {
 	MoveTracker    *MovementTracker
 	PendingBattles map[string]*Battle // Territory name -> Battle
 
+	// PlannedLandings are a human player's booked amphibious assaults,
+	// executed with (after) the combat moves. The NPC's equivalent lives in
+	// Plans; see game/landing.go for why these are planned rather than
+	// immediate.
+	PlannedLandings []*PlannedLanding
+
 	// Plans are the computer players' standing intentions, which outlive a
 	// turn. They live here rather than on the AI because an NPCAIPlayer is
 	// rebuilt for each turn in some paths -- the web server constructs one per
@@ -712,6 +718,11 @@ func (gc *GameController) ExecuteCombatMoves() error {
 		gc.TriggerStrictNeutralChainReaction(player)
 	}
 
+	// Booked amphibious assaults come ashore now, after the fleet has moved:
+	// a transport may load, sail and land within this one phase, so its drop
+	// zone is only certain once the moves above have run.
+	gc.executePlannedLandings(player)
+
 	// Drop the executed combat plans but keep the movement they consumed --
 	// clearing that too handed every unit a second full allowance for the
 	// noncombat phase.
@@ -1061,9 +1072,22 @@ func (gc *GameController) UnloadUnit(transportID, pieceID int, destinationName s
 		return fmt.Errorf("can only unload units during a movement phase")
 	}
 
-	// Validate the unload operation
-	err := ValidateUnload(gc.Game, transportID, pieceID, destinationName)
+	// Only the owner works the winches. ValidateUnload checks geometry, not
+	// allegiance, and the web layer names transports by their cargo -- without
+	// this, any request could disembark another power's troops.
+	player, err := gc.GetCurrentPlayer()
 	if err != nil {
+		return err
+	}
+	if transport, ok := gc.Game.Pieces[transportID]; !ok || transport.Owner != player {
+		return fmt.Errorf("transport %d does not belong to %s", transportID, player.Name)
+	}
+	if piece, ok := gc.Game.Pieces[pieceID]; !ok || piece.Owner != player {
+		return fmt.Errorf("piece %d does not belong to %s", pieceID, player.Name)
+	}
+
+	// Validate the unload operation
+	if err := ValidateUnload(gc.Game, transportID, pieceID, destinationName); err != nil {
 		return err
 	}
 

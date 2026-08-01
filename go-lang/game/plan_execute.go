@@ -363,7 +363,7 @@ func (gc *GameController) LandAssaultTroops(power string, transcript *GameTransc
 				if err := gc.UnloadUnit(shipID, troopID, plan.Target); err != nil {
 					continue
 				}
-				gc.registerAmphibiousAttacker(plan, troopID, target, power)
+				gc.registerAmphibiousAttacker(plan, troopID, power)
 				landedHere++
 			}
 		}
@@ -388,27 +388,39 @@ func (gc *GameController) LandAssaultTroops(power string, transcript *GameTransc
 
 // attachShoreBombardment enrols the attacker's bombardment-capable warships in
 // the drop zone as fire support for the landing battle. Returns how many.
+func (gc *GameController) attachShoreBombardment(plan *AmphibiousPlan, power string) int {
+	return gc.attachShoreBombardmentAt(plan.Target, plan.DropZone, power)
+}
+
+// attachShoreBombardmentAt is the plan-free core, shared with human landings.
 //
 // No support is attached while the drop zone itself is being fought over: a
 // fleet in action cannot also bombard the shore (and per the rules, sea combat
 // in the assault's sea zone forfeits the bombardment).
-func (gc *GameController) attachShoreBombardment(plan *AmphibiousPlan, power string) int {
-	battle, ok := gc.PendingBattles[plan.Target]
+func (gc *GameController) attachShoreBombardmentAt(targetName, dropZone, power string) int {
+	battle, ok := gc.PendingBattles[targetName]
 	if !ok {
 		return 0 // the beach was undefended; nothing to soften up
 	}
-	if _, contested := gc.PendingBattles[plan.DropZone]; contested {
+	if _, contested := gc.PendingBattles[dropZone]; contested {
 		return 0
 	}
-	drop := gc.Game.Board[plan.DropZone]
+	drop := gc.Game.Board[dropZone]
 	if drop == nil {
 		return 0
+	}
+
+	// Idempotent: a landing may put troops ashore from the same zone in
+	// several waves, and a ship fires its supporting shot once, not per wave.
+	already := make(map[int]bool, len(battle.Bombarding))
+	for _, ship := range battle.Bombarding {
+		already[ship.ID] = true
 	}
 
 	units := gc.Game.Units()
 	for _, id := range drop.Pieces {
 		ship := gc.Game.Pieces[id]
-		if ship == nil || ship.Owner == nil || ship.Owner.Name != power {
+		if ship == nil || ship.Owner == nil || ship.Owner.Name != power || already[id] {
 			continue
 		}
 		if !units.For(ship).CanBombard {
@@ -421,12 +433,25 @@ func (gc *GameController) attachShoreBombardment(plan *AmphibiousPlan, power str
 
 // registerAmphibiousAttacker enrols a landed unit in the battle for the target,
 // creating the battle if this is the first attacker to arrive.
-func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, pieceID int, target *models.Territory, power string) {
+func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, pieceID int, power string) {
+	// Troops that break off a landing go back aboard conceptually; there is no
+	// beach to retreat to, so the NPC's origin is its staging port.
+	gc.registerLandedAttacker(plan.Target, pieceID, power, plan.Staging)
+}
+
+// registerLandedAttacker is the plan-free core, shared with human landings.
+// An empty origin means the unit cannot retreat -- the rule for amphibious
+// attackers -- and withdrawAttackers already leaves such pieces in place.
+func (gc *GameController) registerLandedAttacker(targetName string, pieceID int, power string, origin string) {
+	target := gc.Game.Board[targetName]
+	if target == nil {
+		return
+	}
 	if target.Owner != nil && target.Owner.Name == power {
 		return // undefended and already ours; nothing to fight
 	}
 
-	battle, exists := gc.PendingBattles[plan.Target]
+	battle, exists := gc.PendingBattles[targetName]
 	if !exists {
 		// A neutral invaded from the sea pays the same price as one invaded
 		// overland: the garrison rises, the toll is levied, and violating a
@@ -445,8 +470,8 @@ func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, piece
 		if target.Terrain == models.Water {
 			battleType = SeaBattle
 		}
-		battle = NewBattle(plan.Target, battleType, power, defender)
-		gc.PendingBattles[plan.Target] = battle
+		battle = NewBattle(targetName, battleType, power, defender)
+		gc.PendingBattles[targetName] = battle
 	}
 	battle.AttackingPieceIDs = append(battle.AttackingPieceIDs, pieceID)
 	// Each unit that comes ashore entitles one supporting warship to one
@@ -455,9 +480,9 @@ func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, piece
 	if battle.AttackerOrigins == nil {
 		battle.AttackerOrigins = make(map[int]string)
 	}
-	// Troops that break off a landing go back aboard conceptually; there is no
-	// beach to retreat to, so their origin is the staging port.
-	battle.AttackerOrigins[pieceID] = plan.Staging
+	if origin != "" {
+		battle.AttackerOrigins[pieceID] = origin
+	}
 }
 
 // territoryOf finds where a piece currently is.

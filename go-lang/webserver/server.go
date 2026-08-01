@@ -256,7 +256,8 @@ func (s *Server) handleTerritories(w http.ResponseWriter, r *http.Request, sessi
 
 	territories := make([]TerritoryDTO, 0, len(names))
 	for _, name := range names {
-		territories = append(territories, ToTerritoryDTO(session.Controller.Game.Board[name]))
+		territories = append(territories, ToTerritoryDTO(session.Controller.Game.Board[name],
+			session.Controller.Game, session.HumanPlayer))
 	}
 
 	response := map[string]interface{}{
@@ -288,22 +289,41 @@ func (s *Server) handleTerritory(w http.ResponseWriter, r *http.Request, session
 
 	// Build detailed territory info
 	dto := TerritoryDetailDTO{
-		TerritoryDTO: ToTerritoryDTO(territory),
+		TerritoryDTO: ToTerritoryDTO(territory, session.Controller.Game, session.HumanPlayer),
 		Units:        make([]UnitDTO, 0),
 		ConnectedTerritories: make([]ConnectedTerritoryDTO, 0),
 	}
 
-	// Add units
+	// Add units. "Can move" here means "has no commitment yet": pieces with a
+	// planned move and cargo booked for a landing are both spoken for, and the
+	// unit picker must not offer them a second time.
 	plannedMoves := session.Controller.GetPlannedMoves()
 	movedPieceIDs := make(map[int]bool)
 	for _, move := range plannedMoves {
 		movedPieceIDs[move.PieceID] = true
+	}
+	for _, landing := range session.Controller.GetPlannedLandings() {
+		for _, cargoID := range landing.CargoIDs {
+			movedPieceIDs[cargoID] = true
+		}
 	}
 
 	for _, pieceID := range territory.Pieces {
 		piece := session.Controller.Game.Pieces[pieceID]
 		canMove := !movedPieceIDs[pieceID]
 		dto.Units = append(dto.Units, ToUnitDTO(pieceID, piece, canMove))
+
+		// Cargo lives in the transport's hold, not the territory's piece list;
+		// list it here or the browser can never see or unload it.
+		for _, cargoID := range piece.Holding {
+			cargo, ok := session.Controller.Game.Pieces[cargoID]
+			if !ok {
+				continue
+			}
+			cargoDTO := ToUnitDTO(cargoID, cargo, !movedPieceIDs[cargoID])
+			cargoDTO.Aboard = pieceID
+			dto.Units = append(dto.Units, cargoDTO)
+		}
 	}
 
 	// Add connected territories with context
@@ -375,6 +395,10 @@ func (s *Server) handleAvailableActions(w http.ResponseWriter, r *http.Request, 
 		for i, move := range moves {
 			moveDTOs[i] = ToMoveDTO(move)
 		}
+		// Booked amphibious landings ride in the same list, flagged, so the
+		// browser draws their arrows and offers them for review alongside
+		// ordinary moves.
+		moveDTOs = append(moveDTOs, plannedLandingDTOs(session)...)
 
 		response["actions"] = map[string]interface{}{
 			"plannedMoves": moveDTOs,
@@ -385,9 +409,14 @@ func (s *Server) handleAvailableActions(w http.ResponseWriter, r *http.Request, 
 		}
 
 	case models.ConductCombatPhase:
-		battles := make([]string, 0, len(session.Controller.PendingBattles))
+		names := make([]string, 0, len(session.Controller.PendingBattles))
 		for territory := range session.Controller.PendingBattles {
-			battles = append(battles, territory)
+			names = append(names, territory)
+		}
+		sort.Strings(names)
+		battles := make([]PendingBattleDTO, 0, len(names))
+		for _, territory := range names {
+			battles = append(battles, ToPendingBattleDTO(g, session.Controller.PendingBattles[territory]))
 		}
 		response["actions"] = map[string]interface{}{
 			"pendingBattles": battles,
@@ -452,6 +481,12 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, session *G
 		s.handleAutoResolveBattlesAction(w, r, session)
 	case "get-reachable":
 		s.handleGetReachableAction(w, r, session)
+	case "load-transports":
+		s.handleLoadTransportsAction(w, r, session)
+	case "unload-transport":
+		s.handleUnloadTransportAction(w, r, session)
+	case "cancel-landing":
+		s.handleCancelLandingAction(w, r, session)
 	case "execute-npc-turn":
 		s.handleExecuteNPCTurn(w, r, session)
 	default:

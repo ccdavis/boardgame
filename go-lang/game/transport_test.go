@@ -376,3 +376,30 @@ func TestValidateLoad_ChecksPieceOwnershipNotSeaOwnership(t *testing.T) {
 		t.Error("loading our infantry into an enemy transport was allowed")
 	}
 }
+
+// Unloading is the owner's business: the web layer names transports by their
+// cargo, so without an allegiance check any request could disembark another
+// power's troops.
+func TestControllerUnloadUnit_RefusesForeignCargo(t *testing.T) {
+	game, infantryID, transportID := setupTransportTest()
+	game.PlayerOrder = []string{"Germany", "UK"}
+	game.CurrentPower = "Germany"
+	game.CurrentPhase = models.NoncombatMovePhase
+
+	gc := NewGameController(game)
+	if err := gc.LoadUnit(transportID, infantryID); err != nil {
+		t.Fatalf("LoadUnit: %v", err)
+	}
+
+	// Now it is the UK's turn; Germany's cargo must not answer to the UK.
+	game.CurrentPower = "UK"
+	if err := gc.UnloadUnit(transportID, infantryID, "France"); err == nil {
+		t.Fatal("the UK was allowed to unload Germany's transport")
+	}
+
+	// Back on Germany's turn the same unload goes through.
+	game.CurrentPower = "Germany"
+	if err := gc.UnloadUnit(transportID, infantryID, "France"); err != nil {
+		t.Fatalf("owner's own unload refused: %v", err)
+	}
+}
