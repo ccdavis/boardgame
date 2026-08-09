@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 )
@@ -35,26 +34,9 @@ func (s *Server) Start() error {
 	s.mux.HandleFunc("/api/game/new", s.corsMiddleware(s.handleCreateGame))
 	s.mux.HandleFunc("/api/game/", s.corsMiddleware(s.handleGameRoutes))
 
-	// Serve static files for frontend
-	// Check multiple possible locations for static files
-	staticDir := "./webserver/static"
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		// Try from webserver package directory (during tests)
-		staticDir = "./static"
-		if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-			log.Printf("Warning: static directory not found, static files will not be served")
-		}
-	}
-	// no-cache means "revalidate before use", not "don't cache": the browser
-	// asks with If-Modified-Since and gets a cheap 304 when nothing changed.
-	// Without it browsers apply heuristic freshness and keep serving old CSS
-	// and JS for days after a rebuild -- the dark ocean shipped and players
-	// kept seeing the old white one.
-	static := http.FileServer(http.Dir(staticDir))
-	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
-		static.ServeHTTP(w, r)
-	}))
+	// The frontend is embedded in the binary (see static_assets.go), so it is
+	// served identically no matter where the server is started from.
+	s.mux.Handle("/", staticHandler())
 
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("Starting web server on %s", addr)
@@ -257,11 +239,7 @@ func (s *Server) handleTerritories(w http.ResponseWriter, r *http.Request, sessi
 		return
 	}
 
-	names := make([]string, 0, len(session.Controller.Game.Board))
-	for name := range session.Controller.Game.Board {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := sortedNames(session.Controller.Game)
 
 	territories := make([]TerritoryDTO, 0, len(names))
 	for _, name := range names {

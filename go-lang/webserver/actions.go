@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"boardgame/engine"
 	"boardgame/game"
@@ -330,24 +331,8 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 		pieceIDs = []int{req.PieceID}
 	}
 
-	// Cargo has no moves of its own -- it goes where its transport goes, or it
-	// unloads. The ordinary pathfinder does not know about holds and would
-	// happily offer a loaded infantry a stroll out of the sea zone (including
-	// onto hostile shores), so loaded pieces skip it entirely and get only the
-	// unload options computed below.
-	anyCargo := false
-	for _, pieceID := range pieceIDs {
-		if session.Controller.Game.IsLoaded(pieceID) {
-			anyCargo = true
-			break
-		}
-	}
-
 	var common map[string]ReachableTerritoryDTO
 	for _, pieceID := range pieceIDs {
-		if anyCargo {
-			break
-		}
 		reachable, err := reachableForPiece(session, pieceID, req.FromTerritory)
 		if err != nil {
 			s.sendError(w, err.Error(), http.StatusBadRequest)
@@ -384,11 +369,13 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 	// Transport options are group-level, not per-piece: land units together in
 	// one territory may board adjacent transports; cargo together aboard
 	// transports in this sea zone may unload onto adjacent friendly shores.
-	reachableDTOs = append(reachableDTOs, transportOptions(session, pieceIDs, req.FromTerritory)...)
+	boarding, boardNotes := transportOptions(session, pieceIDs, req.FromTerritory)
+	reachableDTOs = append(reachableDTOs, boarding...)
 
 	response := map[string]interface{}{
-		"pieceIds":  pieceIDs,
-		"reachable": reachableDTOs,
+		"pieceIds":   pieceIDs,
+		"reachable":  reachableDTOs,
+		"boardNotes": boardNotes,
 	}
 	if len(pieceIDs) == 1 {
 		if piece, exists := session.Controller.Game.Pieces[pieceIDs[0]]; exists {
@@ -408,6 +395,15 @@ func reachableForPiece(session *GameSession, pieceID int, from string) (map[stri
 	piece, exists := session.Controller.Game.Pieces[pieceID]
 	if !exists {
 		return nil, fmt.Errorf("piece %d not found", pieceID)
+	}
+
+	// Cargo has no moves of its own -- it goes where its ship goes, or it comes
+	// ashore. The pathfinder does not know about holds and would happily offer a
+	// loaded infantry a stroll out of the sea zone, hostile shores included, so
+	// a loaded piece has no destinations here at all: unloadOptions answers for
+	// it instead.
+	if session.Controller.Game.IsLoaded(pieceID) {
+		return map[string]ReachableTerritoryDTO{}, nil
 	}
 
 	// Candidate territories in range by terrain alone, then checked against
@@ -440,28 +436,96 @@ func reachableForPiece(session *GameSession, pieceID int, from string) (map[stri
 			continue // not actually reachable under the movement rules
 		}
 
-		// An aircraft can fly to any sea zone; whether it may STOP there is a
-		// carrier-slot question the pathfinder defers to the controller.
-		if piece.Terrain == models.Air && moveType == game.NoncombatMove &&
-			territory.Terrain == models.Water &&
-			!session.Controller.CarrierSlotFree(piece, territory, player) {
-			continue
+		// An aircraft may fly OVER any sea zone; whether it may STOP in one is
+		// a carrier-deck question the pathfinder defers to the controller.
+		// Nothing else about open water is a destination: a plane that ends the
+		// turn over it is lost, so a zone with no free deck is offered only
+		// during a combat move, and then only if there is a fleet to attack.
+		carrier := false
+		if piece.Terrain == models.Air && territory.Terrain == models.Water {
+			carrier = session.Controller.CarrierSlotFree(piece, territory, player)
+			if !carrier && !(moveType == game.CombatMove &&
+				hostileForces(session.Controller.Game, territory, player)) {
+				continue
+			}
 		}
 
-		isAttack := false
-		if currentPhase == models.CombatMovePhase && territory.Owner.Name != player.Name {
-			isAttack = len(territory.Pieces) > 0
-		}
+		// "Attack" means somebody there will shoot back. Judging it by the
+		// territory's nominal owner called every sea zone hostile -- nobody
+		// holds an ocean, so its owner is Neutral -- and painted a fighter's
+		// own carrier red as if landing on it were a battle.
+		isAttack := currentPhase == models.CombatMovePhase &&
+			hostileForces(session.Controller.Game, territory, player)
 
-		out[territory.Name] = ReachableTerritoryDTO{
+		dto := ReachableTerritoryDTO{
 			Name:      territory.Name,
 			Distance:  distance,
 			Owner:     territory.Owner.Name,
 			IsAttack:  isAttack,
 			UnitCount: len(territory.Pieces),
 		}
+		if carrier && !isAttack {
+			dto.IsCarrier = true
+			dto.Note = carrierDescription(session, territory, player, piece)
+		}
+		out[territory.Name] = dto
 	}
 	return out, nil
+}
+
+// hostileForces reports whether a territory holds pieces belonging to a power
+// this player is at war with. Ownership of the ground says nothing here: a sea
+// zone belongs to nobody, and an allied territory may hold an enemy raider.
+func hostileForces(g *models.Game, t *models.Territory, player *models.Player) bool {
+	for _, id := range t.Pieces {
+		piece := g.Pieces[id]
+		if piece == nil || piece.Owner == nil || piece.Owner == player {
+			continue
+		}
+		if player.Side == "" || piece.Owner.Side != player.Side {
+			return true
+		}
+	}
+	return false
+}
+
+// carrierDescription names the decks waiting in a sea zone, for the dialog
+// that asks the player to confirm a landing. The seat count is the controller's
+// own, so it already discounts decks sailing away and seats promised to other
+// aircraft this phase.
+func carrierDescription(session *GameSession, zone *models.Territory, player *models.Player, aircraft *models.Piece) string {
+	carriers := carriersFor(session.Controller.Game, zone, player, aircraft.Name)
+	if len(carriers) == 0 {
+		return ""
+	}
+	// Reads as the object of a sentence -- "will land on the carrier in the
+	// North Sea" -- so it carries no leading count when there is only one.
+	noun := "carrier"
+	if len(carriers) > 1 {
+		noun = fmt.Sprintf("%d carriers", len(carriers))
+	}
+	seats := session.Controller.CarrierSeatsFree(aircraft, zone, player)
+	return fmt.Sprintf("%s in %s — %s free",
+		noun, zone.Name, plural(seats, "deck space", "deck spaces"))
+}
+
+// carriersFor lists the friendly ships in a zone whose decks take this kind of
+// aircraft, whether or not they still have room.
+func carriersFor(g *models.Game, zone *models.Territory, player *models.Player, aircraft string) []*models.Piece {
+	var out []*models.Piece
+	for _, id := range zone.Pieces {
+		ship := g.Pieces[id]
+		if ship == nil || ship.Owner == nil || ship.Capacity == 0 {
+			continue
+		}
+		if ship.Owner != player && (player.Side == "" || ship.Owner.Side != player.Side) {
+			continue
+		}
+		if canCarry(ship, aircraft) {
+			out = append(out, ship)
+		}
+	}
+	return out
 }
 
 // transcriptLines renders a turn's transcript for a particular viewer. A
@@ -542,48 +606,165 @@ func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, se
 //     adjacent shore: immediately if the shore is friendly, or as a booked
 //     amphibious assault (executed with the combat moves) if it is hostile.
 //     See unloadOptions for the split.
-func transportOptions(session *GameSession, pieceIDs []int, from string) []ReachableTerritoryDTO {
+//
+// It also returns the reasons a nearby sea zone was NOT offered as a boarding
+// point. Silence is the worst answer here: the picker starts with the whole
+// stack selected, one transport holds four, and aircraft cannot board at all,
+// so the common first attempt at an invasion is a group that fits nowhere.
+// Without a reason the sea zone simply fails to light up and the player is
+// left to guess that the rule exists.
+func transportOptions(session *GameSession, pieceIDs []int, from string) ([]ReachableTerritoryDTO, []string) {
 	g := session.Controller.Game
 	player := g.Players[session.HumanPlayer]
 	fromTerr, ok := g.Board[from]
 	if !ok || player == nil || len(pieceIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	pieces := make([]*models.Piece, 0, len(pieceIDs))
-	cargoCount := 0
+	cargoCount, airCount := 0, 0
 	for _, id := range pieceIDs {
 		piece, ok := g.Pieces[id]
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		pieces = append(pieces, piece)
 		if g.IsLoaded(id) {
 			cargoCount++
 		}
+		if piece.Terrain == models.Air {
+			airCount++
+		}
 	}
 
 	switch {
 	case cargoCount == len(pieces):
-		return unloadOptions(session, g, player, fromTerr, pieceIDs)
-	case cargoCount == 0 && fromTerr.Terrain != models.Water:
-		return boardOptions(g, player, fromTerr, pieces)
-	default:
+		return unloadOptions(session, g, player, fromTerr, pieceIDs), nil
+	case cargoCount > 0:
 		// A mix of cargo and free units has no shared destination.
-		return nil
+		return nil, []string{"Units aboard transports and units ashore cannot " +
+			"move together — pick one group or the other."}
+	case airCount == len(pieces):
+		// Aircraft want decks, not holds. Their sea destinations come from the
+		// reachability sweep, marked as carrier landings; all that is owed here
+		// is an explanation when a nearby deck turns them away.
+		return nil, carrierNotes(session, g, player, fromTerr, pieces)
+	case fromTerr.Terrain == models.Water:
+		return nil, nil // ships at sea have no transport business of their own
+	default:
+		return boardOptions(g, player, fromTerr, pieces)
 	}
 }
 
+// carrierNotes explains why an aircraft group in range of a friendly carrier
+// was not offered its sea zone. Without this the zone simply fails to light up
+// and the player, who can plainly see a carrier sitting there, is left to
+// conclude the interface is broken -- and then loses the plane at the end of
+// the turn to a rule nobody stated.
+func carrierNotes(session *GameSession, g *models.Game, player *models.Player, fromTerr *models.Territory, group []*models.Piece) []string {
+	moveType := game.NoncombatMove
+	if g.CurrentPhase == models.CombatMovePhase {
+		moveType = game.CombatMove
+	}
+
+	// One aircraft speaks for the group. The picker offers a whole stack at
+	// once and the destinations it gets are the intersection, so a refusal for
+	// the first is a refusal for all of them; a list of near-identical
+	// sentences would only bury the answer.
+	aircraft := group[0]
+	remaining := session.Controller.MoveTracker.Remaining(aircraft.ID, int(aircraft.Movement))
+
+	var notes []string
+	for _, name := range sortedNames(g) {
+		zone := g.Board[name]
+		// A zone with no flight deck of ours in it is most of the ocean, and
+		// remarking on each one would drown the answer the player needs.
+		if zone.Terrain != models.Water || !anyFlightDeck(g, zone, player) {
+			continue
+		}
+
+		distance, _, err := game.CalculateMovementPathForPiece(
+			g, aircraft, fromTerr.Name, zone.Name, player, moveType)
+		if err != nil || distance == 0 || distance > remaining {
+			continue // out of range: not a refusal, just far away
+		}
+
+		switch {
+		case len(carriersFor(g, zone, player, aircraft.Name)) == 0:
+			notes = append(notes, fmt.Sprintf(
+				"%s: no carrier there has a deck for a %s.", zone.Name, aircraft.Name))
+		case session.Controller.CarrierSeatsFree(aircraft, zone, player) == 0:
+			notes = append(notes, fmt.Sprintf(
+				"%s: every deck there is spoken for — cancel a landing, or send the %s elsewhere.",
+				zone.Name, aircraft.Name))
+		}
+	}
+	return notes
+}
+
+// anyFlightDeck reports whether a zone holds a friendly ship that carries
+// aircraft of any kind. A transport is not one: its hold takes troops, and a
+// player who parked a fighter over it is owed no note about carriers.
+func anyFlightDeck(g *models.Game, zone *models.Territory, player *models.Player) bool {
+	for _, id := range zone.Pieces {
+		ship := g.Pieces[id]
+		if ship == nil || ship.Owner == nil || ship.Capacity == 0 {
+			continue
+		}
+		if ship.Owner != player && (player.Side == "" || ship.Owner.Side != player.Side) {
+			continue
+		}
+		for _, kind := range ship.CanCarry {
+			if template, ok := g.GlobalPieceTemplates[kind]; ok && template.Terrain == models.Air {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sortedNames keeps the notes in a stable order; Go's map iteration is not.
+func sortedNames(g *models.Game) []string {
+	names := make([]string, 0, len(g.Board))
+	for name := range g.Board {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // boardOptions: adjacent sea zones whose friendly transports can take the
-// whole group.
-func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territory, group []*models.Piece) []ReachableTerritoryDTO {
-	for _, piece := range group {
-		if piece.Terrain != models.Land {
-			return nil
+// whole group, plus a plain-English reason for each zone that has transports
+// but was refused.
+func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territory, group []*models.Piece) ([]ReachableTerritoryDTO, []string) {
+	// Whether to explain anything at all: a group with no sea zone next to it
+	// was never trying to board, and saying so would be noise on every inland
+	// move. Only the coast gets an explanation.
+	coastal := false
+	for _, zone := range fromTerr.ConnectedTo {
+		if zone.Terrain == models.Water {
+			coastal = true
+			break
 		}
 	}
 
+	air := 0
+	for _, piece := range group {
+		if piece.Terrain != models.Land {
+			air++
+		}
+	}
+	if air > 0 {
+		if !coastal {
+			return nil, nil
+		}
+		return nil, []string{fmt.Sprintf(
+			"Only land units can board transports — leave the %s out of the group.",
+			plural(air, "aircraft", "aircraft"))}
+	}
+
 	var out []ReachableTerritoryDTO
+	var notes []string
 	for _, zone := range fromTerr.ConnectedTo {
 		if zone.Terrain != models.Water {
 			continue
@@ -593,6 +774,7 @@ func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territ
 		// rule ValidateLoad enforces per piece).
 		hostile := false
 		freeSlots := make(map[*models.Piece]int)
+		room := 0
 		for _, pieceID := range zone.Pieces {
 			ship := g.Pieces[pieceID]
 			if ship == nil || ship.Owner == nil {
@@ -603,10 +785,47 @@ func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territ
 				break
 			}
 			if ship.Owner == player && ship.Capacity > 0 {
-				freeSlots[ship] = int(ship.Capacity) - len(ship.Holding)
+				free := int(ship.Capacity) - len(ship.Holding)
+				freeSlots[ship] = free
+				room += free
 			}
 		}
-		if hostile || len(freeSlots) == 0 {
+		if hostile {
+			notes = append(notes, fmt.Sprintf(
+				"%s: an enemy fleet is there — you cannot load under its guns.", zone.Name))
+			continue
+		}
+		if len(freeSlots) == 0 {
+			// No transports of yours at all is the ordinary state of most sea
+			// zones, and not worth remarking on.
+			continue
+		}
+		if room == 0 {
+			notes = append(notes, fmt.Sprintf(
+				"%s: your transports there are already full.", zone.Name))
+			continue
+		}
+
+		// A unit type no hull in the zone may carry (an AA gun, say) is a
+		// different problem from one too many infantry, and the player fixes
+		// it differently. Report it as itself.
+		var refused []string
+		for _, piece := range group {
+			carriable := false
+			for ship := range freeSlots {
+				if canCarry(ship, piece.Name) {
+					carriable = true
+					break
+				}
+			}
+			if !carriable && !contains(refused, piece.Name) {
+				refused = append(refused, piece.Name)
+			}
+		}
+		if len(refused) > 0 {
+			notes = append(notes, fmt.Sprintf(
+				"%s: your transports there cannot carry %s.",
+				zone.Name, strings.Join(refused, " or ")))
 			continue
 		}
 
@@ -629,6 +848,12 @@ func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territ
 			}
 		}
 		if !fits {
+			// Room is counted in slots, so the shortfall is stated in the terms
+			// the player must act on: take fewer units, or bring more hulls.
+			notes = append(notes, fmt.Sprintf(
+				"%s: your transports there have room for %s, and you picked %d — "+
+					"select fewer units.",
+				zone.Name, plural(room, "more unit", "more units"), len(group)))
 			continue
 		}
 
@@ -640,7 +865,28 @@ func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territ
 			IsBoard:   true,
 		})
 	}
-	return out
+
+	// A zone that works needs no apology for the ones that do not.
+	if len(out) > 0 {
+		return out, nil
+	}
+	return nil, notes
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // unloadOptions: the shores this cargo can come out on.

@@ -604,13 +604,19 @@ func (gc *GameController) CancelMove(pieceID int) error {
 
 // CarrierSlotFree reports whether a sea zone will still have a carrier slot
 // for this aircraft after every planned move this phase is accounted for.
+func (gc *GameController) CarrierSlotFree(aircraft *models.Piece, zone *models.Territory, player *models.Player) bool {
+	return gc.CarrierSeatsFree(aircraft, zone, player) > 0
+}
+
+// CarrierSeatsFree counts the deck spaces a sea zone will still have for this
+// kind of aircraft once every planned move this phase is accounted for.
 //
-// Slots come from friendly carriers that will be in the zone when moves
+// Seats come from friendly carriers that will be in the zone when moves
 // execute: those already there and not planned to leave, plus those planned to
 // arrive. Occupants are the friendly aircraft already parked there plus every
 // aircraft already planned to land there. Cancelling a planned move frees its
-// slot again automatically, because this recounts from the tracker each time.
-func (gc *GameController) CarrierSlotFree(aircraft *models.Piece, zone *models.Territory, player *models.Player) bool {
+// seat again automatically, because this recounts from the tracker each time.
+func (gc *GameController) CarrierSeatsFree(aircraft *models.Piece, zone *models.Territory, player *models.Player) int {
 	leaving := make(map[int]bool)
 	arriving := make(map[int]bool)
 	bookings := 0
@@ -668,7 +674,10 @@ func (gc *GameController) CarrierSlotFree(aircraft *models.Piece, zone *models.T
 		slots += slotsOn(gc.Game.Pieces[id])
 	}
 
-	return occupants+bookings < slots
+	if free := slots - occupants - bookings; free > 0 {
+		return free
+	}
+	return 0
 }
 
 // ExecuteCombatMoves executes all combat moves and sets up battles

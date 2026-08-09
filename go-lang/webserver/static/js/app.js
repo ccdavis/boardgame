@@ -40,6 +40,15 @@ function ownerClass(owner) {
     return 'owner-' + String(owner || 'neutral').toLowerCase().replace(/\s+/g, '-');
 }
 
+/** The stored interface theme. Dark is the default: the board is dark. */
+function readStoredTheme() {
+    try {
+        return localStorage.getItem('aa-theme') === 'light' ? 'light' : 'dark';
+    } catch (e) {
+        return 'dark';   // private browsing, or storage disabled
+    }
+}
+
 /** Build an SVG path from the layout's polygons/rings/points structure. */
 function pathFromPolygons(polygons) {
     let d = '';
@@ -109,6 +118,11 @@ const app = createApp({
                 playerName: 'Germany'
             },
 
+            // Interface theme, chosen on the setup screen and remembered. The
+            // <head> script has already applied the stored value to the root
+            // element; this reads the same key so the toggle shows the truth.
+            theme: readStoredTheme(),
+
             // Territories
             territories: [],
             selectedTerritory: null,
@@ -142,16 +156,26 @@ const app = createApp({
             // a group of units is waiting for a destination click.
             ui: {
                 mode: 'idle',
+                action: 'move',        // 'move' or 'unload' -- wording, not rules
                 source: null,          // territory the picked units move from
                 picked: [],            // piece IDs chosen in the unit picker
                 pickedLabel: '',       // human summary, e.g. "3 infantry, 1 armor"
                 eligibleDest: {},      // name -> ReachableTerritoryDTO
+                boardNotes: [],        // why a nearby sea zone refuses this group
                 flash: null            // territory flashing red after a bad click
             },
             flashTimer: null,
 
             // Unit picker dialog: one row per unit type with a take-count.
-            unitPicker: { territory: '', groups: [] },
+            // In a sea zone the rows are hulls rather than types: a loaded ship
+            // gets a row of its own, saying what it carries and offering to put
+            // it ashore. Cargo is never a row -- it sails with its ship.
+            unitPicker: { territory: '', isSea: false, groups: [] },
+
+            // In-page confirmation. Answered through answerConfirm, which
+            // resolves the promise askConfirm handed out.
+            confirmBox: { title: '', body: '', okLabel: 'OK' },
+            confirmResolver: null,
 
             // Purchase dialog is bound to the factory that was clicked, and
             // every unit bought there is earmarked for it so Mobilize can be
@@ -250,7 +274,9 @@ const app = createApp({
             if (this.ui.mode === 'pickDest') {
                 for (const [name, dest] of Object.entries(this.ui.eligibleDest)) {
                     add(name, dest.isAttack ? 'hl dest attack'
+                        : dest.isCarrier ? 'hl dest carrier'
                         : dest.isBoard ? 'hl dest board'
+                        : dest.isUnload ? 'hl dest unload'
                         : 'hl dest');
                 }
                 if (this.ui.source) add(this.ui.source, 'hl source');
@@ -326,9 +352,18 @@ const app = createApp({
             const dests = Object.values(this.ui.eligibleDest);
             if (dests.some(d => d.isAttack)) kinds.push('red = attack');
             if (dests.some(d => d.isBoard)) kinds.push('blue = board transport');
+            if (dests.some(d => d.isCarrier)) kinds.push('cyan = land on carrier');
+            if (dests.some(d => d.isUnload && !d.isAttack)) kinds.push('amber = put ashore');
             const legend = kinds.length ? ` (${kinds.join(', ')})` : '';
-            return `Moving ${this.ui.pickedLabel} from ${this.ui.source} — ` +
-                   `click a highlighted destination${legend}, Esc cancels`;
+            // When land destinations exist but no sea zone does, the player who
+            // meant to load transports gets a banner that answers the question
+            // they are about to ask, without a dialog in the way of a move they
+            // may have intended all along.
+            const why = this.ui.boardNotes.length ? `  •  ${this.ui.boardNotes[0]}` : '';
+            const what = this.ui.action === 'unload'
+                ? `Landing ${this.ui.pickedLabel} in ${this.ui.source}`
+                : `Moving ${this.ui.pickedLabel} from ${this.ui.source}`;
+            return `${what} — click a highlighted destination${legend}, Esc cancels${why}`;
         },
 
         /** Every earmarked purchase that is still legal to place as planned. */
@@ -518,6 +553,20 @@ const app = createApp({
 
         closeNotice() {
             document.getElementById('noticeModal').close();
+        },
+
+        /**
+         * Choose the interface theme. Applied to the root element immediately,
+         * so the setup screen previews the choice, and remembered for next
+         * time. The map's own colours are unaffected in either theme -- they
+         * are the board, not decoration.
+         */
+        setTheme(theme) {
+            this.theme = theme === 'light' ? 'light' : 'dark';
+            document.documentElement.dataset.theme = this.theme;
+            try {
+                localStorage.setItem('aa-theme', this.theme);
+            } catch (e) { /* nothing to do: the choice holds for this session */ }
         },
 
         /**
@@ -739,18 +788,27 @@ const app = createApp({
 
         cancelTargeting() {
             this.ui.mode = 'idle';
+            this.ui.action = 'move';
             this.ui.source = null;
             this.ui.picked = [];
             this.ui.pickedLabel = '';
             this.ui.eligibleDest = {};
+            this.ui.boardNotes = [];
         },
 
         // --- Unit picker ----------------------------------------------------
 
         /**
          * Open the unit picker for a territory: the player's movable units
-         * there, one row per type, all selected to start (moving the whole
-         * stack is the common case; trimming it down is the exception).
+         * there, all selected to start (moving the whole stack is the common
+         * case; trimming it down is the exception).
+         *
+         * Land rows are one per unit type. A sea zone is different, because a
+         * loaded ship is not interchangeable with an identical empty one: it
+         * gets a row to itself showing its cargo and an Unload button. Cargo is
+         * never offered as a row of its own -- it goes where its ship goes,
+         * which is exactly why the old picker (which listed cargo as movable
+         * units) was so hard to read.
          */
         async openUnitPicker(territory) {
             let details;
@@ -762,37 +820,90 @@ const app = createApp({
             }
 
             const me = this.gameState.humanPlayer;
-            const groups = {};
-            for (const unit of (details.units || [])) {
-                if (unit.owner !== me || !unit.canMove || unit.movement <= 0) continue;
-                // Cargo aboard a transport groups separately from free units of
-                // the same type: its destinations are shores, not roads.
-                const key = unit.name + (unit.aboard ? '|cargo' : '');
-                if (!groups[key]) {
-                    groups[key] = {
-                        type: unit.name,
-                        cargo: !!unit.aboard,
-                        attack: unit.attack, defend: unit.defend, movement: unit.movement,
-                        ids: [], take: 0
-                    };
-                }
-                groups[key].ids.push(unit.id);
+            const mine = (details.units || []).filter(u => u.owner === me);
+
+            // Cargo indexed by the hull carrying it.
+            const cargoByShip = {};
+            for (const unit of mine) {
+                if (!unit.aboard) continue;
+                (cargoByShip[unit.aboard] = cargoByShip[unit.aboard] || []).push(unit);
             }
 
-            const list = Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
-            if (list.length === 0) {
-                this.showNotice('No movable units',
+            // Is there a shore to unload onto at all? The geometry knows which
+            // neighbours are sea, so the Unload button appears only where an
+            // unload could conceivably happen.
+            const hasShore = (details.connectedTo || []).some(name => {
+                const geo = MAP.byName[name];
+                return geo && !geo.isSea;
+            });
+
+            const rows = [];
+            const byType = {};
+            for (const unit of mine) {
+                if (unit.aboard) continue;              // sails with its ship
+                const cargo = cargoByShip[unit.id] || [];
+                const canTake = unit.canMove && unit.movement > 0;
+
+                if (cargo.length > 0) {
+                    // A ship already booked to sail still appears: its cargo can
+                    // be sent ashore at the far end, which is how an amphibious
+                    // assault is planned. Its voyage also counts towards having
+                    // a shore to land on, since it may be crossing open ocean
+                    // now and reaching a coast this phase.
+                    const movable = cargo.filter(c => c.canMove);
+                    const sailing = this.plannedMoves.some(m => m.pieceId === unit.id);
+                    rows.push({
+                        key: 'hull-' + unit.id,
+                        type: unit.name,
+                        attack: unit.attack, defend: unit.defend, movement: unit.movement,
+                        ids: [unit.id],
+                        take: canTake ? 1 : 0,
+                        canTake,
+                        cargoLabel: this.countSummary(cargo.map(c => c.name)),
+                        cargoIds: movable.map(c => c.id),
+                        canUnload: movable.length > 0 && (hasShore || sailing)
+                    });
+                    continue;
+                }
+
+                if (!canTake) continue;
+                if (!byType[unit.name]) {
+                    byType[unit.name] = {
+                        key: unit.name,
+                        type: unit.name,
+                        attack: unit.attack, defend: unit.defend, movement: unit.movement,
+                        ids: [], take: 0, canTake: true,
+                        cargoLabel: '', cargoIds: [], canUnload: false
+                    };
+                    rows.push(byType[unit.name]);
+                }
+                byType[unit.name].ids.push(unit.id);
+            }
+
+            rows.sort((a, b) => a.type.localeCompare(b.type) || a.key.localeCompare(b.key));
+            if (rows.length === 0) {
+                this.showNotice('Nothing to move',
                     `No units in ${territory} can still move this phase.`);
                 return;
             }
-            for (const g of list) g.take = g.ids.length;
+            for (const row of rows) {
+                if (!row.cargoLabel) row.take = row.ids.length;
+            }
 
-            this.unitPicker = { territory, groups: list };
+            const geo = MAP.byName[territory];
+            this.unitPicker = { territory, isSea: !!(geo && geo.isSea), groups: rows };
             document.getElementById('unitPickerModal').showModal();
         },
 
         adjustTake(group, delta) {
             group.take = Math.max(0, Math.min(group.ids.length, group.take + delta));
+        },
+
+        /** "2 infantry, 1 armor" from a list of unit names. */
+        countSummary(names) {
+            const counts = {};
+            for (const name of names) counts[name] = (counts[name] || 0) + 1;
+            return Object.entries(counts).map(([name, n]) => `${n} ${name}`).join(', ');
         },
 
         closeUnitPicker() {
@@ -806,28 +917,40 @@ const app = createApp({
         async confirmUnitPicker() {
             const picked = [];
             const labelParts = [];
-            let cargoTaken = 0, freeTaken = 0;
             for (const g of this.unitPicker.groups) {
                 if (g.take > 0) {
                     picked.push(...g.ids.slice(0, g.take));
-                    labelParts.push(`${g.take} ${g.type}${g.cargo ? ' (aboard)' : ''}`);
-                    if (g.cargo) cargoTaken += g.take; else freeTaken += g.take;
+                    labelParts.push(`${g.take} ${g.type}` +
+                        (g.cargoLabel ? ` (carrying ${g.cargoLabel})` : ''));
                 }
             }
             if (picked.length === 0) return;
-            // Cargo unloads onto shores; ships sail to sea zones. One click
-            // cannot answer both, so the two are moved separately.
-            if (cargoTaken > 0 && freeTaken > 0) {
-                this.showNotice('Move these separately',
-                    'Units aboard transports unload onto land, while ships move ' +
-                    'between sea zones — pick one group or the other, not both.');
-                return;
-            }
             this.closeUnitPicker();
+            await this.beginTargeting(picked, this.unitPicker.territory, labelParts.join(', '));
+        },
 
+        /**
+         * Send a loaded ship's cargo ashore: ask where it may land, then let the
+         * player click the shore. In the combat phase those shores include enemy
+         * ones -- that is an amphibious assault, booked with the other combat
+         * moves. In noncombat only friendly ground is offered.
+         */
+        async startUnload(group) {
+            if (!group.cargoIds.length) return;
+            this.closeUnitPicker();
+            await this.beginTargeting(group.cargoIds, this.unitPicker.territory,
+                `${group.cargoLabel} from the ${group.type}`, 'unload');
+        },
+
+        /**
+         * Ask the server where this group can go and switch to destination
+         * mode. Shared by ordinary moves and unloads: both end in "click a
+         * highlighted territory".
+         */
+        async beginTargeting(picked, source, label, action = 'move') {
             let result;
             try {
-                result = await this.api.getReachableForPieces(picked, this.unitPicker.territory);
+                result = await this.api.getReachableForPieces(picked, source);
             } catch (error) {
                 this.showNotice('Cannot plan that move', error.message);
                 return;
@@ -835,18 +958,47 @@ const app = createApp({
 
             const dests = {};
             for (const dest of (result.reachable || [])) dests[dest.name] = dest;
+            // Why no sea zone lit up. Boarding and carrier landings are refused
+            // for reasons the map cannot show -- a transport holds four, a
+            // carrier's decks may all be spoken for -- so the server sends the
+            // reason and it is shown rather than leaving the player to guess at
+            // a rule and lose the unit to it later.
+            const boardNotes = result.boardNotes || [];
             if (Object.keys(dests).length === 0) {
                 this.showNotice('Nowhere to go',
-                    'No territory is reachable by every unit you selected. ' +
-                    'Try a smaller group — slow units limit the fast ones.');
+                    boardNotes.length
+                        ? boardNotes.join('\n')
+                        : 'No territory is reachable by every unit you selected. ' +
+                          'Try a smaller group — slow units limit the fast ones.');
                 return;
             }
 
             this.ui.mode = 'pickDest';
-            this.ui.source = this.unitPicker.territory;
+            this.ui.action = action;
+            this.ui.source = source;
             this.ui.picked = picked;
-            this.ui.pickedLabel = labelParts.join(', ');
+            this.ui.pickedLabel = label;
             this.ui.eligibleDest = dests;
+            this.ui.boardNotes = boardNotes;
+        },
+
+        /**
+         * Ask the player a yes/no question in-page and resolve to their answer.
+         * Native confirm() is banned here: a browser lets the user suppress it,
+         * after which it silently answers "no" forever.
+         */
+        askConfirm(title, body, okLabel = 'OK') {
+            this.confirmBox = { title, body, okLabel };
+            document.getElementById('confirmModal').showModal();
+            return new Promise(resolve => { this.confirmResolver = resolve; });
+        },
+
+        /** Answer the open confirmation. Esc closes the dialog, which is "no". */
+        answerConfirm(ok) {
+            document.getElementById('confirmModal').close();
+            const resolve = this.confirmResolver;
+            this.confirmResolver = null;
+            if (resolve) resolve(ok);
         },
 
         /**
@@ -859,6 +1011,22 @@ const app = createApp({
             const dest = this.ui.eligibleDest[destination];
             const picked = this.ui.picked.slice();
             const source = this.ui.source;
+            const label = this.ui.pickedLabel;
+
+            // Open water is not somewhere an aircraft can be. Flying to a sea
+            // zone only means anything if there is a deck to come down on, so
+            // say which deck and let the player back out -- the alternative,
+            // silently booking the move, is how a fighter gets lost at the end
+            // of a turn to a rule the player was never shown.
+            if (dest.isCarrier) {
+                const ok = await this.askConfirm('Land on the carrier?',
+                    `${label} will land on the ${dest.note || 'carrier in ' + destination}.\n\n` +
+                    'Aircraft cannot end a turn over open water — anything left ' +
+                    'at sea without a deck is lost.',
+                    'Land on carrier');
+                if (!ok) return;   // targeting stays up; pick somewhere else
+            }
+
             this.cancelTargeting();
 
             try {
@@ -1292,6 +1460,11 @@ const app = createApp({
     },
 
     mounted() {
+        // Belt and braces with the <head> script: if storage threw there, the
+        // root element may carry no theme at all, and the toggle would show a
+        // choice the page is not honouring.
+        this.setTheme(this.theme);
+
         // Esc backs out of destination mode from anywhere.
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.ui.mode === 'pickDest') {

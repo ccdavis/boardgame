@@ -153,6 +153,12 @@ type ReachableTerritoryDTO struct {
 	IsBoard bool `json:"isBoard,omitempty"`
 	// IsUnload: a land territory the selected cargo can be unloaded onto.
 	IsUnload bool `json:"isUnload,omitempty"`
+	// IsCarrier: a sea zone where the selected aircraft can set down on a
+	// friendly carrier's deck. Open water is not a destination -- a plane that
+	// ends the turn over it is lost -- so the browser confirms before booking
+	// the move, and Note says what it will land on.
+	IsCarrier bool   `json:"isCarrier,omitempty"`
+	Note      string `json:"note,omitempty"`
 }
 
 // AvailableUnitDTO represents a unit type that can be purchased

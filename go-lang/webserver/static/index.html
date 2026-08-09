@@ -3,6 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- The map is already a dark theme, and it is a *map*: the colours carry
+         meaning. Dark navy is the ocean, bone is a neutral country, and a
+         browser extension that "helpfully" inverts the page turns the Atlantic
+         white and the sidebar black -- the board becomes a lie about the game.
+         color-scheme declares we have handled dark mode ourselves; the
+         darkreader-lock meta is Dark Reader's documented opt-out, and other
+         inverters honour the first. -->
+    <meta name="color-scheme" content="dark light">
+    <meta name="darkreader-lock">
+
+    <!-- The stored theme is applied before the stylesheet paints. Vue reads the
+         same key when it boots; doing it here as well is what stops a chosen
+         light theme flashing dark for a frame on every load. -->
+    <script>
+        try {
+            document.documentElement.dataset.theme =
+                localStorage.getItem('aa-theme') === 'light' ? 'light' : 'dark';
+        } catch (e) { /* private mode: the dark default stands */ }
+    </script>
+
     <title>Axis & Allies 1942</title>
     <link rel="stylesheet" href="/css/style.css">
     <!-- Vue.js 3 from CDN -->
@@ -31,6 +52,23 @@
                             <option value="USA">United States (Allies)</option>
                             <option value="Italy">Italy (Axis)</option>
                         </select>
+                    </div>
+                    <!-- Theme is chosen before the game starts and remembered,
+                         so the choice is made once rather than every session.
+                         Both buttons apply immediately: the form itself is the
+                         preview. -->
+                    <div class="form-group">
+                        <label id="themeLabel">Theme:</label>
+                        <div class="theme-toggle" role="group" aria-labelledby="themeLabel">
+                            <button type="button" id="themeDark"
+                                    :class="{ on: theme === 'dark' }"
+                                    :aria-pressed="theme === 'dark'"
+                                    @click="setTheme('dark')">Dark</button>
+                            <button type="button" id="themeLight"
+                                    :class="{ on: theme === 'light' }"
+                                    :aria-pressed="theme === 'light'"
+                                    @click="setTheme('light')">Light</button>
+                        </div>
                     </div>
                     <button type="submit" class="btn btn-primary">Start Game</button>
                     <div v-if="error" class="error-message">{{ error }}</div>
@@ -464,28 +502,65 @@
             </div>
         </dialog>
 
-        <!-- Unit Picker: which pieces move from the clicked territory. -->
+        <!-- Confirmation: a question with two answers, in-page for the same
+             reason the notice dialog is -- a suppressed native confirm()
+             answers "no" silently, and the player never learns why. -->
+        <dialog id="confirmModal" class="modal notice-modal" @close="answerConfirm(false)">
+            <div class="modal-content">
+                <h2>{{ confirmBox.title }}</h2>
+                <pre class="notice-body">{{ confirmBox.body }}</pre>
+                <div class="modal-actions">
+                    <button @click="answerConfirm(true)" class="btn btn-primary">
+                        {{ confirmBox.okLabel }}
+                    </button>
+                    <button @click="answerConfirm(false)" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Unit Picker: which pieces move from the clicked territory. In a sea
+             zone the rows are hulls: a loaded ship says what it carries and
+             offers to put it ashore, and cargo never appears on its own -- it
+             sails with its ship. -->
         <dialog id="unitPickerModal" class="modal">
             <div class="modal-content">
-                <h2>Move units from {{ unitPicker.territory }}</h2>
-                <p class="modal-sub">Choose how many of each, then pick a destination on the map.</p>
+                <h2>
+                    {{ unitPicker.isSea ? 'Ships in' : 'Move units from' }}
+                    {{ unitPicker.territory }}
+                </h2>
+                <p class="modal-sub" v-if="unitPicker.isSea">
+                    Cargo sails with its ship — move the ship and it goes too.
+                    Use Put ashore to land it.
+                </p>
+                <p class="modal-sub" v-else>
+                    Choose how many of each, then pick a destination on the map.
+                </p>
                 <ul class="picker-list">
-                    <li v-for="group in unitPicker.groups" :key="group.type" class="picker-row">
+                    <li v-for="group in unitPicker.groups" :key="group.key" class="picker-row">
                         <span class="picker-name">
                             <strong>{{ group.type }}</strong>
-                            <span v-if="group.cargo" class="earmark-tag">aboard transport</span>
+                            <span v-if="group.cargoLabel" class="cargo-tag">
+                                carrying {{ group.cargoLabel }}
+                            </span>
+                            <span v-if="!group.canTake" class="earmark-tag">already moving</span>
                             <span class="unit-stats">A:{{ group.attack }} D:{{ group.defend }} M:{{ group.movement }}</span>
                         </span>
                         <span class="picker-controls">
-                            <button @click="adjustTake(group, -1)" class="btn btn-sm"
-                                    :disabled="group.take === 0">&minus;</button>
-                            <span class="picker-count">{{ group.take }} / {{ group.ids.length }}</span>
-                            <button @click="adjustTake(group, 1)" class="btn btn-sm"
-                                    :disabled="group.take === group.ids.length">+</button>
-                            <button @click="group.take = 0" class="btn btn-sm"
-                                    :disabled="group.take === 0">None</button>
-                            <button @click="group.take = group.ids.length" class="btn btn-sm"
-                                    :disabled="group.take === group.ids.length">All</button>
+                            <button v-if="group.canUnload" @click="startUnload(group)"
+                                    class="btn btn-sm btn-unload">Put ashore…</button>
+                            <template v-if="group.canTake">
+                                <button @click="adjustTake(group, -1)" class="btn btn-sm"
+                                        :disabled="group.take === 0">&minus;</button>
+                                <span class="picker-count">{{ group.take }} / {{ group.ids.length }}</span>
+                                <button @click="adjustTake(group, 1)" class="btn btn-sm"
+                                        :disabled="group.take === group.ids.length">+</button>
+                                <button @click="group.take = 0" class="btn btn-sm"
+                                        v-if="group.ids.length > 1"
+                                        :disabled="group.take === 0">None</button>
+                                <button @click="group.take = group.ids.length" class="btn btn-sm"
+                                        v-if="group.ids.length > 1"
+                                        :disabled="group.take === group.ids.length">All</button>
+                            </template>
                         </span>
                     </li>
                 </ul>

@@ -270,6 +270,224 @@ func TestMap_OwnershipColoursFollowGameState(t *testing.T) {
 	t.Logf("checked %v territories", result["checked"])
 }
 
+// TestMap_DialogsFollowTheChosenTheme measures a real dialog in a real
+// browser, in both themes. A <dialog> takes its background from the user
+// agent unless told otherwise, which is how every purchase and battle report
+// used to arrive as a white page over a dark board.
+func TestMap_DialogsFollowTheChosenTheme(t *testing.T) {
+	skipIfNotBrowserTest(t)
+
+	_, baseURL := startTestServer(t)
+	page := startGameInBrowser(t, baseURL)
+	defer page.Close()
+
+	// Open a dialog that exists in every phase, and read what it is painted.
+	probe := `(theme) => {
+		document.documentElement.dataset.theme = theme;
+		const dlg = document.getElementById('noticeModal');
+		if (!dlg.open) dlg.showModal();
+		const lum = (css) => {
+			const [r, g, b] = css.match(/[\d.]+/g).slice(0, 3).map(Number);
+			const chan = (c) => {
+				c /= 255;
+				return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+			};
+			return 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b);
+		};
+		const style = getComputedStyle(dlg);
+		const body = getComputedStyle(document.body);
+		const out = {
+			dialogBg: lum(style.backgroundColor),
+			dialogText: lum(style.color),
+			bodyBg: lum(body.backgroundColor),
+			sea: lum(getComputedStyle(document.querySelector('path.kind-sea')).fill)
+		};
+		dlg.close();
+		return out;
+	}`
+
+	read := func(theme string) map[string]any {
+		t.Helper()
+		raw, err := page.Evaluate(probe, theme)
+		if err != nil {
+			t.Fatalf("probing the %s theme: %v", theme, err)
+		}
+		result, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("expected an object from the probe, got %T", raw)
+		}
+		return result
+	}
+	// A luminance that lands exactly on 0 or 1 crosses the bridge as an int.
+	lum := func(m map[string]any, key string) float64 {
+		switch v := m[key].(type) {
+		case float64:
+			return v
+		case int:
+			return float64(v)
+		default:
+			t.Fatalf("%s came back as %T", key, m[key])
+			return 0
+		}
+	}
+
+	dark := read("dark")
+	if bg := lum(dark, "dialogBg"); bg > 0.25 {
+		t.Errorf("dark theme: dialog background luminance %.2f, wanted a dark surface", bg)
+	}
+	if fg := lum(dark, "dialogText"); fg < 0.5 {
+		t.Errorf("dark theme: dialog text luminance %.2f is not light enough to read on it", fg)
+	}
+	if bg := lum(dark, "bodyBg"); bg > 0.25 {
+		t.Errorf("dark theme: page background luminance %.2f, wanted a dark page", bg)
+	}
+
+	light := read("light")
+	if bg := lum(light, "dialogBg"); bg < 0.5 {
+		t.Errorf("light theme: dialog background luminance %.2f, wanted a light surface", bg)
+	}
+	if fg := lum(light, "dialogText"); fg > 0.35 {
+		t.Errorf("light theme: dialog text luminance %.2f is not dark enough to read on it", fg)
+	}
+
+	// The board is not decoration: the ocean stays navy whichever theme is on,
+	// or the map would mean something different depending on a preference.
+	if darkSea, lightSea := lum(dark, "sea"), lum(light, "sea"); darkSea != lightSea {
+		t.Errorf("the ocean changed with the theme (%.3f vs %.3f); the map must not", darkSea, lightSea)
+	}
+}
+
+// TestMap_ThemeToggleIsRememberedAcrossLoads drives the setup-screen control
+// the way a player does and checks the choice survives a reload.
+func TestMap_ThemeToggleIsRememberedAcrossLoads(t *testing.T) {
+	skipIfNotBrowserTest(t)
+
+	_, baseURL := startTestServer(t)
+	page, err := browser.NewPage(playwright.BrowserNewPageOptions{
+		Viewport: &playwright.Size{Width: 1280, Height: 800},
+	})
+	if err != nil {
+		t.Fatalf("creating page: %v", err)
+	}
+	defer page.Close()
+
+	if _, err := page.Goto(baseURL, playwright.PageGotoOptions{
+		Timeout: playwright.Float(15000),
+	}); err != nil {
+		t.Fatalf("navigating: %v", err)
+	}
+
+	themeOf := func() string {
+		raw, err := page.Evaluate(`() => document.documentElement.dataset.theme || ''`)
+		if err != nil {
+			t.Fatalf("reading the theme: %v", err)
+		}
+		return raw.(string)
+	}
+
+	if got := themeOf(); got != "dark" {
+		t.Errorf("a first visit should open dark, got %q", got)
+	}
+
+	if err := page.Click("#themeLight"); err != nil {
+		t.Fatalf("clicking Light: %v", err)
+	}
+	if got := themeOf(); got != "light" {
+		t.Fatalf("clicking Light left the theme %q", got)
+	}
+
+	if _, err := page.Reload(); err != nil {
+		t.Fatalf("reloading: %v", err)
+	}
+	if _, err := page.WaitForSelector("#themeLight", playwright.PageWaitForSelectorOptions{
+		Timeout: playwright.Float(10000),
+	}); err != nil {
+		t.Fatalf("setup screen never came back: %v", err)
+	}
+	if got := themeOf(); got != "light" {
+		t.Errorf("the chosen theme did not survive a reload, got %q", got)
+	}
+
+	// And back again, so the toggle is a toggle rather than a one-way door.
+	if err := page.Click("#themeDark"); err != nil {
+		t.Fatalf("clicking Dark: %v", err)
+	}
+	if got := themeOf(); got != "dark" {
+		t.Errorf("clicking Dark left the theme %q", got)
+	}
+}
+
+// TestMap_OceanRendersDark pins the water as actually painted in a browser,
+// not as written in the stylesheet. Every sea zone must come out dark enough
+// for the light zone borders, italic sea names and fleet badges drawn on top
+// of it to read -- the arrangement that stops the map looking like a page of
+// white paper with countries on it.
+func TestMap_OceanRendersDark(t *testing.T) {
+	skipIfNotBrowserTest(t)
+
+	_, baseURL := startTestServer(t)
+	page := startGameInBrowser(t, baseURL)
+	defer page.Close()
+
+	raw, err := page.Evaluate(`() => {
+		// Relative luminance, the WCAG definition.
+		const lum = (css) => {
+			const [r, g, b] = css.match(/[\d.]+/g).slice(0, 3).map(Number);
+			const chan = (c) => {
+				c /= 255;
+				return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+			};
+			return 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b);
+		};
+
+		const pale = [];
+		const seas = document.querySelectorAll('path.kind-sea');
+		for (const path of seas) {
+			const fill = getComputedStyle(path).fill;
+			if (lum(fill) > 0.25) pale.push(path.dataset.territory + ': ' + fill);
+		}
+		const backdrop = getComputedStyle(document.querySelector('rect.ocean-bg')).fill;
+		return {
+			seas: seas.length,
+			pale: pale,
+			backdropPale: lum(backdrop) > 0.25 ? backdrop : '',
+			label: getComputedStyle(document.querySelector('text.terr-label.sea')).fill,
+			labelDark: lum(getComputedStyle(document.querySelector('text.terr-label.sea')).fill) < 0.25
+		};
+	}`)
+	if err != nil {
+		t.Fatalf("measuring the ocean: %v", err)
+	}
+
+	result, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("expected an object from the probe, got %T", raw)
+	}
+	switch seas := result["seas"].(type) {
+	case int:
+		if seas < 1 {
+			t.Fatal("no sea zones rendered at all")
+		}
+	case float64:
+		if seas < 1 {
+			t.Fatal("no sea zones rendered at all")
+		}
+	default:
+		t.Fatalf("sea-zone count came back as %T", result["seas"])
+	}
+	if pale := toStrings(result["pale"]); len(pale) > 0 {
+		t.Errorf("%d sea zones render pale, not dark blue: %v", len(pale), pale)
+	}
+	if backdrop, _ := result["backdropPale"].(string); backdrop != "" {
+		t.Errorf("the backdrop behind the map renders pale (%s)", backdrop)
+	}
+	if dark, _ := result["labelDark"].(bool); dark {
+		t.Errorf("sea names are dark (%v); they sit on dark water and must be light",
+			result["label"])
+	}
+	t.Logf("%v sea zones render dark, sea names %v", result["seas"], result["label"])
+}
+
 // TestMap_SidebarAndMapShareSelection pins the structural win of the rewrite:
 // the sidebar button and the map path call one selectTerritory, so the two can
 // never disagree about what is selected.

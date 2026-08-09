@@ -27,6 +27,87 @@
     --land-line:  #33302B;
 }
 
+/* Interface theme.
+ *
+ * The board was already dark -- a dark ocean, a dark map surround, a dark
+ * header and action bar -- while every panel and dialog around it was white.
+ * Reading a casualty report meant taking a page of white light to the face in
+ * the middle of a dark board.
+ *
+ * So the surfaces are tokens, and there are two sets. Dark is the default and
+ * lives on bare :root: it is what the board was designed against, and putting
+ * it here means a player who has chosen it never sees a pale flash while the
+ * stylesheet loads. Light is the old palette exactly, restored under
+ * [data-theme="light"] -- switching themes changes nothing else about the
+ * layout.
+ *
+ * The map keeps its own colours in both themes. Ocean navy and the power
+ * colours are not decoration; they are what the board MEANS, and a territory
+ * must not change hands because someone flipped a switch.
+ *
+ * color-scheme is set per theme so the browser's own furniture -- scrollbars,
+ * form controls, the dialog backdrop -- follows the choice too.
+ */
+:root {
+    color-scheme: dark;
+
+    --ui-bg:        #131a20;  /* page behind everything                 */
+    --surface:      #1b232b;  /* panels and dialogs                     */
+    --surface-2:    #222c35;  /* rows and cards raised off a panel      */
+    --surface-3:    #2c3945;  /* the same, hovered                      */
+    --border:       #35434f;
+    --border-strong: #4d5f6d;
+    --text:         #e6edf3;
+    --text-strong:  #f2f7fb;
+    --text-muted:   #a3b1bd;
+
+    --accent:       #58a6ff;  /* links, counts, focus rings             */
+    --accent-line:  #58a6ff;
+    --heading:      #93a4f4;  /* dialog headings                        */
+    --danger:       #ff7b6b;
+    --success:      #4ac47a;
+
+    --selected-bg:  rgba(88, 166, 255, 0.18);
+    --attack-bg:    rgba(200, 52, 42, 0.18);
+    --attack-bg-hi: rgba(200, 52, 42, 0.30);
+    --friendly-bg:  rgba(53, 208, 106, 0.14);
+    --won-bg:       rgba(47, 143, 78, 0.20);
+    --lost-bg:      rgba(200, 52, 42, 0.18);
+    --error-bg:     rgba(200, 52, 42, 0.16);
+    --error-border: rgba(255, 123, 107, 0.5);
+    --shadow:       rgba(0, 0, 0, 0.55);
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+
+    --ui-bg:        #f5f5f5;
+    --surface:      #ffffff;
+    --surface-2:    #f8f9fa;
+    --surface-3:    #e9ecef;
+    --border:       #dee2e6;
+    --border-strong: #adb5bd;
+    --text:         #333333;
+    --text-strong:  #212529;
+    --text-muted:   #666666;
+
+    --accent:       #007bff;
+    --accent-line:  #007bff;
+    --heading:      #667eea;
+    --danger:       #c41e3a;
+    --success:      #28a745;
+
+    --selected-bg:  #e7f3ff;
+    --attack-bg:    #fff5f5;
+    --attack-bg-hi: #ffe0e0;
+    --friendly-bg:  #f0fff0;
+    --won-bg:       #e9f7ef;
+    --lost-bg:      #fdf0ef;
+    --error-bg:     #ffeeee;
+    --error-border: #ffcccc;
+    --shadow:       rgba(0, 0, 0, 0.3);
+}
+
 /* Global Styles */
 * {
     box-sizing: border-box;
@@ -37,8 +118,8 @@
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
     line-height: 1.6;
-    color: #333;
-    background: #f5f5f5;
+    color: var(--text);
+    background: var(--ui-bg);
 }
 
 #app {
@@ -65,8 +146,8 @@ body {
 }
 
 .setup-form {
-    background: white;
-    color: #333;
+    background: var(--surface);
+    color: var(--text);
     padding: 2rem;
     border-radius: 8px;
     box-shadow: 0 8px 16px rgba(0,0,0,0.2);
@@ -75,7 +156,7 @@ body {
 
 .setup-form h2 {
     margin-bottom: 1.5rem;
-    color: #667eea;
+    color: var(--heading);
 }
 
 .form-group {
@@ -92,18 +173,52 @@ body {
 .form-group select {
     width: 100%;
     padding: 0.75rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border);
     border-radius: 4px;
     font-size: 1rem;
+    background: var(--surface-2);
+    color: var(--text);
 }
 
 .error-message {
     margin-top: 1rem;
     padding: 0.75rem;
-    background: #fee;
-    border: 1px solid #fcc;
+    background: var(--error-bg);
+    border: 1px solid var(--error-border);
     border-radius: 4px;
-    color: #c00;
+    color: var(--danger);
+}
+
+/* Theme toggle on the setup screen: a two-button segmented control, the
+   selected side filled with the accent. */
+.theme-toggle {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    width: fit-content;
+}
+.theme-toggle button {
+    padding: 0.5rem 1.25rem;
+    border: none;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.theme-toggle button + button {
+    border-left: 1px solid var(--border);
+}
+.theme-toggle button:hover:not(.on) {
+    background: var(--surface-3);
+    color: var(--text);
+}
+.theme-toggle button.on {
+    background: var(--accent);
+    color: #06121e;
+    font-weight: 600;
 }
 
 /* Buttons */
@@ -236,8 +351,8 @@ body {
 
 /* Territory Sidebar */
 .territory-sidebar {
-    background: white;
-    border-right: 1px solid #ddd;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
     overflow-y: auto;
     padding: 1rem;
 }
@@ -254,8 +369,10 @@ body {
 .territory-controls input {
     width: 100%;
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border);
     border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--text);
 }
 
 .territory-list {
@@ -270,8 +387,9 @@ body {
     width: 100%;
     text-align: left;
     padding: 0.75rem;
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s;
@@ -281,13 +399,13 @@ body {
 }
 
 .territory-button:hover {
-    background: #e9ecef;
-    border-color: #adb5bd;
+    background: var(--surface-3);
+    border-color: var(--border-strong);
 }
 
 .territory-list li.selected .territory-button {
-    background: #e7f3ff;
-    border-color: #007bff;
+    background: var(--selected-bg);
+    border-color: var(--accent);
 }
 
 .territory-name {
@@ -319,7 +437,7 @@ body {
 
 .unit-count {
     font-size: 0.85rem;
-    color: #666;
+    color: var(--text-muted);
 }
 
 /* Map -----------------------------------------------------------------
@@ -515,8 +633,8 @@ body {
 
 /* Action Sidebar */
 .action-sidebar {
-    background: white;
-    border-left: 1px solid #ddd;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
     overflow-y: auto;
     padding: 1rem;
 }
@@ -524,13 +642,13 @@ body {
 .action-sidebar h2 {
     margin-bottom: 1rem;
     font-size: 1.25rem;
-    border-bottom: 2px solid #007bff;
+    border-bottom: 2px solid var(--accent-line);
     padding-bottom: 0.5rem;
 }
 
 .no-selection {
     text-align: center;
-    color: #666;
+    color: var(--text-muted);
     padding: 2rem;
 }
 
@@ -543,7 +661,7 @@ body {
 .detail-section h3 {
     font-size: 1rem;
     margin-bottom: 0.75rem;
-    color: #495057;
+    color: var(--text-strong);
 }
 
 .detail-section dl {
@@ -554,7 +672,7 @@ body {
 
 .detail-section dt {
     font-weight: 500;
-    color: #666;
+    color: var(--text-muted);
 }
 
 .detail-section dd {
@@ -562,7 +680,7 @@ body {
 }
 
 .damage {
-    color: #c00;
+    color: var(--danger);
     font-weight: bold;
 }
 
@@ -579,8 +697,8 @@ body {
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem;
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    border: 1px solid #dee2e6;
+    background: linear-gradient(135deg, var(--surface-2) 0%, var(--surface-3) 100%);
+    border: 1px solid var(--border);
     border-radius: 4px;
     font-size: 0.9rem;
 }
@@ -588,18 +706,18 @@ body {
 .unit-count {
     font-weight: bold;
     font-size: 1.2rem;
-    color: #007bff;
+    color: var(--accent);
     min-width: 24px;
     text-align: center;
 }
 
 .unit-type {
     text-transform: capitalize;
-    color: #495057;
+    color: var(--text-strong);
 }
 
 .no-units {
-    color: #6c757d;
+    color: var(--text-muted);
     font-style: italic;
     text-align: center;
     padding: 1rem;
@@ -608,22 +726,22 @@ body {
 /* Unit Details Toggle */
 .unit-details-toggle {
     margin-top: 1rem;
-    border-top: 1px solid #dee2e6;
+    border-top: 1px solid var(--border);
     padding-top: 0.5rem;
 }
 
 .unit-details-toggle summary {
     cursor: pointer;
     padding: 0.5rem;
-    background: #f1f3f5;
+    background: var(--surface-2);
     border-radius: 4px;
     font-weight: 500;
-    color: #495057;
+    color: var(--text-strong);
     user-select: none;
 }
 
 .unit-details-toggle summary:hover {
-    background: #e9ecef;
+    background: var(--surface-3);
 }
 
 .unit-details-toggle[open] summary {
@@ -637,8 +755,8 @@ body {
 
 .unit-item {
     padding: 0.75rem;
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     border-radius: 4px;
     margin-bottom: 0.5rem;
 }
@@ -652,7 +770,7 @@ body {
 
 .unit-stats {
     font-size: 0.85rem;
-    color: #666;
+    color: var(--text-muted);
 }
 
 .unit-actions {
@@ -669,8 +787,9 @@ body {
     width: 100%;
     text-align: left;
     padding: 0.75rem;
-    background: #f8f9fa;
-    border: 2px solid #dee2e6;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 2px solid var(--border);
     border-radius: 6px;
     cursor: pointer;
     margin-bottom: 0.5rem;
@@ -679,28 +798,28 @@ body {
 }
 
 .territory-link:hover {
-    background: #e9ecef;
-    border-color: #007bff;
+    background: var(--surface-3);
+    border-color: var(--accent);
     transform: translateX(4px);
 }
 
 .territory-link.can-attack-link {
-    border-color: #c41e3a;
-    background: #fff5f5;
+    border-color: var(--danger);
+    background: var(--attack-bg);
 }
 
 .territory-link.can-attack-link:hover {
-    background: #ffe0e0;
-    border-color: #a01628;
+    background: var(--attack-bg-hi);
+    border-color: var(--danger);
 }
 
 .territory-link.same-owner {
-    border-color: #28a745;
+    border-color: var(--success);
 }
 
 .territory-link.same-owner:hover {
-    background: #f0fff0;
-    border-color: #1e7e34;
+    background: var(--friendly-bg);
+    border-color: var(--success);
 }
 
 .territory-link-header {
@@ -726,16 +845,16 @@ body {
     align-items: center;
     gap: 0.5rem;
     padding: 0.25rem 0.5rem;
-    background: #fff;
+    background: var(--surface);
     border-radius: 4px;
     margin-top: 0.25rem;
     font-size: 0.85rem;
-    color: #c41e3a;
+    color: var(--danger);
     font-weight: 500;
 }
 
 .territory-link-action.friendly-move {
-    color: #28a745;
+    color: var(--success);
 }
 
 .action-icon {
@@ -748,13 +867,13 @@ body {
 
 .territory-link-units {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--text-muted);
     margin-top: 0.25rem;
 }
 
 .can-attack {
     margin-left: 0.5rem;
-    color: #c41e3a;
+    color: var(--danger);
     font-weight: bold;
 }
 
@@ -786,14 +905,26 @@ body {
     font-weight: 500;
 }
 
-/* Modals */
+/* Modals.
+   The surface is stated rather than inherited: a <dialog> takes its background
+   from the user agent, which is white whatever the rest of the page is doing.
+   That was the flashbang -- every purchase, battle report and transcript
+   arrived as a white page over a dark board. */
 dialog {
     border: none;
     border-radius: 8px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    box-shadow: 0 8px 32px var(--shadow);
     padding: 0;
     max-width: 600px;
     width: 90%;
+    background: var(--surface);
+    color: var(--text);
+    /* The user agent centres a modal dialog with margin: auto, which the
+       `* { margin: 0 }` reset at the top of this file was quietly wiping out --
+       every dialog opened pinned to the top-left corner. .phase-modal had
+       already worked around it with fixed positioning of its own; this fixes
+       it for all of them. */
+    margin: auto;
 }
 
 dialog::backdrop {
@@ -806,7 +937,7 @@ dialog::backdrop {
 
 .modal-content h2 {
     margin-bottom: 1rem;
-    color: #667eea;
+    color: var(--heading);
 }
 
 .modal-actions {
@@ -844,8 +975,8 @@ dialog::backdrop {
     justify-content: space-between;
     align-items: center;
     padding: 1rem;
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     border-radius: 4px;
 }
 
@@ -857,18 +988,18 @@ dialog::backdrop {
 
 .unit-cost {
     font-size: 0.9rem;
-    color: #007bff;
+    color: var(--accent);
     font-weight: 500;
 }
 
 .unit-purchase-stats {
     font-size: 0.85rem;
-    color: #666;
+    color: var(--text-muted);
 }
 
 /* Accessibility */
 :focus-visible {
-    outline: 2px solid #007bff;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
 
@@ -922,8 +1053,8 @@ dialog::backdrop {
 }
 
 .victory-card {
-    background: #fff;
-    color: #212529;
+    background: var(--surface);
+    color: var(--text-strong);
     border-radius: 8px;
     padding: 2rem 3rem;
     text-align: center;
@@ -955,8 +1086,8 @@ dialog::backdrop {
 .notice-body {
     max-height: 50vh;
     overflow-y: auto;
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0.75rem 1rem;
     margin: 0.75rem 0 1rem;
@@ -1005,6 +1136,16 @@ dialog::backdrop {
 /* A sea zone where the picked land units can board transports. */
 .hl.dest.board {
     stroke: #4aa3ff;
+}
+/* A sea zone with a deck for the picked aircraft. Distinct from a boarding
+   zone: one takes troops into a hold, the other takes planes onto a deck, and
+   confusing the two is how aircraft get lost. */
+.hl.dest.carrier {
+    stroke: #45e0e0;
+}
+/* A shore the picked cargo can be put ashore on, unopposed. */
+.hl.dest.unload {
+    stroke: #f0a83c;
 }
 
 /* The territory the picked units are moving from. */
@@ -1090,14 +1231,14 @@ dialog::backdrop {
 }
 .sidebar-hint {
     margin-top: 0.5rem;
-    color: #667eea;
+    color: var(--heading);
     font-size: 0.85rem;
     font-style: italic;
 }
 
 /* Unit picker and placement dialogs. */
 .modal-sub {
-    color: #6c757d;
+    color: var(--text-muted);
     margin-bottom: 1rem;
 }
 .picker-list {
@@ -1116,8 +1257,8 @@ dialog::backdrop {
     align-items: center;
     gap: 1rem;
     padding: 0.6rem 0.9rem;
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     border-radius: 4px;
 }
 .picker-name {
@@ -1137,8 +1278,20 @@ dialog::backdrop {
 }
 .earmark-tag {
     font-size: 0.8rem;
-    color: #2f8f4e;
+    color: var(--success);
     font-weight: 600;
+}
+
+/* What a loaded hull is carrying, on its row in the sea-zone picker. */
+.cargo-tag {
+    font-size: 0.8rem;
+    color: #f0a83c;
+    font-weight: 600;
+}
+
+.btn.btn-unload {
+    border-color: #f0a83c;
+    color: #f0a83c;
 }
 
 /* Planned-moves review dialog. */
@@ -1158,14 +1311,14 @@ dialog::backdrop {
     align-items: center;
     gap: 1rem;
     padding: 0.5rem 0.75rem;
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     border-radius: 4px;
 }
 .move-desc.combat { color: #c8342a; }
 .move-type {
     font-size: 0.8rem;
-    color: #6c757d;
+    color: var(--text-muted);
     margin-left: 0.4rem;
 }
 
@@ -1181,8 +1334,8 @@ dialog::backdrop {
     margin: 1rem 0;
 }
 .battle-side {
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.75rem 1rem;
 }
@@ -1192,24 +1345,24 @@ dialog::backdrop {
 .side-role {
     font-size: 0.8rem;
     font-weight: 400;
-    color: #6c757d;
+    color: var(--text-muted);
 }
 .battle-side ul { list-style: none; padding: 0; }
 .battle-side li { padding: 0.2rem 0; }
 .battle-count { font-weight: 700; }
-.undefended { color: #6c757d; font-style: italic; }
+.undefended { color: var(--text-muted); font-style: italic; }
 .battle-vs {
     font-size: 1.8rem;
     align-self: center;
-    color: #6c757d;
+    color: var(--text-muted);
 }
 .battle-result {
     border-radius: 6px;
     padding: 0.85rem 1.1rem;
     margin-top: 0.5rem;
 }
-.battle-result.won  { background: #e9f7ef; border: 1px solid #2f8f4e; }
-.battle-result.lost { background: #fdf0ef; border: 1px solid #c8342a; }
+.battle-result.won  { background: var(--won-bg);  border: 1px solid var(--success); }
+.battle-result.lost { background: var(--lost-bg); border: 1px solid var(--danger); }
 .battle-result h3 { margin-bottom: 0.35rem; }
 .battle-result p { margin: 0.15rem 0; }
 
@@ -1217,7 +1370,7 @@ dialog::backdrop {
 .purchase-cart {
     margin: 1rem 0;
     padding: 0.75rem 1rem;
-    background: #f1f3f5;
+    background: var(--surface-2);
     border-radius: 6px;
 }
 .purchase-cart h3 { margin-bottom: 0.4rem; }
@@ -1226,9 +1379,9 @@ dialog::backdrop {
 
 /* Shore-bombardment support listed on the battle screen. */
 .bombard-note {
-    color: #6c757d;
+    color: var(--text-muted);
     font-style: italic;
-    border-top: 1px dashed #dee2e6;
+    border-top: 1px dashed var(--border);
     margin-top: 0.3rem;
     padding-top: 0.3rem;
 }
