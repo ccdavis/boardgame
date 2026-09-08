@@ -464,7 +464,7 @@
                             &mdash; click a glowing factory</span>
                         <button @click="placeAllAsBought" class="btn btn-action"
                                 v-if="unplacedCount > 0 && placeAsBoughtPlan.length > 0">
-                            Place All As Bought
+                            Place {{ placeAsBoughtPlan.reduce((n, p) => n + p.quantity, 0) }} As Bought
                         </button>
                         <button @click="advancePhase" class="btn btn-advance">
                             Done Placing →
@@ -536,13 +536,14 @@
                     Choose how many of each, then pick a destination on the map.
                 </p>
                 <ul class="picker-list">
-                    <li v-for="group in unitPicker.groups" :key="group.key" class="picker-row">
+                    <li v-for="group in unitPicker.groups" :key="group.key"
+                        :class="group.canTake || group.canUnload ? 'picker-row' : 'picker-row held'">
                         <span class="picker-name">
-                            <strong>{{ group.type }}</strong>
+                            <strong>{{ group.ids.length > 1 && !group.cargoLabel ? group.ids.length + ' ' : '' }}{{ group.type }}</strong>
                             <span v-if="group.cargoLabel" class="cargo-tag">
                                 carrying {{ group.cargoLabel }}
                             </span>
-                            <span v-if="!group.canTake" class="earmark-tag">already moving</span>
+                            <span v-if="!group.canTake" class="earmark-tag">{{ group.whyNot || 'already moving' }}</span>
                             <span class="unit-stats">A:{{ group.attack }} D:{{ group.defend }} M:{{ group.movement }}</span>
                         </span>
                         <span class="picker-controls">
@@ -582,7 +583,7 @@
                     <li v-for="m in plannedMoves" :key="m.pieceId" class="moves-row">
                         <span :class="m.type === 'combat' ? 'move-desc combat' : 'move-desc'">
                             {{ m.from }} → {{ m.to }}
-                            <span class="move-type">{{ m.landing ? 'amphibious assault' : m.type }}</span>
+                            <span class="move-type">{{ m.landing ? 'amphibious assault' : m.raid ? 'bombing raid' : m.type }}</span>
                         </span>
                         <button @click="cancelPlannedMove(m)" class="btn btn-sm">Cancel</button>
                     </li>
@@ -592,19 +593,27 @@
             </div>
         </dialog>
 
-        <!-- Battle Screen: both sides face to face, then the dice. -->
+        <!-- Battle Screen: both sides face to face, then the dice -- one round
+             at a time if the player wants the decisions the rules give an
+             attacker (retreat, casualties, submerging), or all at once. -->
         <dialog id="battleModal" class="modal battle-modal">
             <div class="modal-content" v-if="battleView.battle">
-                <h2>Battle for {{ battleView.battle.territory }}</h2>
+                <h2>{{ battleView.battle.raid ? 'Bombing raid on' : 'Battle for' }} {{ battleView.battle.territory }}
+                    <span v-if="battleView.live && battleView.live.round > 0" class="side-role">
+                        round {{ battleView.live.round }}</span>
+                </h2>
                 <div class="battle-board">
                     <div class="battle-side attacker">
                         <h3>{{ battleView.battle.attacker }} <span class="side-role">attacking</span></h3>
                         <ul>
-                            <li v-for="g in battleView.battle.attackers" :key="g.type">
+                            <li v-for="g in (battleView.live ? battleView.live.attackers : battleView.battle.attackers)" :key="g.type">
                                 <span class="battle-count">{{ g.count }}×</span> {{ g.type }}
                                 <span class="unit-stats">attacks on {{ g.attack }}</span>
                             </li>
-                            <li v-for="g in (battleView.battle.bombarding || [])" :key="'bomb-' + g.type"
+                            <li v-if="battleView.live && battleView.live.attackers.length === 0" class="undefended">
+                                nobody left
+                            </li>
+                            <li v-for="g in ((battleView.live || battleView.battle).bombarding || [])" :key="'bomb-' + g.type"
                                 class="bombard-note">
                                 <span class="battle-count">{{ g.count }}×</span> {{ g.type }}
                                 <span class="unit-stats">shore bombardment</span>
@@ -615,23 +624,64 @@
                     <div class="battle-side defender">
                         <h3>{{ battleView.battle.defender }} <span class="side-role">defending</span></h3>
                         <ul>
-                            <li v-for="g in battleView.battle.defenders" :key="g.type">
+                            <li v-for="g in (battleView.live ? battleView.live.defenders : battleView.battle.defenders)" :key="g.type">
                                 <span class="battle-count">{{ g.count }}×</span> {{ g.type }}
                                 <span class="unit-stats">defends on {{ g.defend }}</span>
                             </li>
-                            <li v-if="battleView.battle.defenders.length === 0" class="undefended">
+                            <li v-if="(battleView.live ? battleView.live.defenders : battleView.battle.defenders).length === 0" class="undefended">
                                 undefended
                             </li>
                         </ul>
                     </div>
                 </div>
 
+                <!-- Round by round: what the dice said. -->
+                <ol v-if="battleView.live && battleView.live.log.length > 0" class="battle-log">
+                    <li v-for="(r, i) in battleView.live.log" :key="i">
+                        <strong>{{ r.round === 0 ? 'Before combat' : 'Round ' + r.round }}</strong>
+                        <span v-for="n in (r.notes || [])" :key="n" class="battle-note">{{ n }}.</span>
+                        <span v-if="r.round > 0 && (r.attackerHits || r.defenderHits)">
+                            Attackers: {{ hitSummary(r.attackerHits) }}; defenders: {{ hitSummary(r.defenderHits) }}.
+                        </span>
+                        <span v-if="(r.attackerLosses || []).length">Attacker lost {{ casualtySummary(r.attackerLosses) }}.</span>
+                        <span v-if="(r.defenderLosses || []).length">Defender lost {{ casualtySummary(r.defenderLosses) }}.</span>
+                    </li>
+                </ol>
+
+                <!-- Casualties owed: the player chooses which units take them. -->
+                <div v-if="battleView.live && battleView.live.pendingHits > 0" class="casualty-picker">
+                    <h3>Choose your losses — {{ battleView.live.pendingHits }} hit{{ battleView.live.pendingHits === 1 ? '' : 's' }} to assign
+                        <span class="side-role">({{ pickedHits() }} assigned)</span></h3>
+                    <ul class="picker-list">
+                        <li v-for="u in casualtyRows()" :key="u.id" class="picker-row">
+                            <span class="picker-name"><strong>{{ u.label }}</strong>
+                                <span class="unit-stats">A:{{ u.attack }}</span></span>
+                            <span class="picker-controls">
+                                <button @click="adjustPick(u, -1)" class="btn btn-sm" :disabled="u.picked === 0">&minus;</button>
+                                <span class="picker-count">{{ u.picked }}</span>
+                                <button @click="adjustPick(u, 1)" class="btn btn-sm"
+                                        :disabled="u.picked >= u.maxHits - u.hits || pickedHits() >= battleView.live.pendingHits">+</button>
+                            </span>
+                        </li>
+                    </ul>
+                    <button @click="confirmCasualties" class="btn btn-primary"
+                            :disabled="battleView.busy || pickedHits() !== battleView.live.pendingHits">
+                        Confirm losses
+                    </button>
+                </div>
+
+                <div v-if="battleView.raidResult" class="battle-result"
+                     :class="battleView.raidResult.damage > 0 ? 'won' : 'lost'">
+                    <h3>{{ battleView.raidResult.damage }} damage to the industrial complex</h3>
+                    <p>{{ battleView.raidResult.bombersLost }} of {{ battleView.raidResult.bombers }} bomber{{ battleView.raidResult.bombers === 1 ? '' : 's' }} shot down by anti-aircraft fire.</p>
+                    <p v-if="battleView.raidResult.damageRolls.length">Damage rolls: {{ battleView.raidResult.damageRolls.join(', ') }}.</p>
+                </div>
                 <div v-if="battleView.result" class="battle-result"
                      :class="battleView.result.attackerWins ? 'won' : 'lost'">
                     <h3 v-if="battleView.result.attackerWins">
-                        {{ battleView.battle.attacker }} takes {{ battleView.battle.territory }}!
+                        {{ battleView.battle.attacker }} {{ battleView.result.territoryCaptured ? 'takes' : 'clears' }} {{ battleView.battle.territory }}!
                     </h3>
-                    <h3 v-else-if="battleView.result.attackerRetreated">Attackers retreated</h3>
+                    <h3 v-else-if="battleView.result.attackerRetreated">Attackers withdrew</h3>
                     <h3 v-else>Defenders hold</h3>
                     <p>{{ battleView.result.rounds }} round{{ battleView.result.rounds === 1 ? '' : 's' }} of combat.</p>
                     <p>Attacker losses: {{ casualtySummary(battleView.result.attackerCasualties) }}</p>
@@ -639,12 +689,26 @@
                 </div>
 
                 <div class="modal-actions">
-                    <button v-if="!battleView.result" @click="fightBattle" class="btn btn-primary"
-                            :disabled="battleView.busy">
-                        {{ battleView.busy ? 'Rolling…' : 'Fight it out' }}
-                    </button>
+                    <template v-if="battleView.battle.raid && !battleView.raidResult">
+                        <button @click="flyRaid" class="btn btn-primary" :disabled="battleView.busy">
+                            {{ battleView.busy ? 'Flying…' : 'Drop the bombs' }}
+                        </button>
+                    </template>
+                    <template v-else-if="!battleView.result && !battleView.raidResult">
+                        <button @click="fightRound" class="btn btn-primary"
+                                :disabled="battleView.busy || (battleView.live && battleView.live.pendingHits > 0)">
+                            {{ battleView.busy ? 'Rolling…' : (battleView.live && battleView.live.round > 0 ? 'Fight another round' : 'Fight a round') }}
+                        </button>
+                        <button @click="fightBattle" class="btn btn-action" :disabled="battleView.busy">
+                            Fight it out
+                        </button>
+                        <button v-if="battleView.live && battleView.live.canRetreat" @click="retreatBattle"
+                                class="btn btn-action" :disabled="battleView.busy">Retreat</button>
+                        <button v-if="battleView.live && battleView.live.canSubmerge" @click="submergeSubs"
+                                class="btn btn-action" :disabled="battleView.busy">Submerge subs</button>
+                    </template>
                     <button @click="closeBattle" class="btn btn-secondary">
-                        {{ battleView.result ? 'Close' : 'Not yet' }}
+                        {{ battleView.result || battleView.raidResult ? 'Close' : 'Not yet' }}
                     </button>
                 </div>
             </div>
@@ -655,11 +719,12 @@
             <div class="modal-content">
                 <h2>Place units — {{ placePicker.territory }}</h2>
                 <ul class="picker-list">
-                    <li v-for="group in placeableGroups" :key="group.type" class="picker-row">
+                    <li v-for="group in placeableGroups" :key="group.type + '@' + (group.earmark || '')" class="picker-row">
                         <span class="picker-name">
                             <strong>{{ group.type }}</strong> × {{ group.quantity }}
-                            <span v-if="earmarks[group.type] === placePicker.territory"
+                            <span v-if="group.earmark === placePicker.territory"
                                   class="earmark-tag">bought here</span>
+                            <span v-else-if="group.earmark" class="earmark-tag">bought at {{ group.earmark }}</span>
                         </span>
                         <span class="picker-controls">
                             <button @click="placeUnits(group.type, placePicker.territory, 1)"
@@ -671,6 +736,10 @@
                 </ul>
                 <p v-if="placeableGroups.length === 0" class="modal-sub">
                     Nothing left that can be placed here.
+                </p>
+                <p v-else-if="placeCapacity !== null" class="modal-sub">
+                    {{ placeCapacity === 0 ? 'This factory has built everything it can this turn.'
+                        : 'This factory can build ' + placeCapacity + ' more unit' + (placeCapacity === 1 ? '' : 's') + ' this turn.' }}
                 </p>
                 <button @click="closePlacePicker" class="btn btn-secondary">Close</button>
             </div>
@@ -698,13 +767,23 @@
                         </div>
                     </div>
                 </div>
+                <div v-if="purchaseDamage > 0" class="purchase-repair">
+                    <p class="modal-sub">
+                        Bomb damage: {{ purchaseDamage }} — the complex builds
+                        {{ purchaseDamage }} fewer unit{{ purchaseDamage === 1 ? '' : 's' }} a turn until repaired.
+                    </p>
+                    <button @click="repairFactory" class="btn btn-sm"
+                            :disabled="currentPlayer.ipcs < 1">
+                        Repair ({{ Math.min(purchaseDamage, currentPlayer.ipcs) }} IPCs)
+                    </button>
+                </div>
                 <div v-if="purchasedUnits.length > 0" class="purchase-cart">
                     <h3>Bought this turn</h3>
                     <ul>
-                        <li v-for="group in purchasedUnits" :key="group.type">
+                        <li v-for="group in purchasedUnits" :key="group.type + '@' + (group.earmark || '')">
                             {{ group.quantity }} × {{ group.type }}
-                            <span v-if="earmarks[group.type]" class="earmark-tag">
-                                → {{ earmarks[group.type] }}
+                            <span v-if="group.earmark" class="earmark-tag">
+                                → {{ group.earmark }}
                             </span>
                         </li>
                     </ul>

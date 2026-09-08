@@ -122,6 +122,11 @@ func (p Phase) String() string {
 type PendingUnit struct {
 	Type string
 	Cost int
+	// Earmark is the industrial complex the unit was bought at, when the
+	// buyer said. Mobilisation prefers to place a unit where it was bought,
+	// so a player who buys at two factories gets each stack in the right
+	// place with one click. Advisory: placement is still checked.
+	Earmark string
 }
 
 // Piece represents a game unit (tank, ship, etc.)
@@ -182,6 +187,12 @@ type Territory struct {
 	IsVictoryCity bool        // Whether this territory is a victory city
 	ICDamage      int         // Industrial Complex damage (reduces production capacity)
 	NeutralType   NeutralType // Type of neutral territory (if Owner is "Neutral")
+
+	// OriginalOwner is the power the territory belongs to by right: its owner
+	// on the printed board, or -- for a neutral country -- the first power to
+	// bring it into the war. Liberation is judged against it: an ally who
+	// retakes the territory hands it back rather than keeping it.
+	OriginalOwner *Player
 }
 
 // Game is the top-level container for all game state
@@ -283,6 +294,7 @@ func (g *Game) AddTerritory(name string, terrain TerrainType, ownerName string, 
 	territory := &Territory{
 		Name:          name,
 		Owner:         owner,
+		OriginalOwner: owner,
 		Pieces:        make([]int, 0),
 		Terrain:       terrain,
 		Production:    production,

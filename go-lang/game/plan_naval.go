@@ -58,6 +58,10 @@ type NavalPlan struct {
 	Done         bool
 	CreatedTurn  int
 	LastProgress int
+
+	// Revealed means the other side has learned of the squadron's orders;
+	// its reports are no longer withheld from enemy viewers.
+	Revealed bool
 }
 
 // Describe renders a naval plan for a transcript.
@@ -96,7 +100,9 @@ func (npc *NPCAIPlayer) DisposeOfEscorts(gc *GameController, player *models.Play
 	// Is the beachhead still worth covering? If the landing failed or the place
 	// is already secure, there is nothing to support.
 	target := g.Board[done.Target]
-	stillContested := target != nil && (target.Owner == nil || target.Owner.Name != player.Name)
+	// Liberated ground belongs to an ally, and is no less secure for it.
+	stillContested := target != nil && (target.Owner == nil ||
+		(target.Owner != player && !areAllies(target.Owner, player)))
 
 	var patrol, home []int
 	for _, id := range survivors {
@@ -208,6 +214,17 @@ func nearestFriendlyPort(g *models.Game, player *models.Player, from string) str
 // ReviewNaval keeps squadrons current: it drops losses, retires plans that have
 // arrived or lost their reason, and reports what is still under way.
 func (npc *NPCAIPlayer) ReviewNaval(gc *GameController, player *models.Player, transcript *GameTranscript) {
+	// Squadron orders leak like any other operation.
+	for _, plan := range gc.Plans.Naval(player.Name) {
+		if plan.Done || plan.Revealed || npc.rng == nil {
+			continue
+		}
+		if npc.rng.Float64() < operationLeakChance {
+			plan.Revealed = true
+			transcript.LogAction(player.Name,
+				"Intelligence leak: the enemy has learned of "+plan.Describe())
+		}
+	}
 	if gc.Plans == nil {
 		return
 	}
@@ -225,17 +242,17 @@ func (npc *NPCAIPlayer) ReviewNaval(gc *GameController, player *models.Player, t
 			// A patrol exists to cover a landing. Once the place is ours the
 			// squadron is free, and goes home to be useful somewhere else.
 			if target := g.Board[plan.Supporting]; target != nil &&
-				target.Owner != nil && target.Owner.Name == player.Name {
+				target.Owner != nil && (target.Owner == player || areAllies(target.Owner, player)) {
 				plan.Mission = NavalReturn
 				plan.Station = nearestFriendlyPort(g, player, plan.Station)
 				plan.LastProgress = g.Turn
-				transcript.LogSecretAction(player.Name, plan.Describe())
+				logPlanLine(transcript, player.Name, plan.Revealed, plan.Describe())
 			}
 		case NavalReturn:
 			// Arrived: the ships rejoin the general pool, where they can be
 			// taken up by the next operation.
 			if allAt(g, plan.Ships, plan.Station) {
-				transcript.LogSecretAction(player.Name, fmt.Sprintf(
+				logPlanLine(transcript, player.Name, plan.Revealed, fmt.Sprintf(
 					"squadron %d reached %s and is available again", plan.ID, plan.Station))
 				continue
 			}

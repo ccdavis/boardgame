@@ -65,9 +65,14 @@ func (npc *NPCAIPlayer) TakeTurn(controller *GameController, transcript *GameTra
 	// Bring standing plans up to date before deciding anything. This is what
 	// makes the computer players non-stateless: a plan formed several turns ago
 	// tells this turn what to buy, where to march, and when to sail.
+	// Garrisons claim their units before the expeditionary plans do.
+	// Reviewed the other way round, an invasion in the making took every
+	// uncommitted unit on the landmass -- Southern Europe, a victory city,
+	// was emptied to stage a landing on America and fell to four infantry
+	// off a British transport.
+	npc.ReviewDefences(controller, player, transcript)
 	npc.ReviewPlans(controller, player, transcript)
 	npc.ReviewNaval(controller, player, transcript)
-	npc.ReviewDefences(controller, player, transcript)
 
 	// Phase 1: Purchase
 	err = npc.PurchasePhase(controller, transcript)
@@ -138,6 +143,50 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 	defenceBudget, _, offenceBudget := posture.Budget(budget)
 	spent := 0
 
+	// Bomb damage first: a point of damage is a unit the complex cannot
+	// build this turn, and it costs one IPC to put right -- the cheapest
+	// purchase there is. A power that never repaired bombed factories out
+	// as a matter of course, its whole income queuing behind a ruined yard.
+	for _, territory := range sortedTerritories(player) {
+		if territory.ICDamage == 0 || !hasProduction(game, territory) {
+			continue
+		}
+		amount := territory.ICDamage
+		if amount > player.IPCs {
+			amount = player.IPCs
+		}
+		if amount > 0 {
+			if err := controller.RepairIndustrialComplex(territory.Name, amount); err == nil {
+				spent += amount
+				transcript.LogAction(player.Name, fmt.Sprintf(
+					"Repaired %d damage to the industrial complex in %s", amount, territory.Name))
+			}
+		}
+	}
+
+	// A complex builds at most its production value a turn, so there is no
+	// point buying more units than the factories can turn out: they would sit
+	// in the queue, and the queue's money is better spent next turn. Structures
+	// are built, not produced, and do not count. A power with no complex at
+	// all is not capped -- it has a bigger problem, and buying a factory is
+	// the answer to it.
+	capacity, complexes := placementCapacity(controller, player)
+	unitsBought := 0
+	buy := func(unitType string) error {
+		if !game.Units().Of(unitType).IsStructure && complexes > 0 {
+			if unitsBought >= capacity {
+				return fmt.Errorf("no factory capacity left for %s", unitType)
+			}
+		}
+		if err := controller.PurchaseUnit(unitType, 1); err != nil {
+			return err
+		}
+		if !game.Units().Of(unitType).IsStructure {
+			unitsBought++
+		}
+		return nil
+	}
+
 	purchases := make(map[string]int)
 
 	// Check if we should buy a factory first
@@ -191,7 +240,7 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 			if spent+cost > budget || defenceSpent+cost > defenceBudget {
 				break
 			}
-			if err := controller.PurchaseUnit(unitType, 1); err != nil {
+			if err := buy(unitType); err != nil {
 				break
 			}
 			spent += cost
@@ -222,7 +271,7 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 			if spent+cost > budget || planSpent+cost > planBudget {
 				break
 			}
-			if err := controller.PurchaseUnit(unitType, 1); err != nil {
+			if err := buy(unitType); err != nil {
 				break
 			}
 			spent += cost
@@ -277,7 +326,7 @@ func (npc *NPCAIPlayer) PurchasePhase(controller *GameController, transcript *Ga
 
 		if best != "" {
 			cost := int(game.GlobalPieceTemplates[best].Cost)
-			if err := controller.PurchaseUnit(best, 1); err != nil {
+			if err := buy(best); err != nil {
 				// Not a budget problem: stop trying this unit type rather than
 				// asking again with the same arguments and the same answer.
 				unaffordable[best] = true
@@ -457,6 +506,9 @@ func (npc *NPCAIPlayer) CombatMovePhase(controller *GameController, transcript *
 		}
 	}
 
+	// Bombers with no battle to join raid the enemy's factories instead.
+	movesMade += npc.PlanBombingRaids(controller, player, transcript)
+
 	// Launch any plan whose force is assembled. Loading, sailing and landing
 	// all happen in this phase, so an operation that has been forming for
 	// several turns executes here in one go.
@@ -535,6 +587,18 @@ func (npc *NPCAIPlayer) ConductCombatPhase(controller *GameController, transcrip
 		}
 
 		transcript.LogBattleResult(territoryName, result)
+	}
+
+	for _, target := range controller.RaidOrder() {
+		result, err := controller.ResolveRaid(target, roller)
+		if err != nil {
+			transcript.LogAction(player.Name, fmt.Sprintf("Raid on %s failed: %v", target, err))
+			continue
+		}
+		battlesResolved++
+		transcript.LogAction(player.Name, fmt.Sprintf(
+			"Bombing raid on %s: %d bomber(s), %d shot down, %d damage to the industrial complex",
+			target, result.Bombers, result.BombersLost, result.Damage))
 	}
 
 	if battlesResolved == 0 {
@@ -879,10 +943,17 @@ func enemyPieceCount(game *models.Game, territory *models.Territory, player *mod
 	return count
 }
 
-// findAttackersFor finds our pieces that can attack a target territory
+// findAttackersFor finds our pieces that can attack a target territory:
+// everything fit to fight next door, and aircraft from further off that can
+// reach the target and still get home.
 func (npc *NPCAIPlayer) findAttackersFor(controller *GameController, player *models.Player, target *models.Territory) map[string][]*models.Piece {
 	game := controller.Game
 	attackers := make(map[string][]*models.Piece)
+	defer func() {
+		for from, planes := range npc.airInRange(controller, player, target) {
+			attackers[from] = append(attackers[from], planes...)
+		}
+	}()
 
 	// Walk the target's neighbours rather than the player's holdings: a fleet
 	// in open ocean sits in a zone the player will never own, and sourcing
@@ -921,12 +992,18 @@ func (npc *NPCAIPlayer) findAttackersFor(controller *GameController, player *mod
 			if validateTerrain(piece, target) != nil {
 				continue
 			}
-			// Aircraft only attack a sea zone they can land after: no
-			// free carrier deck, no sortie. Winning the fight and then
-			// ditching in the ocean trades a fighter for nothing.
-			if piece.Terrain == models.Air && target.Terrain == models.Water &&
-				!controller.CarrierSlotFree(piece, target, player) {
-				continue
+			// Aircraft only attack where they can land afterwards: a sea
+			// zone needs a free carrier deck, and any target needs friendly
+			// ground or a deck within the movement left after the strike.
+			// Winning the fight and then ditching trades a plane for nothing.
+			if piece.Terrain == models.Air {
+				remaining := controller.MoveTracker.Remaining(piece.ID, int(piece.Movement)) - 1
+				if target.Terrain == models.Water && !controller.CarrierSlotFree(piece, target, player) {
+					continue
+				}
+				if target.Terrain != models.Water && !controller.canLandAfter(piece, target, remaining, player) {
+					continue
+				}
 			}
 			if piece.Movement > 0 && !caps.IsStructure && !caps.IsAA {
 				attackingPieces = append(attackingPieces, piece)
@@ -1108,3 +1185,142 @@ func findStructureTemplate(game *models.Game) (string, *models.Piece, bool) {
 	}
 	return "", nil, false
 }
+
+
+// placementCapacity is how many units this power's industrial complexes can
+// turn out this turn between them -- each builds up to its territory's
+// production value, less bombing damage -- and how many complexes it has.
+func placementCapacity(controller *GameController, player *models.Player) (capacity, complexes int) {
+	g := controller.Game
+	units := g.Units()
+	for _, territory := range player.Territories {
+		for _, pieceID := range territory.Pieces {
+			if units.For(g.Pieces[pieceID]).IsStructure {
+				capacity += controller.FactoryCapacity(territory)
+				complexes++
+				break
+			}
+		}
+	}
+	return capacity, complexes
+}
+
+
+// airInRange finds the power's aircraft that are NOT next to the target but
+// can fly to it and still reach a landing place afterwards. Fighters and
+// bombers used to join only battles next door; a fighter two zones from a
+// fight it could win sat it out, and the air arm the purchases paid for
+// mostly defended.
+func (npc *NPCAIPlayer) airInRange(controller *GameController, player *models.Player, target *models.Territory) map[string][]*models.Piece {
+	g := controller.Game
+	out := make(map[string][]*models.Piece)
+	adjacent := make(map[string]bool, len(target.ConnectedTo))
+	for _, n := range target.ConnectedTo {
+		adjacent[n.Name] = true
+	}
+	for _, from := range presenceTerritories(g, player) {
+		if from.Name == target.Name || adjacent[from.Name] {
+			continue
+		}
+		for _, id := range from.Pieces {
+			piece := g.Pieces[id]
+			if piece == nil || piece.Owner != player || piece.Terrain != models.Air || piece.Attack <= 0 {
+				continue
+			}
+			if controller.Plans.Committed(player.Name, piece.ID) {
+				continue
+			}
+			if _, moving := controller.MoveTracker.PiecesMovedFrom[piece.ID]; moving {
+				continue
+			}
+			remaining := controller.MoveTracker.Remaining(piece.ID, int(piece.Movement))
+			distance, _, err := CalculateMovementPathForPiece(g, piece, from.Name, target.Name, player, CombatMove)
+			if err != nil || distance == 0 || distance > remaining {
+				continue
+			}
+			left := remaining - distance
+			if target.Terrain == models.Water {
+				if !controller.CarrierSlotFree(piece, target, player) && !controller.canLandAfter(piece, target, left, player) {
+					continue
+				}
+			} else if !controller.canLandAfter(piece, target, left, player) {
+				continue
+			}
+			out[from.Name] = append(out[from.Name], piece)
+		}
+	}
+	return out
+}
+
+// PlanBombingRaids sends idle bombers against enemy industrial complexes in
+// range. A raid is worth flying when the complex is productive enough that
+// the expected damage outweighs the expected loss to anti-aircraft fire, and
+// the bomber can still get home. Returns the raids booked.
+func (npc *NPCAIPlayer) PlanBombingRaids(controller *GameController, player *models.Player, transcript *GameTranscript) int {
+	g := controller.Game
+	units := g.Units()
+	raids := 0
+	for _, from := range presenceTerritories(g, player) {
+		for _, id := range append([]int{}, from.Pieces...) {
+			bomber := g.Pieces[id]
+			if bomber == nil || bomber.Owner != player || !units.For(bomber).CanBomb {
+				continue
+			}
+			if _, moving := controller.MoveTracker.PiecesMovedFrom[id]; moving {
+				continue // already flying to a battle
+			}
+			if controller.Plans.Committed(player.Name, id) {
+				continue
+			}
+			remaining := controller.MoveTracker.Remaining(id, int(bomber.Movement))
+
+			bestTarget, bestValue := "", 0
+			for _, name := range sortedTerritoryNames(g) {
+				target := g.Board[name]
+				if target.Terrain != models.Land || target.Owner == nil ||
+					target.Owner == player || areAllies(target.Owner, player) {
+					continue
+				}
+				if target.Owner.Name == "Neutral" || !hasProduction(g, target) {
+					continue
+				}
+				// Room for more damage, and a complex worth the risk.
+				room := 2*target.Production - target.ICDamage
+				if room < raidMinProduction || target.Production < raidMinProduction {
+					continue
+				}
+				distance, _, err := CalculateMovementPathForPiece(g, bomber, from.Name, name, player, CombatMove)
+				if err != nil || distance == 0 || distance > remaining {
+					continue
+				}
+				if !controller.canLandAfter(bomber, target, remaining-distance, player) {
+					continue
+				}
+				value := target.Production
+				if hasAntiAircraft(g, target) {
+					value -= 2 // the guns will fire
+				}
+				if target.IsVictoryCity {
+					value++
+				}
+				if value > bestValue {
+					bestTarget, bestValue = name, value
+				}
+			}
+			if bestTarget == "" {
+				continue
+			}
+			if err := controller.PlanBombingRaid(id, from.Name, bestTarget); err == nil {
+				transcript.LogAction(player.Name, fmt.Sprintf(
+					"%s flies from %s to bomb the industrial complex in %s", bomber.Name, from.Name, bestTarget))
+				raids++
+			}
+		}
+	}
+	return raids
+}
+
+// raidMinProduction is the smallest complex worth a bomber's exposure to
+// anti-aircraft fire: a die of damage against a one-in-six chance of losing
+// a sixteen-IPC aircraft is a fair trade only against a real factory.
+const raidMinProduction = 3

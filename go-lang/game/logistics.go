@@ -155,6 +155,13 @@ func (npc *NPCAIPlayer) surplusIn(gc *GameController, player *models.Player, ter
 		free = append(free, piece)
 	}
 
+	// A victory city keeps a garrison whatever the fronts want: with the
+	// enemy now landing from the sea, a city emptied to feed a land front
+	// was taken by four infantry off a transport, and the game with it.
+	if territory.IsVictoryCity && keepStrength < victoryCityGarrison*2 {
+		keepStrength = victoryCityGarrison * 2
+	}
+
 	// A front keeps enough of its free units to stay equal; only the rest is
 	// surplus. Weakest defenders are exported first, so the line holds with
 	// what defends best.

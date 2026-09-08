@@ -103,6 +103,8 @@ func (gc *GameController) PlanLanding(cargoIDs []int, targetName string) error {
 		CargoIDs: append([]int{}, cargoIDs...),
 		Target:   targetName,
 	})
+	// Allied computer players plan around a human's booked landing.
+	gc.Plans.ClaimTarget(player.Name, targetName)
 	return nil
 }
 
@@ -187,4 +189,5 @@ func (gc *GameController) executePlannedLandings(player *models.Player) {
 	}
 
 	gc.PlannedLandings = nil
+	gc.Plans.ClearClaims(player.Name)
 }

@@ -102,7 +102,12 @@ Located in `game/combat.go`:
 - Artillery support: Infantry attack at 2 when paired with artillery (the
   mechanic is implemented and tested, but `aaa.gdf` declares no artillery
   unit, so it is inert on the real board)
-- Strategic bombing: Target industrial complexes to cause damage
+- Strategic bombing: bombers fly raids against industrial complexes
+  (`game/bombing.go`); AA fire, then a die of damage per bomber, capped at
+  twice production; repaired at one IPC a point in the purchase phase
+- Round-by-round battles (`game/battle_live.go`): a human attacker may fight
+  one round at a time, choose casualties, retreat (not amphibious troops),
+  or submerge submarines; automatic resolution finishes from where it stands
 - Shore bombardment: bombardment-capable warships in the drop zone fire once
   in support of an amphibious landing, capped at one shot per landed unit
 
@@ -114,6 +119,13 @@ Located in `game/movement.go`:
 - Blitzing: Tanks can move through friendly unoccupied territories
 - Amphibious assault: Land units load on transports, move, then attack coastal territory
 - Air units overfly enemy territory and units freely; what limits them is range
+- Allied ground is as open as your own in both movement phases; a combat move
+  ending there never stages a battle or changes the owner
+- AA guns move one space in the noncombat phase only
+- Unloading onto friendly ground is noncombat movement; in the combat phase
+  troops leave a transport only to assault a hostile shore
+- An industrial complex builds at most its territory's production value (less
+  bomb damage) a turn; ships count against the yard beside their sea zone
 - Air unit landing: a noncombat air move must end in friendly territory or on a
   friendly carrier with a free slot, counting every move already planned this
   phase -- aircraft booked onto the same carrier, carriers planned to sail
@@ -144,6 +156,15 @@ Located in `game/npc_ai.go`:
   2. Position for victory city attacks
   3. General border consolidation
 - **Vulnerability Checks**: Won't move units if it leaves source territory exposed to counterattack
+- **Air range**: aircraft join any battle they can reach and still land
+  after; idle bombers raid enemy factories worth the risk
+- **Joint operations** (`game/planner.go`): a fortress beyond one power's
+  lift is planned with an ally, each half sized to its share, the halves
+  waiting for each other at their drop zones
+- **Garrisons first**: defence plans claim units before invasions do, and a
+  victory city always keeps a garrison against landings
+- **Balance**: measured with `go run ./cmd/observe -games 20 -seed 2000
+  -turns 40`; see TODO.md for the current numbers
 
 ### Special Unit Abilities
 
@@ -178,7 +199,9 @@ wins and the map is adjusted to match it.
 - `Sides` -- which powers fight together. Membership makes a power *playable*:
   it sets `Player.Side` and `Player.TakesTurns`. `Neutral` is deliberately
   absent, so it owns territory without taking a turn.
-- `Capitals` -- capturing one transfers the defender's treasury.
+- `Capitals` -- capturing one transfers the defender's treasury. Capitals
+  also govern liberation: a territory retaken by an ally returns to its
+  original owner if that owner's capital is free (`Territory.OriginalOwner`).
 - `VictoryCities` -- always present in the data; `Game.VictoryCitiesEnabled`
   controls whether holding them ends the game.
 - `Neutrality` -- `strict`, `proallied` or `proaxis` per territory.

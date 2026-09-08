@@ -184,6 +184,12 @@ func (d *Driver) Blockers() Blockers {
 				Detail: fmt.Sprintf("%d battle(s) still to resolve", n),
 			})
 		}
+		if n := len(d.Controller.PendingRaids); n > 0 {
+			blockers = append(blockers, Blocker{
+				Code:   "unresolved_raids",
+				Detail: fmt.Sprintf("%d bombing raid(s) still to fly", n),
+			})
+		}
 	case models.MobilizePhase:
 		if n := len(d.Controller.Game.PurchasedUnits[player.Name]); n > 0 {
 			blockers = append(blockers, Blocker{
@@ -236,6 +242,9 @@ func (d *Driver) AdvancePhase() (*PhaseResult, error) {
 		}
 		for territory := range controller.PendingBattles {
 			result.BattlesCreated = append(result.BattlesCreated, territory)
+		}
+		for target := range controller.PendingRaids {
+			result.BattlesCreated = append(result.BattlesCreated, "bombing raid on "+target)
 		}
 
 	case models.NoncombatMovePhase:
@@ -320,6 +329,12 @@ func (d *Driver) ResolveAllBattles() ([]*game.BattleResult, error) {
 			return results, fmt.Errorf("resolving %s: %w", territory, err)
 		}
 		results = append(results, result)
+	}
+	// Bombing raids fly once the fighting is done.
+	for _, target := range d.Controller.RaidOrder() {
+		if _, err := d.Controller.ResolveRaid(target, nil); err != nil {
+			return results, fmt.Errorf("raid on %s: %w", target, err)
+		}
 	}
 	return results, nil
 }

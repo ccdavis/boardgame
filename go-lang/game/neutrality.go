@@ -128,6 +128,12 @@ func (gc *GameController) checkNeutralTollFunds(target *models.Territory, player
 	return nil
 }
 
+// CheckNeutralTollFunds is the exported form of checkNeutralTollFunds, for
+// the web layer to light only the neutrals a player can afford to violate.
+func (gc *GameController) CheckNeutralTollFunds(target *models.Territory, player *models.Player) error {
+	return gc.checkNeutralTollFunds(target, player)
+}
+
 // CanActivateNeutral checks if a player can peacefully activate a neutral
 // territory during noncombat move phase. Exported so the web layer can tell
 // the client which neighbours are genuinely enterable, instead of guessing.

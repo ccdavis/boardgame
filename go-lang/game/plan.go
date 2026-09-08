@@ -124,6 +124,24 @@ type AmphibiousPlan struct {
 	// is sized against the defence expected AT LANDING TIME, not today's.
 	InitialDefence int
 
+	// Joint marks an operation mounted together with an ally against a
+	// target too strongly held for one power's lift: each partner brings
+	// what it can, the two plans wait for each other, and they land in the
+	// same round -- the first to move fights the garrison, the second lands
+	// on what is left. Partner names the ally's power, empty while the
+	// operation is still looking for one.
+	Joint   bool
+	Partner string
+
+	// LaunchedTurn is the round this plan last put troops ashore, which is
+	// how a partner knows the other half of the operation has gone in.
+	LaunchedTurn int
+
+	// reinforce is set when an ally took the target while this plan's
+	// troops were still afloat beside it: they come ashore as reinforcements
+	// in the next noncombat move instead of sailing home.
+	reinforce bool
+
 	// HopelessTarget marks a plan abandoned because no liftable force could
 	// beat the projected defence. The book gives such targets a short
 	// cooling-off before they may be proposed again -- churn is wasteful,
@@ -166,6 +184,12 @@ type PlanBook struct {
 	// the round that judgement was made, so they cool off before being
 	// proposed again.
 	hopeless map[string]map[string]int
+
+	// claims records targets a HUMAN power has booked landings against, so
+	// computer allies plan around them rather than mounting the same
+	// invasion. A human has no plan object; this is the shared book's
+	// record of their intentions.
+	claims map[string]map[string]bool
 
 	// sideOf answers which side a power fights for, so a new operation can be
 	// christened from that side's codename list. Set by the controller; a
@@ -312,8 +336,65 @@ func (pb *PlanBook) CoolingOff(power, target string, turn int) bool {
 	return ok && turn-when < hopelessRetryCooldown
 }
 
-// Targets returns the territories a power is already planning against, so two
-// plans do not chase the same place.
+// ClaimTarget records a human power's booked landing so allied computer
+// players treat the target as spoken for.
+func (pb *PlanBook) ClaimTarget(power, target string) {
+	if pb == nil {
+		return
+	}
+	if pb.claims == nil {
+		pb.claims = make(map[string]map[string]bool)
+	}
+	if pb.claims[power] == nil {
+		pb.claims[power] = make(map[string]bool)
+	}
+	pb.claims[power][target] = true
+}
+
+// ClearClaims forgets a power's booked landings once they have executed.
+func (pb *PlanBook) ClearClaims(power string) {
+	if pb != nil && pb.claims != nil {
+		delete(pb.claims, power)
+	}
+}
+
+// AllyPlanAgainst finds an active plan by a power on the same side -- not
+// this power -- against the target, for joining a joint operation.
+func (pb *PlanBook) AllyPlanAgainst(power, target string) *AmphibiousPlan {
+	if pb == nil || pb.sideOf == nil {
+		return nil
+	}
+	side := pb.sideOf(power)
+	if side == "" {
+		return nil
+	}
+	for other := range pb.plans {
+		if other == power || pb.sideOf(other) != side {
+			continue
+		}
+		for _, plan := range pb.Active(other) {
+			if plan.Target == target {
+				return plan
+			}
+		}
+	}
+	return nil
+}
+
+// planOf finds a power's active plan against a target.
+func (pb *PlanBook) planOf(power, target string) *AmphibiousPlan {
+	if pb == nil {
+		return nil
+	}
+	for _, plan := range pb.Active(power) {
+		if plan.Target == target {
+			return plan
+		}
+	}
+	return nil
+}
+
+// Targets returns the territories a power's active plans are aimed at.
 func (pb *PlanBook) Targets(power string) map[string]bool {
 	claimed := make(map[string]bool)
 	for _, plan := range pb.Active(power) {
@@ -341,6 +422,14 @@ func (pb *PlanBook) SideTargets(power string) map[string]bool {
 		}
 		for _, plan := range pb.Active(other) {
 			claimed[plan.Target] = true
+		}
+	}
+	for other, targets := range pb.claims {
+		if pb.sideOf(other) != side {
+			continue
+		}
+		for target := range targets {
+			claimed[target] = true
 		}
 	}
 	return claimed
@@ -458,6 +547,12 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 			return false
 		}
 		if power := g.Players[p.Power]; power != nil && areAllies(target.Owner, power) {
+			// Troops still afloat beside the beach the ally just took are
+			// not wasted: they land as reinforcements in the next
+			// noncombat move.
+			if p.troopsAfloatBeside(g, p.Target) {
+				p.reinforce = true
+			}
 			p.abandon("an ally holds " + p.Target)
 			return false
 		}
@@ -543,6 +638,11 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 	if p.State == PlanForming || p.State == PlanEmbarked {
 		troopCap := maxPlanTroopsFor(strategicPressure(g, power))
 		defence := defenderStrength(g, p.Target)
+		// A joint operation is judged against what two powers can lift.
+		liftCap := troopCap
+		if p.Joint {
+			liftCap = 2 * troopCap
+		}
 
 		age := g.Turn - p.CreatedTurn
 		growth := 0
@@ -553,13 +653,20 @@ func (p *AmphibiousPlan) Review(gc *GameController) bool {
 		horizon := len(p.Route) + planReconTurns
 		projected := defence + growth*horizon
 
-		if age >= planReconTurns && projected > hopelessDefenceFor(troopCap) {
+		if age >= planReconTurns && projected > hopelessDefenceFor(liftCap) {
 			p.HopelessTarget = true
 			p.abandon(fmt.Sprintf("%s is too strongly held (defence %d, growing %d a turn)",
 				p.Target, defence, growth))
 			return false
 		}
-		if want := troopsNeeded(projected, nil, troopCap); want > p.WantTroops {
+		want := troopsNeeded(projected, nil, liftCap)
+		if p.Joint {
+			want = (want + 1) / 2 // our half; the partner brings the rest
+			if want > troopCap {
+				want = troopCap
+			}
+		}
+		if want > p.WantTroops {
 			p.WantTroops = want
 			p.WantTransports = (want + transportCapacity - 1) / transportCapacity
 		}
@@ -1033,4 +1140,24 @@ func defenderStrength(g *models.Game, territoryName string) int {
 		strength += int(piece.Defend)
 	}
 	return strength
+}
+
+
+// troopsAfloatBeside reports whether any of the plan's ships is carrying
+// troops in a sea zone next to the named territory.
+func (p *AmphibiousPlan) troopsAfloatBeside(g *models.Game, name string) bool {
+	target := g.Board[name]
+	if target == nil {
+		return false
+	}
+	for _, id := range p.Ships {
+		ship, ok := g.Pieces[id]
+		if !ok || len(ship.Holding) == 0 {
+			continue
+		}
+		if zone := territoryOf(g, id); zone != nil && areConnected(zone, target) {
+			return true
+		}
+	}
+	return false
 }

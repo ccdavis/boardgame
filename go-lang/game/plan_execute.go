@@ -24,6 +24,7 @@ func (npc *NPCAIPlayer) GatherForPlans(gc *GameController, player *models.Player
 	}
 
 	moved := 0
+	moved += npc.landReinforcements(gc, player, transcript)
 	for _, plan := range gc.Plans.Active(player.Name) {
 		switch plan.State {
 		case PlanReady:
@@ -281,6 +282,19 @@ func (npc *NPCAIPlayer) ExecuteReadyPlans(gc *GameController, player *models.Pla
 		if plan.State != PlanReady {
 			continue
 		}
+		// Half of a joint operation waits for the other half: the partner
+		// must be beside the target too, or have gone in this round or
+		// last (a partner that landed and lost has still thinned the
+		// garrison, and waiting for it to rebuild would waste that).
+		if plan.Joint && plan.Partner != "" {
+			partner := gc.Plans.planOf(plan.Partner, plan.Target)
+			if partner != nil && partner.State != PlanReady &&
+				(partner.LaunchedTurn == 0 || partner.LaunchedTurn < gc.Game.Turn-1) {
+				transcript.LogSecretAction(player.Name, fmt.Sprintf(
+					"plan %d holds off %s, waiting for %s's half of the operation", plan.ID, plan.Target, plan.Partner))
+				continue
+			}
+		}
 		if err := npc.launchAssault(gc, player, plan, transcript); err != nil {
 			transcript.LogAction(player.Name,
 				fmt.Sprintf("plan %d could not launch: %v", plan.ID, err))
@@ -324,6 +338,7 @@ func (npc *NPCAIPlayer) launchAssault(gc *GameController, player *models.Player,
 
 	plan.pendingLanding = carried
 	plan.LastProgress = g.Turn
+	plan.LaunchedTurn = g.Turn
 	return nil
 }
 
@@ -458,8 +473,9 @@ func (gc *GameController) registerLandedAttacker(targetName string, pieceID int,
 	if target == nil {
 		return
 	}
-	if target.Owner != nil && target.Owner.Name == power {
-		return // undefended and already ours; nothing to fight
+	if target.Owner != nil && (target.Owner.Name == power ||
+		areAllies(target.Owner, gc.Game.Players[power])) {
+		return // undefended and already ours (or an ally's); nothing to fight
 	}
 
 	battle, exists := gc.PendingBattles[targetName]
@@ -609,4 +625,44 @@ func nextStepTowards(g *models.Game, piece *models.Piece, from, goal string, pla
 		step = len(route)
 	}
 	return route[step-1]
+}
+
+
+// landReinforcements puts ashore the troops of an operation whose target an
+// ally took while they were still afloat beside it. Friendly ground now, so
+// it is an ordinary noncombat unload -- and a beachhead held by two powers
+// instead of one.
+func (npc *NPCAIPlayer) landReinforcements(gc *GameController, player *models.Player, transcript *GameTranscript) int {
+	g := gc.Game
+	landed := 0
+	for _, plan := range gc.Plans.For(player.Name) {
+		if !plan.reinforce {
+			continue
+		}
+		plan.reinforce = false
+		target := g.Board[plan.Target]
+		if target == nil || target.Owner == nil || !(target.Owner == player || areAllies(target.Owner, player)) {
+			continue
+		}
+		for _, shipID := range plan.Ships {
+			ship, ok := g.Pieces[shipID]
+			if !ok || len(ship.Holding) == 0 {
+				continue
+			}
+			zone := territoryOf(g, shipID)
+			if zone == nil || !areConnected(zone, target) {
+				continue
+			}
+			for _, troopID := range append([]int{}, ship.Holding...) {
+				if err := gc.UnloadUnit(shipID, troopID, plan.Target); err == nil {
+					landed++
+				}
+			}
+		}
+		if landed > 0 {
+			transcript.LogAction(player.Name, fmt.Sprintf(
+				"%d troops reinforce %s, taken by an ally", landed, plan.Target))
+		}
+	}
+	return landed
 }

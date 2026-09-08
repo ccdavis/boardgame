@@ -304,7 +304,7 @@ infantry: land, 1 movement, 1 attack, 2 defend, 3 cost;
 armor: land, 2 movement, 3 attack, 2 defend, 5 cost;
 fighter: air, 4 movement, 3 attack, 4 defend, 12 cost;
 bomber: air, 6 movement, 4 attack, 2 defend, 16 cost;
-AAA: land, 0 movement, 0 attack, 1 defend, 5 cost;
+AAA: land, 1 movement, 0 attack, 1 defend, 5 cost;   # moves in noncombat only
 factory: land, 0 movement, 0 attack, 0 defend, 32 cost;
 
 

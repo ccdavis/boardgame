@@ -22,6 +22,12 @@ type candidate struct {
 	value    int
 	defence  int
 	crossing int // sea zones between the port and the drop zone
+
+	// joinWith is an ally's plan against the same target that this one
+	// would reinforce; wantsPartner marks a target only two powers
+	// together could take.
+	joinWith     *AmphibiousPlan
+	wantsPartner bool
 }
 
 // maxCrossing is the longest voyage worth planning.
@@ -46,10 +52,32 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 	pressure := strategicPressure(g, player)
 	troopCap := maxPlanTroopsFor(pressure)
 
+	// Allied powers may pool their lift against a fortress: one plan alone
+	// caps at troopCap troops, two together at twice that. A target already
+	// claimed by an ally's forming plan can be joined when that ally is
+	// short of it; an unclaimed one too strong for a single lift is taken
+	// as the first half of a joint operation, if there is an ally to join.
+	hasAlly := false
+	for _, other := range g.PlayerOrder {
+		if other != player.Name && areAllies(g.Players[other], player) && g.Players[other].TakesTurns {
+			hasAlly = true
+		}
+	}
+
 	var options []candidate
 	for name, territory := range g.Board {
-		if territory.Terrain != models.Land || claimed[name] {
+		if territory.Terrain != models.Land {
 			continue
+		}
+		var joinWith *AmphibiousPlan
+		if claimed[name] {
+			ally := gc.Plans.AllyPlanAgainst(player.Name, name)
+			if ally == nil || ally.Joint || ally.Power == player.Name ||
+				(ally.State != PlanForming && ally.State != PlanEmbarked) ||
+				defenderStrength(g, name) <= ally.WantTroops*2 {
+				continue // spoken for, and not in need of help
+			}
+			joinWith = ally
 		}
 		// A target recently judged hopeless cools off before being redrawn.
 		if gc.Plans.CoolingOff(player.Name, name, g.Turn) {
@@ -72,9 +100,14 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 		}
 
 		// A fortress the largest liftable force cannot beat is not a target --
-		// but the cap, and so the reach, grows with the clock.
-		if defenderStrength(g, name) > hopelessDefenceFor(troopCap) {
-			continue
+		// but the cap, and so the reach, grows with the clock, and doubles
+		// when an ally can bring the other half.
+		wantsPartner := false
+		if defence := defenderStrength(g, name); defence > hopelessDefenceFor(troopCap) {
+			if joinWith == nil && !(hasAlly && defence <= hopelessDefenceFor(2*troopCap)) {
+				continue
+			}
+			wantsPartner = joinWith == nil
 		}
 
 		staging, embark, drop, crossing := bestApproach(g, player, name, targetSeas)
@@ -83,13 +116,15 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 		}
 
 		options = append(options, candidate{
-			target:   name,
-			staging:  staging,
-			embark:   embark,
-			dropZone: drop,
-			crossing: crossing,
-			value:    territoryValue(territory),
-			defence:  defenderStrength(g, name),
+			target:       name,
+			staging:      staging,
+			embark:       embark,
+			dropZone:     drop,
+			crossing:     crossing,
+			value:        territoryValue(territory),
+			defence:      defenderStrength(g, name),
+			joinWith:     joinWith,
+			wantsPartner: wantsPartner,
 		})
 	}
 	if len(options) == 0 {
@@ -125,7 +160,7 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 	}
 
 	troops := troopsNeeded(pick.defence, npc.rng, troopCap)
-	return &AmphibiousPlan{
+	plan := &AmphibiousPlan{
 		Power:          player.Name,
 		Target:         pick.target,
 		Staging:        pick.staging,
@@ -138,6 +173,26 @@ func (npc *NPCAIPlayer) ProposePlan(gc *GameController, player *models.Player) *
 		CreatedTurn:    g.Turn,
 		LastProgress:   g.Turn,
 	}
+	switch {
+	case pick.joinWith != nil:
+		// The other half of an ally's operation: bring what the ally is
+		// short of, and tie the two plans together.
+		ally := pick.joinWith
+		want := troopsNeeded(pick.defence, npc.rng, 2*troopCap) - ally.WantTroops
+		if want < 2 {
+			want = 2
+		}
+		if want > troopCap {
+			want = troopCap
+		}
+		plan.Joint, plan.Partner = true, ally.Power
+		plan.WantTroops = want
+		plan.WantTransports = (want + transportCapacity - 1) / transportCapacity
+		ally.Joint, ally.Partner = true, player.Name
+	case pick.wantsPartner:
+		plan.Joint = true // partner to be found by an ally's own planning
+	}
+	return plan
 }
 
 // transportCapacity is how many land units one transport is assumed to carry.

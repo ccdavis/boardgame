@@ -1,6 +1,7 @@
 package webserver
 
 import (
+	"strings"
 	"testing"
 
 	"boardgame/models"
@@ -43,13 +44,14 @@ func destNames(dests []ReachableTerritoryDTO) map[string]ReachableTerritoryDTO {
 	return out
 }
 
-// Combat move: the shores an assault can hit. Friendly ground is still a
-// legal place to put troops down, and hostile ground is the whole point.
+// Combat move: the shores an assault can hit. Hostile ground is the whole
+// point; friendly ground is a noncombat unload, and the player is told so
+// rather than left staring at a dark shore.
 func TestUnload_CombatOffersEnemyShores(t *testing.T) {
 	session := powerSession(t, "UK", models.CombatMovePhase)
 	_, cargo := loadedTransport(t, session, "North Sea", "Britain", 2)
 
-	dests, _ := transportOptions(session, cargo, "North Sea")
+	dests, notes := transportOptions(session, cargo, "North Sea")
 	byName := destNames(dests)
 
 	// Norway and Western Europe are German; Britain is home.
@@ -63,8 +65,28 @@ func TestUnload_CombatOffersEnemyShores(t *testing.T) {
 			t.Errorf("%s should be an opposed landing, got %+v", want, dest)
 		}
 	}
-	if dest, ok := byName["Britain"]; !ok || !dest.IsUnload || dest.IsAttack {
-		t.Errorf("putting troops back ashore at home should be a plain unload, got %+v", dest)
+	if dest, ok := byName["Britain"]; ok {
+		t.Errorf("Britain (home) was offered in the combat phase: %+v; friendly unloads are noncombat moves", dest)
+	}
+	// With hostile shores on offer no explanation is owed; strip them and the
+	// friendly quay must be explained.
+	g := session.Controller.Game
+	for _, shore := range g.Board["North Sea"].ConnectedTo {
+		if shore.Terrain == models.Water || shore.Owner == g.Players["UK"] {
+			continue
+		}
+		for _, id := range shore.Pieces {
+			delete(g.Pieces, id)
+		}
+		shore.Pieces = nil
+		models.ChangeOwnership(shore, g.Players["UK"])
+	}
+	dests, notes = transportOptions(session, cargo, "North Sea")
+	if len(dests) != 0 {
+		t.Errorf("with every shore friendly, the combat phase should offer nothing, got %+v", dests)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.Join(notes, " "), "Noncombat Move phase") {
+		t.Errorf("no note explains that friendly shores unload in noncombat: %v", notes)
 	}
 }
 

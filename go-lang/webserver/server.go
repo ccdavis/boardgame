@@ -243,8 +243,10 @@ func (s *Server) handleTerritories(w http.ResponseWriter, r *http.Request, sessi
 
 	territories := make([]TerritoryDTO, 0, len(names))
 	for _, name := range names {
-		territories = append(territories, ToTerritoryDTO(session.Controller.Game.Board[name],
-			session.Controller.Game, session.HumanPlayer))
+		dto := ToTerritoryDTO(session.Controller.Game.Board[name],
+			session.Controller.Game, session.HumanPlayer)
+		dto.FriendlyUnits = movableUnits(session, session.Controller.Game.Board[name])
+		territories = append(territories, dto)
 	}
 
 	response := map[string]interface{}{
@@ -252,6 +254,65 @@ func (s *Server) handleTerritories(w http.ResponseWriter, r *http.Request, sessi
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
+}
+
+// movableUnits counts the human player's units in a territory that the unit
+// picker would actually offer right now: pieces with movement left this turn
+// and no move already planned, plus cargo aboard the player's ships here that
+// is not yet booked ashore. This is what decides whether the territory glows
+// during a movement phase. Counting every piece instead lit up territories
+// whose garrison had spent its whole allowance attacking, and the click then
+// opened an empty picker -- which reads as "my troops are stuck here".
+//
+// Outside the movement phases every piece that could ever move counts, so the
+// number means the same thing whichever phase the browser asks in.
+func movableUnits(session *GameSession, territory *models.Territory) int {
+	g := session.Controller.Game
+	units := g.Units()
+	tracker := session.Controller.MoveTracker
+	inMovementPhase := g.CurrentPhase == models.CombatMovePhase ||
+		g.CurrentPhase == models.NoncombatMovePhase
+
+	committed := make(map[int]bool)
+	if inMovementPhase {
+		for _, move := range session.Controller.GetPlannedMoves() {
+			committed[move.PieceID] = true
+		}
+		for _, landing := range session.Controller.GetPlannedLandings() {
+			for _, cargoID := range landing.CargoIDs {
+				committed[cargoID] = true
+			}
+		}
+	}
+
+	mine := func(piece *models.Piece) bool {
+		return piece != nil && piece.Owner != nil && piece.Owner.Name == session.HumanPlayer
+	}
+
+	count := 0
+	for _, pieceID := range territory.Pieces {
+		piece := g.Pieces[pieceID]
+		if !mine(piece) || units.For(piece).IsStructure {
+			continue
+		}
+		// Cargo can always be sent ashore, whatever the ship has done.
+		for _, cargoID := range piece.Holding {
+			if mine(g.Pieces[cargoID]) && !committed[cargoID] {
+				count++
+			}
+		}
+		if piece.Movement == 0 || committed[pieceID] {
+			continue
+		}
+		if inMovementPhase && tracker.Remaining(pieceID, int(piece.Movement)) == 0 {
+			continue
+		}
+		if g.CurrentPhase == models.CombatMovePhase && units.For(piece).IsAA {
+			continue // towed in the noncombat phase only
+		}
+		count++
+	}
+	return count
 }
 
 // handleTerritory handles GET /api/game/:sessionId/territory/:name
@@ -280,6 +341,7 @@ func (s *Server) handleTerritory(w http.ResponseWriter, r *http.Request, session
 		Units:        make([]UnitDTO, 0),
 		ConnectedTerritories: make([]ConnectedTerritoryDTO, 0),
 	}
+	dto.FriendlyUnits = movableUnits(session, territory)
 
 	// Add units. "Can move" here means "has no commitment yet": pieces with a
 	// planned move and cargo booked for a landing are both spoken for, and the
@@ -295,14 +357,31 @@ func (s *Server) handleTerritory(w http.ResponseWriter, r *http.Request, session
 		}
 	}
 
+	units := session.Controller.Game.Units()
+	phase := session.Controller.Game.CurrentPhase
 	for _, pieceID := range territory.Pieces {
 		piece := session.Controller.Game.Pieces[pieceID]
 		// A piece is offered for movement when it has no commitment AND some
 		// allowance left this turn -- a unit that spent everything attacking
 		// is done until next turn, and the picker must say so.
-		canMove := !movedPieceIDs[pieceID] &&
-			session.Controller.MoveTracker.Remaining(pieceID, int(piece.Movement)) > 0
-		dto.Units = append(dto.Units, ToUnitDTO(pieceID, piece, canMove))
+		whyNot := ""
+		switch {
+		case units.For(piece).IsStructure || piece.Movement == 0:
+			whyNot = "cannot move"
+		case movedPieceIDs[pieceID]:
+			whyNot = "already moving"
+		case session.Controller.MoveTracker.Remaining(pieceID, int(piece.Movement)) == 0:
+			if phase == models.NoncombatMovePhase {
+				whyNot = "already fought this turn"
+			} else {
+				whyNot = "no movement left"
+			}
+		case phase == models.CombatMovePhase && units.For(piece).IsAA:
+			whyNot = "moves in noncombat only"
+		}
+		unitDTO := ToUnitDTO(pieceID, piece, whyNot == "")
+		unitDTO.WhyNot = whyNot
+		dto.Units = append(dto.Units, unitDTO)
 
 		// Cargo lives in the transport's hold, not the territory's piece list;
 		// list it here or the browser can never see or unload it.
@@ -312,6 +391,9 @@ func (s *Server) handleTerritory(w http.ResponseWriter, r *http.Request, session
 				continue
 			}
 			cargoDTO := ToUnitDTO(cargoID, cargo, !movedPieceIDs[cargoID])
+			if movedPieceIDs[cargoID] {
+				cargoDTO.WhyNot = "booked for a landing"
+			}
 			cargoDTO.Aboard = pieceID
 			dto.Units = append(dto.Units, cargoDTO)
 		}
@@ -332,7 +414,12 @@ func (s *Server) handleTerritory(w http.ResponseWriter, r *http.Request, session
 
 		// Determine if can attack or move to
 		if currentPhase == models.CombatMovePhase {
-			if conn.Owner.Name != player.Name {
+			// An attack needs somebody to fight or enemy ground to take;
+			// an ally's territory, or a sea zone merely carrying an ally's
+			// name, is neither.
+			allied := conn.Owner != nil && player.Side != "" && conn.Owner.Side == player.Side
+			if hostileForces(session.Controller.Game, conn, player) ||
+				(conn.Terrain != models.Water && conn.Owner != player && !allied) {
 				connDTO.CanAttack = true
 			}
 			connDTO.CanMoveTo = true
@@ -407,7 +494,14 @@ func (s *Server) handleAvailableActions(w http.ResponseWriter, r *http.Request, 
 		sort.Strings(names)
 		battles := make([]PendingBattleDTO, 0, len(names))
 		for _, territory := range names {
-			battles = append(battles, ToPendingBattleDTO(g, session.Controller.PendingBattles[territory]))
+			dto := ToPendingBattleDTO(g, session.Controller.PendingBattles[territory])
+			_, dto.InProgress = session.Controller.LiveBattles[territory]
+			battles = append(battles, dto)
+		}
+		// Bombing raids ride in the same list, flagged, so the map marks
+		// them and the battle screen offers to fly them.
+		for _, target := range session.Controller.RaidOrder() {
+			battles = append(battles, ToPendingRaidDTO(g, session.Controller.PendingRaids[target]))
 		}
 		response["actions"] = map[string]interface{}{
 			"pendingBattles": battles,
@@ -415,11 +509,34 @@ func (s *Server) handleAvailableActions(w http.ResponseWriter, r *http.Request, 
 
 	case models.MobilizePhase:
 		purchased := GroupPurchasedUnits(g.PurchasedUnits[player.Name])
+		// How much each complex can still build this turn, so the browser
+		// can offer "place all" honestly and say when a factory is full. A
+		// ship launched into a sea zone counts against the yard beside it,
+		// so sea-zone targets are mapped to their yard rather than given a
+		// capacity of their own.
+		capacity := make(map[string]int)
+		yardFor := make(map[string]string)
 		for i := range purchased {
 			purchased[i].Targets = session.Controller.PlacementTargets(player, purchased[i].Type)
+			for _, name := range purchased[i].Targets {
+				target := g.Board[name]
+				if target == nil {
+					continue
+				}
+				if target.Terrain == models.Water {
+					if yard := session.Controller.YardWithCapacity(target, player); yard != nil {
+						yardFor[name] = yard.Name
+						capacity[yard.Name] = session.Controller.FactoryCapacity(yard)
+					}
+				} else {
+					capacity[name] = session.Controller.FactoryCapacity(target)
+				}
+			}
 		}
 		response["actions"] = map[string]interface{}{
-			"purchasedUnits": purchased,
+			"purchasedUnits":  purchased,
+			"factoryCapacity": capacity,
+			"yardFor":         yardFor,
 		}
 
 	case models.CollectIncomePhase:
@@ -458,6 +575,8 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, session *G
 	switch actionType {
 	case "purchase":
 		s.handlePurchaseAction(w, r, session)
+	case "repair-ic":
+		s.handleRepairICAction(w, r, session)
 	case "plan-move":
 		s.handlePlanMoveAction(w, r, session)
 	case "cancel-move":
@@ -468,6 +587,20 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, session *G
 		s.handleMobilizeAction(w, r, session)
 	case "resolve-battle":
 		s.handleResolveBattleAction(w, r, session)
+	case "plan-bombing":
+		s.handlePlanBombingAction(w, r, session)
+	case "resolve-raid":
+		s.handleResolveRaidAction(w, r, session)
+	case "battle-begin":
+		s.handleBattleBeginAction(w, r, session)
+	case "battle-round":
+		s.handleBattleRoundAction(w, r, session)
+	case "battle-casualties":
+		s.handleBattleCasualtiesAction(w, r, session)
+	case "battle-retreat":
+		s.handleBattleRetreatAction(w, r, session)
+	case "battle-submerge":
+		s.handleBattleSubmergeAction(w, r, session)
 	case "auto-resolve-battles":
 		s.handleAutoResolveBattlesAction(w, r, session)
 	case "get-reachable":

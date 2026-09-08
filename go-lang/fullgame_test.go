@@ -167,14 +167,20 @@ func checkTurnInvariants(t *testing.T, g *models.Game, before turnSnapshot, powe
 		}
 	}
 
-	// Only the power that just played may gain or lose territory. If someone
-	// else's holdings changed, ownership was written by the wrong actor.
+	// Only the power that just played may gain or lose territory -- or, by
+	// liberation, an ally of it: a province retaken from the enemy returns
+	// to its original owner. If anyone else's holdings changed, ownership
+	// was written by the wrong actor.
+	sameSide := func(a, b string) bool {
+		pa, pb := g.Players[a], g.Players[b]
+		return pa != nil && pb != nil && pa.Side != "" && pa.Side == pb.Side
+	}
 	for territory, owner := range takeSnapshot(g).territory {
 		was := before.territory[territory]
 		if was == owner {
 			continue
 		}
-		if owner != power && was != power {
+		if owner != power && was != power && !(sameSide(owner, power) && !sameSide(was, power)) {
 			t.Errorf("turn %d: %s changed hands from %s to %s while %s was playing",
 				g.Turn, territory, was, owner, power)
 		}

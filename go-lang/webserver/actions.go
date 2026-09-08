@@ -18,6 +18,9 @@ func (s *Server) handlePurchaseAction(w http.ResponseWriter, r *http.Request, se
 	var req struct {
 		UnitType string `json:"unitType"`
 		Quantity int    `json:"quantity"`
+		// Territory is the factory whose production menu the purchase was
+		// made from; the units are earmarked for it.
+		Territory string `json:"territory"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -26,7 +29,7 @@ func (s *Server) handlePurchaseAction(w http.ResponseWriter, r *http.Request, se
 	}
 
 	// Purchase the units
-	err := session.Controller.PurchaseUnit(req.UnitType, req.Quantity)
+	err := session.Controller.PurchaseUnitAt(req.UnitType, req.Quantity, req.Territory)
 	if err != nil {
 		s.sendError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -42,6 +45,37 @@ func (s *Server) handlePurchaseAction(w http.ResponseWriter, r *http.Request, se
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
+}
+
+// handleRepairICAction handles POST .../action/repair-ic: repairs bombing
+// damage to an industrial complex at one IPC per point, purchase phase only.
+func (s *Server) handleRepairICAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	var req struct {
+		Territory string `json:"territory"`
+		Amount    int    `json:"amount"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	territory, ok := session.Controller.Game.Board[req.Territory]
+	if !ok {
+		s.sendError(w, fmt.Sprintf("Territory %s not found", req.Territory), http.StatusBadRequest)
+		return
+	}
+	if req.Amount <= 0 {
+		req.Amount = territory.ICDamage
+	}
+	if err := session.Controller.RepairIndustrialComplex(req.Territory, req.Amount); err != nil {
+		s.sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	player := session.Controller.Game.Players[session.HumanPlayer]
+	s.sendJSON(w, map[string]interface{}{
+		"success":       true,
+		"remainingIPCs": player.IPCs,
+		"icDamage":      territory.ICDamage,
+	}, http.StatusOK)
 }
 
 // handlePlanMoveAction handles POST /api/game/:sessionId/action/plan-move
@@ -64,10 +98,10 @@ func (s *Server) handlePlanMoveAction(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 
-	// Determine if this creates a battle
+	// Determine if this creates a battle: somebody there will shoot back.
 	toTerritory := session.Controller.Game.Board[req.To]
 	player := session.Controller.Game.Players[session.HumanPlayer]
-	willCreateBattle := toTerritory.Owner.Name != player.Name && len(toTerritory.Pieces) > 0
+	willCreateBattle := hostileForces(session.Controller.Game, toTerritory, player)
 
 	moveType := "noncombat"
 	if session.Controller.Game.CurrentPhase == models.CombatMovePhase {
@@ -280,18 +314,20 @@ func (s *Server) handleAutoResolveBattlesAction(w http.ResponseWriter, r *http.R
 		territories = append(territories, territory)
 	}
 
-	if len(territories) == 0 {
+	if len(territories) == 0 && len(session.Controller.PendingRaids) == 0 {
 		response := map[string]interface{}{
 			"success": true,
 			"battles": []BattleResultDTO{},
+			"raids":   []RaidResultDTO{},
 		}
 		s.sendJSON(w, response, http.StatusOK)
 		return
 	}
 
-	// Resolve all battles
+	// Resolve all battles, in the rules' order: sea fights before the
+	// landings they cover.
 	results := make([]BattleResultDTO, 0, len(territories))
-	for _, territory := range territories {
+	for _, territory := range session.Controller.BattleOrder() {
 		result, err := session.Controller.ResolveBattle(territory, nil)
 		if err != nil {
 			s.sendError(w, fmt.Sprintf("Failed to resolve battle at %s: %v", territory, err), http.StatusInternalServerError)
@@ -299,10 +335,20 @@ func (s *Server) handleAutoResolveBattlesAction(w http.ResponseWriter, r *http.R
 		}
 		results = append(results, ToBattleResultDTO(territory, result))
 	}
+	raids := make([]RaidResultDTO, 0)
+	for _, target := range session.Controller.RaidOrder() {
+		result, err := session.Controller.ResolveRaid(target, nil)
+		if err != nil {
+			s.sendError(w, fmt.Sprintf("Failed to fly the raid on %s: %v", target, err), http.StatusInternalServerError)
+			return
+		}
+		raids = append(raids, ToRaidResultDTO(result))
+	}
 
 	response := map[string]interface{}{
 		"success": true,
 		"battles": results,
+		"raids":   raids,
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
@@ -372,6 +418,12 @@ func (s *Server) handleGetReachableAction(w http.ResponseWriter, r *http.Request
 	boarding, boardNotes := transportOptions(session, pieceIDs, req.FromTerritory)
 	reachableDTOs = append(reachableDTOs, boarding...)
 
+	// Why the set is empty, or thinner than the map suggests. A group whose
+	// members can each go somewhere but nowhere in common gets told which
+	// units are limiting it; a neighbour that is not lit gets its reason.
+	boardNotes = append(boardNotes, groupNotes(session, pieceIDs, req.FromTerritory, common)...)
+	boardNotes = append(boardNotes, blockedNeighbourNotes(session, pieceIDs, req.FromTerritory, common)...)
+
 	response := map[string]interface{}{
 		"pieceIds":   pieceIDs,
 		"reachable":  reachableDTOs,
@@ -423,6 +475,12 @@ func reachableForPiece(session *GameSession, pieceID int, from string) (map[stri
 		moveType = game.CombatMove
 	}
 
+	// An AA gun is towed in the noncombat phase only; PlanMove refuses it in
+	// the combat phase, so nothing lights up for it there.
+	if moveType == game.CombatMove && session.Controller.Game.Units().For(piece).IsAA {
+		return map[string]ReachableTerritoryDTO{}, nil
+	}
+
 	// Judge range by what the piece has LEFT this turn, not its printed
 	// allowance: movement spent attacking in the combat phase is gone. The
 	// full allowance lit up destinations that PlanMove then refused.
@@ -434,6 +492,12 @@ func reachableForPiece(session *GameSession, pieceID int, from string) (map[stri
 			session.Controller.Game, piece, from, territory.Name, player, moveType)
 		if err != nil || distance > remaining {
 			continue // not actually reachable under the movement rules
+		}
+		// Every strict neutral booked this phase must be payable together;
+		// PlanMove refuses one the treasury cannot cover, so it is not lit.
+		if moveType == game.CombatMove &&
+			session.Controller.CheckNeutralTollFunds(territory, player) != nil {
+			continue
 		}
 
 		// An aircraft may fly OVER any sea zone; whether it may STOP in one is
@@ -528,30 +592,10 @@ func carriersFor(g *models.Game, zone *models.Territory, player *models.Player, 
 	return out
 }
 
-// transcriptLines renders a turn's transcript for a particular viewer. A
-// viewer on the acting power's side reads everything; an enemy viewer has the
-// secret entries withheld and replaced with a single count, so they learn
-// that operations exist but never what they are.
+// transcriptLines renders a turn's transcript for a particular viewer; see
+// GameTranscript.LinesFor for the redaction rule.
 func transcriptLines(entries []game.TranscriptEntry, sameSide bool, power string) []string {
-	lines := make([]string, 0, len(entries))
-	secrets := 0
-	secretAt := -1
-	for _, entry := range entries {
-		if entry.Secret && !sameSide {
-			if secrets == 0 {
-				secretAt = len(lines)
-			}
-			secrets++
-			continue
-		}
-		lines = append(lines, entry.Action)
-	}
-	if secrets > 0 {
-		notice := fmt.Sprintf("%s is working on %d secret operation(s) — details unknown",
-			power, secrets)
-		lines = append(lines[:secretAt], append([]string{notice}, lines[secretAt:]...)...)
-	}
-	return lines
+	return (&game.GameTranscript{Entries: entries}).LinesFor(sameSide, power)
 }
 
 // handleExecuteNPCTurn handles POST /api/game/:sessionId/action/execute-npc-turn
@@ -639,7 +683,7 @@ func transportOptions(session *GameSession, pieceIDs []int, from string) ([]Reac
 
 	switch {
 	case cargoCount == len(pieces):
-		return unloadOptions(session, g, player, fromTerr, pieceIDs), nil
+		return unloadOptions(session, g, player, fromTerr, pieceIDs)
 	case cargoCount > 0:
 		// A mix of cargo and free units has no shared destination.
 		return nil, []string{"Units aboard transports and units ashore cannot " +
@@ -897,8 +941,9 @@ func plural(n int, one, many string) string {
 // other combat moves. Because a transport may sail and land in the same
 // phase, assault shores adjacent to a transport's PLANNED destination count
 // as well as those adjacent to where it sits now.
-func unloadOptions(session *GameSession, g *models.Game, player *models.Player, fromTerr *models.Territory, cargoIDs []int) []ReachableTerritoryDTO {
+func unloadOptions(session *GameSession, g *models.Game, player *models.Player, fromTerr *models.Territory, cargoIDs []int) ([]ReachableTerritoryDTO, []string) {
 	combatPhase := g.CurrentPhase == models.CombatMovePhase
+	var notes []string
 
 	// The sea zones the cargo's transports will be adjacent-capable from:
 	// where they are, plus where they are planned to sail.
@@ -931,6 +976,18 @@ func unloadOptions(session *GameSession, g *models.Game, player *models.Player, 
 				// Immediate unload: only legal from the transports' current
 				// position, which is what ValidateUnload checks.
 				if zone != fromTerr {
+					continue
+				}
+				// And only as a noncombat move. Troops leave a transport in
+				// the combat phase to storm a hostile beach, not to step
+				// onto a friendly quay -- say so, or the dark shore looks
+				// like a fault.
+				if combatPhase {
+					if !seen[shore.Name] {
+						seen[shore.Name] = true
+						notes = append(notes, fmt.Sprintf(
+							"%s is friendly ground — unload there in the Noncombat Move phase.", shore.Name))
+					}
 					continue
 				}
 				allValid := true
@@ -972,7 +1029,12 @@ func unloadOptions(session *GameSession, g *models.Game, player *models.Player, 
 			})
 		}
 	}
-	return out
+	// A shore that works needs no apology for the ones that do not.
+	if len(out) > 0 {
+		return out, nil
+	}
+	sort.Strings(notes)
+	return out, notes
 }
 
 func canCarry(ship *models.Piece, unitType string) bool {
@@ -1163,4 +1225,237 @@ func territoryNameOf(g *models.Game, pieceID int) string {
 		}
 	}
 	return ""
+}
+
+// --- Battles fought round by round -----------------------------------------
+//
+// battle-begin opens a pending battle and runs the pre-combat steps;
+// battle-round rolls one round; battle-casualties assigns the hits the
+// player owes; battle-retreat and battle-submerge are the between-round
+// choices; resolve-battle (above) finishes any battle, live or not, with the
+// engine choosing. Every one of them answers with the battle's current state.
+
+func (s *Server) sendLiveBattle(w http.ResponseWriter, live *game.LiveBattle, err error) {
+	if err != nil && live == nil {
+		s.sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	response := map[string]interface{}{"battle": ToLiveBattleDTO(live)}
+	if err != nil {
+		response["error"] = err.Error()
+	}
+	s.sendJSON(w, response, http.StatusOK)
+}
+
+func decodeTerritory(r *http.Request) (string, error) {
+	var req struct {
+		Territory string `json:"territory"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return "", err
+	}
+	return req.Territory, nil
+}
+
+func (s *Server) handleBattleBeginAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	territory, err := decodeTerritory(r)
+	if err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	live, err := session.Controller.BeginBattle(territory)
+	s.sendLiveBattle(w, live, err)
+}
+
+func (s *Server) handleBattleRoundAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	territory, err := decodeTerritory(r)
+	if err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if _, open := session.Controller.LiveBattles[territory]; !open {
+		if _, err := session.Controller.BeginBattle(territory); err != nil {
+			s.sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	live, err := session.Controller.FightRound(territory)
+	s.sendLiveBattle(w, live, err)
+}
+
+func (s *Server) handleBattleCasualtiesAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	var req struct {
+		Territory  string `json:"territory"`
+		Casualties []struct {
+			PieceID int `json:"pieceId"`
+			Hits    int `json:"hits"`
+		} `json:"casualties"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	hits := make(map[int]int, len(req.Casualties))
+	for _, c := range req.Casualties {
+		hits[c.PieceID] += c.Hits
+	}
+	live, err := session.Controller.AssignCasualties(req.Territory, hits)
+	s.sendLiveBattle(w, live, err)
+}
+
+func (s *Server) handleBattleRetreatAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	territory, err := decodeTerritory(r)
+	if err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	live, err := session.Controller.Retreat(territory)
+	s.sendLiveBattle(w, live, err)
+}
+
+func (s *Server) handleBattleSubmergeAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	territory, err := decodeTerritory(r)
+	if err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	live, err := session.Controller.SubmergeSubmarines(territory)
+	s.sendLiveBattle(w, live, err)
+}
+
+
+// groupNotes explains an empty intersection: each unit type's own reach, so
+// the player learns that the armor could go five places and the infantry
+// two, and that the two sets do not overlap.
+func groupNotes(session *GameSession, pieceIDs []int, from string, common map[string]ReachableTerritoryDTO) []string {
+	if len(pieceIDs) < 2 || len(common) > 0 {
+		return nil
+	}
+	g := session.Controller.Game
+	type reach struct {
+		count int
+		n     int
+	}
+	byType := make(map[string]*reach)
+	order := make([]string, 0)
+	anyCanMove := false
+	for _, id := range pieceIDs {
+		piece := g.Pieces[id]
+		if piece == nil || g.IsLoaded(id) {
+			continue
+		}
+		dests, err := reachableForPiece(session, id, from)
+		if err != nil {
+			continue
+		}
+		if _, seen := byType[piece.Name]; !seen {
+			byType[piece.Name] = &reach{}
+			order = append(order, piece.Name)
+		}
+		byType[piece.Name].n++
+		if len(dests) > byType[piece.Name].count {
+			byType[piece.Name].count = len(dests)
+		}
+		if len(dests) > 0 {
+			anyCanMove = true
+		}
+	}
+	if !anyCanMove || len(order) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		r := byType[name]
+		parts = append(parts, fmt.Sprintf("%s can reach %s", plural(r.n, name, name), plural(r.count, "territory", "territories")))
+	}
+	return []string{"No territory is reachable by every unit picked: " +
+		strings.Join(parts, "; ") + " — move them in smaller groups."}
+}
+
+// blockedNeighbourNotes explains the neighbours that did not light up for a
+// group that can move at all: a strict neutral that costs a toll, enemy
+// units in the way of a noncombat move, an ally's ground for aircraft that
+// must land, or the other side's ships. Only next-door territories, so the
+// list stays short and the answer is the one the player is looking at.
+func blockedNeighbourNotes(session *GameSession, pieceIDs []int, from string, common map[string]ReachableTerritoryDTO) []string {
+	g := session.Controller.Game
+	player := g.Players[session.HumanPlayer]
+	fromTerr := g.Board[from]
+	if fromTerr == nil || player == nil || len(pieceIDs) == 0 {
+		return nil
+	}
+	piece := g.Pieces[pieceIDs[0]]
+	if piece == nil || g.IsLoaded(pieceIDs[0]) {
+		return nil
+	}
+	combat := g.CurrentPhase == models.CombatMovePhase
+	var notes []string
+	for _, next := range fromTerr.ConnectedTo {
+		if _, lit := common[next.Name]; lit {
+			continue
+		}
+		if game.ValidateMovementTerrain(piece, next) != nil {
+			continue // not this unit's element; nothing to explain
+		}
+		switch {
+		case next.Owner != nil && next.Owner.Name == "Neutral" && next.NeutralType == models.StrictNeutral:
+			if combat {
+				if err := session.Controller.CheckNeutralTollFunds(next, player); err != nil {
+					notes = append(notes, fmt.Sprintf("%s: %v.", next.Name, err))
+				} else {
+					notes = append(notes, fmt.Sprintf(
+						"%s is a strict neutral: attacking it costs %d IPCs and turns every other strict neutral against you.",
+						next.Name, game.NeutralViolationCost))
+				}
+			} else {
+				notes = append(notes, fmt.Sprintf(
+					"%s is a strict neutral — it can only be entered by attacking it in the Combat Move phase.", next.Name))
+			}
+		case !combat && hostileForces(g, next, player):
+			notes = append(notes, fmt.Sprintf(
+				"%s holds enemy units — attack it in the Combat Move phase.", next.Name))
+		case !combat && next.Terrain != models.Water && next.Owner != player &&
+			!(player.Side != "" && next.Owner.Side == player.Side) &&
+			!game.CanActivateNeutral(next, player):
+			notes = append(notes, fmt.Sprintf(
+				"%s is enemy ground — take it in the Combat Move phase.", next.Name))
+		}
+	}
+	sort.Strings(notes)
+	return notes
+}
+
+
+// handlePlanBombingAction handles POST .../action/plan-bombing: books a
+// bomber for a strategic raid on the destination's industrial complex.
+func (s *Server) handlePlanBombingAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	var req struct {
+		PieceID int    `json:"pieceId"`
+		From    string `json:"from"`
+		To      string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := session.Controller.PlanBombingRaid(req.PieceID, req.From, req.To); err != nil {
+		s.sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.sendJSON(w, map[string]interface{}{"success": true}, http.StatusOK)
+}
+
+// handleResolveRaidAction handles POST .../action/resolve-raid.
+func (s *Server) handleResolveRaidAction(w http.ResponseWriter, r *http.Request, session *GameSession) {
+	territory, err := decodeTerritory(r)
+	if err != nil {
+		s.sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	result, err := session.Controller.ResolveRaid(territory, nil)
+	if err != nil {
+		s.sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.sendJSON(w, map[string]interface{}{"success": true, "raid": ToRaidResultDTO(result)}, http.StatusOK)
 }

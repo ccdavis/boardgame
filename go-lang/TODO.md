@@ -6,76 +6,147 @@ history of what changed (and why) stays discoverable.
 
 ## Rules fidelity
 
-- **Friendly unload is allowed during the combat-move phase.** The engine is
-  deliberately lenient (`UnloadUnit` permits either movement phase); strictly,
-  unloading onto friendly ground is noncombat movement only. Tightening this
-  would also want UI copy explaining why the shore stopped glowing.
+- **Strategic bombing: the complex fires back on its own.** `RollICAADefense`
+  gives every raided complex a one-in-six shot per bomber whether or not an
+  AA gun stands in the territory. Classic requires the gun. The computer
+  players buy guns for their factories anyway, so in practice the difference
+  is a human who skipped one.
 
-- **AAA cannot move at all** because `aaa.gdf` declares `0 movement`. Classic
-  rules give AAA a move of 1 in noncombat. Board-data decision to revisit —
-  the board is the authority, so fix it in the `.gdf` if it should change.
+- **Casualty choice and retreat are the attacker's only.** The defender's
+  losses are always the engine's (cheapest first). A human who is attacked
+  during a computer turn never chooses; that would mean pausing the NPC's
+  turn for a decision, which the web loop does not do.
 
-- **NPC air power is short-ranged.** Fighters and bombers only join attacks
-  on territories ADJACENT to where they sit; a fighter never flies two zones
-  to a battle it could reach, and the NPC never flies strategic bombing
-  missions at all. Deep strikes need landing-spot planning (attack there,
-  land here) that the attack picker does not do yet.
+- **A retreat withdraws everyone who can.** The rules let the attacker pull
+  back some units and leave others; here the retreat is all-or-nothing
+  among units with a line of retreat (amphibious troops stay regardless).
 
-## Balance (measured by cmd/observe, seeds 2000–2049)
+## Balance (measured by cmd/observe, seeds 2000–2019, 40-round cap)
 
-- **The Axis still wins most games: 33–3 with 14 draws** after the round of
-  fixes below (was 43–0 with 7 draws). The Allies now take Pacific victory
-  cities (the Philippines fell 23 times in 50 games) but have never cracked
-  Fortress Europe — Western/Southern Europe garrisons exceed what any single
-  Allied power's landing cap will lift. Closing the rest of the gap needs
-  COORDINATED Allied operations: UK and USA pooling troops, transports and
-  escorts on one target. The side-shared plan book is the natural place to
-  hang a joint operation.
+- **Roughly even now, with a slight Axis edge: Axis 3, Allies 0, 17
+  undecided** (was Axis 33–3 with 14 draws over 50 games). Undecided games
+  sit between 9–5 and 6–8 on victory cities. The swing came from the air
+  arm reaching beyond the next territory, bombing raids, joint operations,
+  and liberation; the Axis edge came back once garrisons claimed their
+  units before invasions did. The long tail of draws is the next thing to
+  look at: both sides hold their cities and neither breaks through in forty
+  rounds. Re-measure after any AI change with
+  `go run ./cmd/observe -games 20 -seed 2000 -turns 40`.
 
-- **Byelorussia (non-VC) still ping-pongs** (~6 ownership changes a game) as
-  the buffer between the German and Soviet lines. Cosmetically odd, probably
-  harmless; the front line IS there.
+- **Iran ping-pongs** (contested 72 times in 20 games) between Italy and the
+  UK, as Byelorussia does between Germany and the USSR. Cosmetic; the front
+  line IS there.
+
+- **NPC purchases are capped at factory output but ignore the queue.** A
+  unit left unplaced (a ship with no yard free) is bought again next turn;
+  the backlog stays small (one or two units in a few games) but is not zero.
 
 ## Battle screen
 
-- **No per-round decisions.** Battles resolve start-to-finish with no retreat
-  option and engine-chosen casualties (the original plan: "at some point we'd
-  have all the options available to players during battles"). The engine
-  already supports retreat deciders (`ResolveBattleWithRetreat`); the web
-  layer always passes nil. Wants: round-by-round display, retreat button
-  (amphibious attackers excluded — they have no retreat origin, by rule),
-  casualty selection, submarine submerge.
+- **Rounds are shown as hit counts, not dice.** The log says "2 hits (armor,
+  infantry)" per side per round; the individual rolls are in the payload
+  (`Hit.Roll`) and could be drawn as dice.
 
-## Fog of war (added with the feature)
+## Fog of war
 
-- **Only amphibious operations leak.** The 5%-per-turn reveal roll covers
-  amphibious plans; defence garrisons and naval squadrons are always secret
-  and never leak. Extend if garrison intelligence should be obtainable.
+- **Leaked garrison and squadron orders are read, not acted on.** Amphibious
+  leaks feed the defender's garrison sizing (`RevealedThreatsAgainst`); a
+  leaked defence or naval plan only becomes readable in the transcript. The
+  attack picker could weigh a garrison it knows is being built up.
 
-- **The terminal UI shows unredacted transcripts.** Redaction happens in the
-  web server's transcript rendering; the TUI still prints everything.
-
-- **Human operations are invisible to NPC allies** (no way to register a
-  human plan in the shared book). Accepted for now.
+- **Only a human's BOOKED landings reach the shared plan book.** Transports
+  being loaded and sailed toward a target are not a claim until the landing
+  is booked, so an NPC ally may still plan against the same island a turn
+  or two earlier.
 
 ## UX
 
-- **Empty or thinned destination sets are unexplained.** When a picked group's
-  reachable intersection is empty (or a specific territory is missing — e.g. a
-  strict neutral you cannot afford to violate), the player gets no reason.
-  The server could return per-piece counts or blocked-reasons so the picker
-  can say "your armor cannot reach there" or "violating Turkey needs 3 IPCs".
+- **Bombing raids are drawn like attacks.** A booked raid shows as a red
+  combat arrow and a battle marker; only the review list and the battle
+  screen say "bombing raid".
 
-- **Purchase earmarks are per unit type, last factory wins.** Buying infantry
-  at two different factories in one turn earmarks all of it to the factory
-  used last; "Place All As Bought" then sends everything there. Correct
-  placement is still enforced server-side; only the convenience is coarse.
-
-- **Industrial-complex repair is not exposed in the web UI.**
-  `RepairIndustrialComplex` exists in the engine (purchase phase) but no
-  endpoint or dialog offers it.
+- **"Place N As Bought" places only earmarked groups.** Units bought with no
+  factory open (none, in the browser; possible through the API) still need
+  placing by hand.
 
 ## Fixed (kept for the record)
+
+- ~~No per-round battle decisions~~ — battles can be fought a round at a
+  time (`game/battle_live.go`): the attacker chooses casualties, may retreat
+  (amphibious troops excepted), and may submerge submarines; "Fight it out"
+  and "Resolve All" finish any battle from where it stands.
+
+- ~~NPC air power short-ranged, no bombing~~ — aircraft join any battle they
+  can reach and still land after (`airInRange`, `canLandAfter`); idle bombers
+  raid enemy factories (`PlanBombingRaids`). Raids are an engine feature
+  (`game/bombing.go`) the browser offers too. Powers repair bomb damage
+  before buying.
+
+- ~~No coordinated Allied operations~~ — a fortress beyond one power's lift
+  is planned as a joint operation: the ally's planner joins it, each half is
+  sized to its share, the halves wait for each other at their drop zones and
+  land in the same round, and troops afloat beside a beach an ally took land
+  as reinforcements.
+
+- ~~Friendly unload allowed in the combat phase~~ — friendly shores unload in
+  noncombat only; the combat phase says so when nothing else is lit.
+
+- ~~AAA cannot move~~ — the board gives it a move of 1, noncombat only.
+
+- ~~Factory output uncapped~~ — a complex builds at most its production value
+  (less bomb damage) a turn, ships counting against the yard beside them; the
+  placement dialog shows what is left, and NPC purchases respect the cap.
+
+- ~~Purchase earmarks per unit type~~ — earmarks are per unit, server-side;
+  buying at two factories places each stack where it was bought.
+
+- ~~Industrial-complex repair not exposed~~ — the production menu offers to
+  repair bomb damage at one IPC a point.
+
+- ~~Units that fought are silently absent from the picker~~ — every unit is
+  listed, greyed with its reason ("already fought this turn", "moves in
+  noncombat only", "booked for a landing").
+
+- ~~Empty destination sets unexplained~~ — the server explains an empty
+  intersection by unit type, and a dark neighbour by its rule (strict
+  neutral and its toll, enemy units, enemy ground).
+
+- ~~Defence and naval plans never leak; the TUI printed nothing~~ — garrison
+  and squadron orders run the same 5% leak; the terminal shows each NPC turn
+  through the same redaction as the browser.
+
+- ~~Human operations invisible to NPC allies~~ — a booked landing claims its
+  target in the shared book until it executes.
+
+- ~~Liberated territory stayed with the liberator~~ — `CaptureTerritory` had
+  no notion of an original owner, so an NPC ally that retook a human player's
+  province kept it and its income for the rest of the war. Territories now
+  remember their `OriginalOwner` (the printed board, or a neutral's first
+  conqueror); an ally retaking one hands it back if the owner's capital is
+  free, keeps it in trust otherwise, and freeing the capital returns every
+  province held that way. The liberator's own troops stay its own; only what
+  the enemy left behind (AA guns, factories) changes hands.
+
+- ~~Units beside allied ground had nowhere to go in the combat phase~~ — the
+  pathfinder refused any allied-owned destination for a combat move, and since
+  every sea zone carries a nominal owner that also barred fleets from attacking
+  into zones "owned" by an ally (most of the ocean, for the UK and USA). An
+  American infantry in Alaska, whose only road runs into Canada, had no
+  destination at all; the territory glowed and the picker said "Nowhere to
+  go". Allied ground is now as open as our own in both phases; a combat move
+  ending there never stages a battle or changes the owner
+  (`canTraverseTerritory`, `ExecuteCombatMoves`).
+
+- ~~Territories glowed with nothing movable in them~~ — the map lit any
+  territory holding the player's non-structure pieces, so an AA gun (0
+  movement) or a stack that had spent its allowance attacking invited a click
+  that opened an empty picker. `movableUnits` now counts only what the picker
+  would offer, tracker-aware.
+
+- ~~A slow poll could rewind the browser to the previous phase~~ — a state
+  request that resolved after a later action-driven refresh applied its stale
+  snapshot, and the apparent phase change cancelled whatever the player was in
+  the middle of. Stale responses are dropped (`stateSeq`).
 
 - ~~Sea battle in the drop zone does not gate the landing~~ — battles now
   resolve sea-first (`BattleOrder`), a landing may not be fought while its

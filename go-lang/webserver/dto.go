@@ -21,8 +21,11 @@ type TerritoryDTO struct {
 
 	// HasFactory and FriendlyUnits drive the map's phase highlighting: which
 	// territories light up as production sites, and which hold units the human
-	// player could move. FriendlyUnits counts the human's pieces here excluding
-	// structures, which are captured with the territory rather than moved.
+	// player could move. FriendlyUnits counts the human's pieces here that can
+	// move at all -- structures are captured with the territory rather than
+	// moved, and a unit with no movement allowance (an AA gun on this board)
+	// is a garrison, not a mover. Counting it lit the territory up and then
+	// opened an empty picker.
 	HasFactory    bool `json:"hasFactory"`
 	FriendlyUnits int  `json:"friendlyUnits"`
 
@@ -57,7 +60,12 @@ type UnitDTO struct {
 	Movement int    `json:"movement"`
 	Terrain  string `json:"terrain"`
 	CanMove  bool   `json:"canMove"`
-	Hits     int    `json:"hits"`
+	// WhyNot says, in the player's terms, why CanMove is false: the unit
+	// already has orders, has spent its movement, or cannot move in this
+	// phase. Shown greyed in the unit picker so the rule is visible rather
+	// than the unit simply missing.
+	WhyNot string `json:"whyNot,omitempty"`
+	Hits   int    `json:"hits"`
 	// Owner matters in shared spaces: a sea zone holds ships from several
 	// powers, and the unit picker must offer only the human player's.
 	Owner string `json:"owner"`
@@ -107,6 +115,28 @@ type MoveDTO struct {
 	// Landing marks a booked amphibious assault rather than an ordinary
 	// move: cancelled through cancel-landing, not cancel-move.
 	Landing bool `json:"landing,omitempty"`
+	// Raid marks a strategic bombing raid on the destination's factory.
+	Raid bool `json:"raid,omitempty"`
+}
+
+// RaidResultDTO reports a bombing raid.
+type RaidResultDTO struct {
+	Territory   string `json:"territory"`
+	Bombers     int    `json:"bombers"`
+	BombersLost int    `json:"bombersLost"`
+	Damage      int    `json:"damage"`
+	DamageRolls []int  `json:"damageRolls"`
+}
+
+func ToRaidResultDTO(result *game.RaidResult) RaidResultDTO {
+	rolls := result.DamageRolls
+	if rolls == nil {
+		rolls = []int{}
+	}
+	return RaidResultDTO{
+		Territory: result.Target, Bombers: result.Bombers,
+		BombersLost: result.BombersLost, Damage: result.Damage, DamageRolls: rolls,
+	}
 }
 
 // BattleResultDTO represents the result of a battle
@@ -140,6 +170,55 @@ type PendingBattleDTO struct {
 	// Bombarding are the warships standing off shore in support of an
 	// amphibious landing -- shown so the player knows the beach is covered.
 	Bombarding []UnitGroupDTO `json:"bombarding,omitempty"`
+	// InProgress marks a battle already opened round by round.
+	InProgress bool `json:"inProgress,omitempty"`
+	// Raid marks a strategic bombing raid rather than a fight: the
+	// attackers are bombers, the defenders the anti-aircraft guns.
+	Raid bool `json:"raid,omitempty"`
+}
+
+// ToPendingRaidDTO renders a booked bombing raid in the battle list's shape.
+func ToPendingRaidDTO(g *models.Game, raid *game.Raid) PendingBattleDTO {
+	var bombers, guns []*models.Piece
+	for _, id := range raid.BomberIDs {
+		if piece := g.Pieces[id]; piece != nil {
+			bombers = append(bombers, piece)
+		}
+	}
+	defender := ""
+	if target := g.Board[raid.Target]; target != nil {
+		if target.Owner != nil {
+			defender = target.Owner.Name
+		}
+		for _, id := range target.Pieces {
+			if piece := g.Pieces[id]; piece != nil && models.CapabilitiesOf(piece).IsAA {
+				guns = append(guns, piece)
+			}
+		}
+	}
+	group := func(pieces []*models.Piece) []UnitGroupDTO {
+		counts := map[string]int{}
+		stats := map[string]*models.Piece{}
+		for _, p := range pieces {
+			counts[p.Name]++
+			stats[p.Name] = p
+		}
+		names := make([]string, 0, len(counts))
+		for n := range counts {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		out := make([]UnitGroupDTO, 0, len(names))
+		for _, n := range names {
+			out = append(out, UnitGroupDTO{Type: n, Count: counts[n],
+				Attack: int(stats[n].Attack), Defend: int(stats[n].Defend)})
+		}
+		return out
+	}
+	return PendingBattleDTO{
+		Territory: raid.Target, Attacker: raid.AttackerID, Defender: defender,
+		Attackers: group(bombers), Defenders: group(guns), Raid: true,
+	}
 }
 
 // ReachableTerritoryDTO represents a territory a unit can reach
@@ -175,6 +254,9 @@ type AvailableUnitDTO struct {
 type PurchasedUnitDTO struct {
 	Type     string `json:"type"`
 	Quantity int    `json:"quantity"`
+	// Earmark is the factory the group was bought at, if any. Groups of one
+	// type bought at different factories are listed separately.
+	Earmark string `json:"earmark,omitempty"`
 	// Targets is filled in during the Mobilize phase: the territories where a
 	// unit of this type may legally be placed right now.
 	Targets []string `json:"targets,omitempty"`
@@ -206,7 +288,7 @@ func ToTerritoryDTO(t *models.Territory, g *models.Game, humanPlayer string) Ter
 		}
 		if piece.Owner != nil {
 			ownerCounts[piece.Owner.Name]++
-			if piece.Owner.Name == humanPlayer {
+			if piece.Owner.Name == humanPlayer && piece.Movement > 0 {
 				friendly++
 			}
 		}
@@ -365,6 +447,7 @@ func ToMoveDTO(m *game.Move) MoveDTO {
 		From:    m.From,
 		To:      m.To,
 		Type:    moveType,
+		Raid:    m.Bombing,
 	}
 }
 
@@ -423,24 +506,124 @@ func ToAvailableUnitDTOs(templates map[string]*models.Piece, currentIPCs int) []
 
 // GroupPurchasedUnits converts a list of pending units to quantity groups
 func GroupPurchasedUnits(units []*models.PendingUnit) []PurchasedUnitDTO {
-	counts := make(map[string]int)
+	type key struct{ unitType, earmark string }
+	counts := make(map[key]int)
 	for _, unit := range units {
-		counts[unit.Type]++
+		counts[key{unit.Type, unit.Earmark}]++
 	}
 
-	types := make([]string, 0, len(counts))
-	for unitType := range counts {
-		types = append(types, unitType)
+	keys := make([]key, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
 	}
-	sort.Strings(types)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].unitType != keys[j].unitType {
+			return keys[i].unitType < keys[j].unitType
+		}
+		return keys[i].earmark < keys[j].earmark
+	})
 
 	result := make([]PurchasedUnitDTO, 0, len(counts))
-	for _, unitType := range types {
+	for _, k := range keys {
 		result = append(result, PurchasedUnitDTO{
-			Type:     unitType,
-			Quantity: counts[unitType],
+			Type:     k.unitType,
+			Quantity: counts[k],
+			Earmark:  k.earmark,
 		})
 	}
 
 	return result
+}
+
+// LiveUnitDTO is one attacking piece in a battle being fought round by round,
+// with enough for the player to choose it as a casualty.
+type LiveUnitDTO struct {
+	ID      int    `json:"id"`
+	Type    string `json:"type"`
+	Attack  int    `json:"attack"`
+	Defend  int    `json:"defend"`
+	Hits    int    `json:"hits"`
+	MaxHits int    `json:"maxHits"`
+}
+
+// LiveBattleDTO is the state of a battle between rounds.
+type LiveBattleDTO struct {
+	Territory  string                   `json:"territory"`
+	Attacker   string                   `json:"attacker"`
+	Defender   string                   `json:"defender"`
+	Round      int                      `json:"round"`
+	Attackers  []UnitGroupDTO           `json:"attackers"`
+	Defenders  []UnitGroupDTO           `json:"defenders"`
+	Bombarding []UnitGroupDTO           `json:"bombarding,omitempty"`
+	Units      []LiveUnitDTO            `json:"units"`
+	// PendingHits is how many hits the player must assign to their own
+	// units before the next round.
+	PendingHits int                      `json:"pendingHits"`
+	CanRetreat  bool                     `json:"canRetreat"`
+	CanSubmerge bool                     `json:"canSubmerge"`
+	Log         []game.BattleRoundReport `json:"log"`
+	Done        bool                     `json:"done"`
+	Result      *BattleResultDTO         `json:"result,omitempty"`
+}
+
+// ToLiveBattleDTO renders a live battle for the browser.
+func ToLiveBattleDTO(live *game.LiveBattle) LiveBattleDTO {
+	group := func(pieces []*models.Piece) []UnitGroupDTO {
+		counts := make(map[string]int)
+		stats := make(map[string]*models.Piece)
+		for _, piece := range pieces {
+			counts[piece.Name]++
+			stats[piece.Name] = piece
+		}
+		keys := make([]string, 0, len(counts))
+		for name := range counts {
+			keys = append(keys, name)
+		}
+		sort.Strings(keys)
+		out := make([]UnitGroupDTO, 0, len(keys))
+		for _, name := range keys {
+			out = append(out, UnitGroupDTO{
+				Type: name, Count: counts[name],
+				Attack: int(stats[name].Attack), Defend: int(stats[name].Defend),
+			})
+		}
+		return out
+	}
+	units := make([]LiveUnitDTO, 0, len(live.Attackers))
+	for _, piece := range live.Attackers {
+		units = append(units, LiveUnitDTO{
+			ID: piece.ID, Type: piece.Name,
+			Attack: int(piece.Attack), Defend: int(piece.Defend),
+			Hits: piece.Hits, MaxHits: models.CapabilitiesOf(piece).MaxHits,
+		})
+	}
+	sort.Slice(units, func(i, j int) bool {
+		if units[i].Type != units[j].Type {
+			return units[i].Type < units[j].Type
+		}
+		return units[i].ID < units[j].ID
+	})
+	dto := LiveBattleDTO{
+		Territory:   live.Territory,
+		Attacker:    live.Battle.AttackerID,
+		Defender:    live.Battle.DefenderID,
+		Round:       live.Round,
+		Attackers:   group(live.Attackers),
+		Defenders:   group(live.Defenders),
+		Bombarding:  group(live.Battle.Bombarding),
+		Units:       units,
+		PendingHits: live.PendingAttackerHits,
+		CanRetreat:  live.CanRetreat(),
+		CanSubmerge: live.CanSubmerge(),
+		Log:         live.Log,
+		Done:        live.Done,
+	}
+	if dto.Log == nil {
+		dto.Log = []game.BattleRoundReport{}
+	}
+	if live.Done && live.Result != nil {
+		result := ToBattleResultDTO(live.Territory, live.Result)
+		dto.Result = &result
+	}
+	return dto
 }

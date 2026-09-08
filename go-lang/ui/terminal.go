@@ -90,10 +90,15 @@ func (t *Terminal) Run() error {
 			fmt.Print("Press Enter to watch their turn... ")
 			t.Reader.ReadString('\n')
 
-			err = t.Driver.RunNPCTurn(player.Name, nil)
+			// The turn is recorded and shown afterwards, redacted for the
+			// human's side: an ally's operations are shared, an enemy's are
+			// withheld. The terminal used to run the turn silently.
+			transcript := game.NewGameTranscript(player.Name + "'s turn")
+			err = t.Driver.RunNPCTurn(player.Name, transcript)
 			if err != nil {
 				return fmt.Errorf("NPC turn error: %v", err)
 			}
+			t.displayNPCTranscript(player, transcript)
 
 			// Pause after NPC turn completes
 			fmt.Println()
@@ -1978,5 +1983,24 @@ func (t *Terminal) showPlannedAttack(territoryName string) {
 		fmt.Println("Assessment: Moderate attack (may succeed)")
 	} else {
 		fmt.Println("Assessment: Weak attack (may fail)")
+	}
+}
+
+
+// displayNPCTranscript prints what a computer power did this turn, as the
+// human is entitled to see it: everything for an ally, the public entries and
+// a count of secret operations for an enemy.
+func (t *Terminal) displayNPCTranscript(npc *models.Player, transcript *game.GameTranscript) {
+	sameSide := false
+	for _, name := range t.Controller.Game.PlayerOrder {
+		human := t.Controller.Game.Players[name]
+		if human != nil && !human.NPC && human.Side != "" && human.Side == npc.Side {
+			sameSide = true
+		}
+	}
+	fmt.Println()
+	fmt.Printf("── %s's turn ──\n", npc.Name)
+	for _, line := range transcript.LinesFor(sameSide, npc.Name) {
+		fmt.Println("  " + line)
 	}
 }

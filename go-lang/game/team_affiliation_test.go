@@ -143,8 +143,12 @@ func TestNPCAIDoesNotAttackAllies(t *testing.T) {
 	}
 }
 
-// TestControllerPlanMoveRejectsAlliedTarget tests that the controller rejects moves to allied territories
-func TestControllerPlanMoveRejectsAlliedTarget(t *testing.T) {
+// TestControllerCombatMoveIntoAlliedTerritoryIsNotAnAttack: a combat-phase
+// move onto an ally's ground is allowed -- it is a friendly move, the same as
+// a move onto our own ground -- but it is never an attack: no battle is
+// staged and the territory stays the ally's. (Refusing the move outright, as
+// this test once demanded, stranded units whose only neighbour was allied.)
+func TestControllerCombatMoveIntoAlliedTerritoryIsNotAnAttack(t *testing.T) {
 	// Set up game
 	game := models.NewGame()
 
@@ -178,8 +182,24 @@ func TestControllerPlanMoveRejectsAlliedTarget(t *testing.T) {
 	infantryID := berlinTerritory.Pieces[0]
 
 	err := controller.PlanMove(infantryID, "Berlin", "Tokyo")
-	if err == nil {
-		t.Error("Controller should reject combat move to allied territory Tokyo")
+	if err != nil {
+		t.Fatalf("combat-phase move into allied Tokyo should be allowed: %v", err)
+	}
+	if attacks := controller.GetPlannedAttacks(); len(attacks) != 0 {
+		t.Errorf("move into allied territory listed as an attack: %v", attacks)
+	}
+	if err := controller.ExecuteCombatMoves(); err != nil {
+		t.Fatalf("executing combat moves: %v", err)
+	}
+	if len(controller.PendingBattles) != 0 {
+		t.Errorf("a battle was staged in allied territory: %v", controller.PendingBattles)
+	}
+	if game.Board["Tokyo"].Owner != japan {
+		t.Errorf("Tokyo changed hands to %s; allies do not capture each other's ground",
+			game.Board["Tokyo"].Owner.Name)
+	}
+	if len(game.Board["Tokyo"].Pieces) != 1 || game.Pieces[infantryID].Owner != germany {
+		t.Errorf("the infantry should be standing in Tokyo, still German")
 	}
 }
 

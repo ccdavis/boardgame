@@ -35,6 +35,10 @@ type UnitCapabilities struct {
 	// CanBombard marks a warship that may support an amphibious assault.
 	CanBombard bool
 
+	// CanBomb marks an aircraft that may fly strategic bombing raids against
+	// industrial complexes.
+	CanBomb bool
+
 	// SupportsInfantry marks artillery, which raises paired infantry attack.
 	SupportsInfantry bool
 
@@ -90,6 +94,9 @@ func capabilitiesFor(template *Piece) UnitCapabilities {
 
 	case "cruiser":
 		caps.CanBombard = true
+
+	case "bomber", "strategicbomber", "heavybomber":
+		caps.CanBomb = true
 
 	case "artillery":
 		caps.SupportsInfantry = true

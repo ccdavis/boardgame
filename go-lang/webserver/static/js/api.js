@@ -113,7 +113,7 @@ class GameAPI {
     /**
      * Purchase units
      */
-    async purchaseUnit(unitType, quantity = 1) {
+    async purchaseUnit(unitType, quantity = 1, territory = '') {
         this._ensureSession();
         const response = await fetch(`${API_BASE}/game/${this.sessionId}/action/purchase`, {
             method: 'POST',
@@ -122,7 +122,8 @@ class GameAPI {
             },
             body: JSON.stringify({
                 unitType,
-                quantity
+                quantity,
+                territory
             })
         });
 
@@ -131,6 +132,24 @@ class GameAPI {
             throw new Error(error.error || 'Failed to purchase unit');
         }
 
+        return await response.json();
+    }
+
+    /**
+     * Repair bombing damage to an industrial complex (purchase phase),
+     * one IPC per point. amount 0 means "all of it".
+     */
+    async repairIC(territory, amount = 0) {
+        this._ensureSession();
+        const response = await fetch(`${API_BASE}/game/${this.sessionId}/action/repair-ic`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ territory, amount })
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to repair');
+        }
         return await response.json();
     }
 
@@ -350,6 +369,30 @@ class GameAPI {
 
         return await response.json();
     }
+
+    /** One call for each of the round-by-round battle actions. */
+    async battleAction(action, payload) {
+        this._ensureSession();
+        const response = await fetch(`${API_BASE}/game/${this.sessionId}/action/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || `Failed: ${action}`);
+        }
+        return await response.json();
+    }
+    async planBombing(pieceId, from, to) { return this.battleAction('plan-bombing', { pieceId, from, to }); }
+    async resolveRaid(territory) { return this.battleAction('resolve-raid', { territory }); }
+    async battleBegin(territory) { return this.battleAction('battle-begin', { territory }); }
+    async battleRound(territory) { return this.battleAction('battle-round', { territory }); }
+    async battleCasualties(territory, casualties) {
+        return this.battleAction('battle-casualties', { territory, casualties });
+    }
+    async battleRetreat(territory) { return this.battleAction('battle-retreat', { territory }); }
+    async battleSubmerge(territory) { return this.battleAction('battle-submerge', { territory }); }
 
     /**
      * Auto-resolve all pending battles

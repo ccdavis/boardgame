@@ -341,3 +341,34 @@ func (t *GameTranscript) GetTurnEntries(turn int) []TranscriptEntry {
 	}
 	return entries
 }
+
+
+// LinesFor renders the transcript for a particular viewer. A viewer on the
+// acting power's side reads everything; an enemy viewer has the secret entries
+// withheld and replaced with a single count, so they learn that operations
+// exist but never what they are. Both front ends present NPC turns through
+// this, so the fog of war is the same whichever interface is watching.
+func (t *GameTranscript) LinesFor(sameSide bool, power string) []string {
+	if t == nil {
+		return nil
+	}
+	lines := make([]string, 0, len(t.Entries))
+	secrets := 0
+	secretAt := -1
+	for _, entry := range t.Entries {
+		if entry.Secret && !sameSide {
+			if secrets == 0 {
+				secretAt = len(lines)
+			}
+			secrets++
+			continue
+		}
+		lines = append(lines, entry.Action)
+	}
+	if secrets > 0 {
+		notice := fmt.Sprintf("%s is working on %d secret operation(s) — details unknown",
+			power, secrets)
+		lines = append(lines[:secretAt], append([]string{notice}, lines[secretAt:]...)...)
+	}
+	return lines
+}

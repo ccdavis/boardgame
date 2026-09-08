@@ -24,6 +24,10 @@ type Move struct {
 
 	// Blitzed lists enemy territories this move takes by driving through them.
 	Blitzed []string
+
+	// Bombing marks a strategic bombing raid: the aircraft flies to the
+	// territory to bomb its industrial complex rather than to fight.
+	Bombing bool
 }
 
 // MovementTracker tracks all moves planned during a turn
@@ -137,6 +141,12 @@ func ValidateMovement(game *models.Game, pieceID int, from, to string, moveType 
 	// CanReachTerritory() to verify the piece can actually reach the destination.
 
 	return nil
+}
+
+// ValidateMovementTerrain reports whether a piece may enter a territory's
+// terrain at all, for callers outside the package that explain the map.
+func ValidateMovementTerrain(piece *models.Piece, territory *models.Territory) error {
+	return validateTerrain(piece, territory)
 }
 
 // validateTerrain checks if a piece can move to a terrain type
@@ -352,13 +362,29 @@ func canTraverseTerritory(game *models.Game, piece *models.Piece, territory, des
 
 		// Combat moves can target enemy territories
 		if moveType == CombatMove {
-			// Can target enemy territories, but NOT allied territories
-			// Rulebook page 14: "At no time can an Allied power attack another Allied power,
-			// or an Axis power attack another Axis power"
 			if territory.Owner != currentPlayer {
-				// Check if target is an ally (same side)
+				// A sea zone's owner is a starting marker, not a possession:
+				// nobody holds an ocean. Judging it by that marker forbade a
+				// fleet from attacking into any zone nominally an ally's --
+				// which is most of the map for the UK and the USA -- and, in
+				// the browser, left whole navies with nowhere to sail during
+				// the combat phase. What makes entering a sea zone a fight is
+				// an enemy fleet in it, which ExecuteCombatMoves checks.
+				if territory.Terrain == models.Water {
+					return true
+				}
+
+				// Allied ground is as open as our own. Rulebook page 14: "At
+				// no time can an Allied power attack another Allied power" --
+				// and a move into an ally's territory is not an attack; it is
+				// a friendly move booked in the combat phase, exactly as a
+				// move into our own territory already is. ExecuteCombatMoves
+				// never stages a battle there and never changes its owner.
+				// Refusing it stranded units whose only land neighbour was an
+				// ally's: an American infantry in Alaska, whose one road leads
+				// into Canada, had no destination at all until noncombat.
 				if areAllies(currentPlayer, territory.Owner) {
-					return false // Cannot attack allies!
+					return true
 				}
 
 				// Check neutral territory rules

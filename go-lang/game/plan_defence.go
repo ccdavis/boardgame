@@ -40,6 +40,10 @@ type DefencePlan struct {
 	Satisfied    bool
 	CreatedTurn  int
 	LastProgress int
+
+	// Revealed means the other side has learned of this garrison plan; its
+	// reports are no longer withheld from enemy viewers.
+	Revealed bool
 }
 
 // Describe renders a defence plan for a transcript.
@@ -206,6 +210,13 @@ func (npc *NPCAIPlayer) ReviewDefences(gc *GameController, player *models.Player
 		if !plan.Review(gc) {
 			continue // territory lost; forget the plan
 		}
+		// Garrison orders leak like any other: a small chance a turn that
+		// the enemy learns where a power means to stand.
+		if !plan.Revealed && npc.rng != nil && npc.rng.Float64() < operationLeakChance {
+			plan.Revealed = true
+			transcript.LogAction(player.Name,
+				"Intelligence leak: the enemy has learned of "+plan.Describe(gc.Game))
+		}
 		if extra := threats[plan.Territory]; plan.WantStrength < extra {
 			plan.WantStrength = extra
 			plan.Satisfied = plan.GarrisonStrength(gc.Game) >= plan.WantStrength
@@ -239,6 +250,19 @@ func (npc *NPCAIPlayer) ReviewDefences(gc *GameController, player *models.Player
 
 	for _, plan := range gc.Plans.Defences(player.Name) {
 		npc.manGarrison(gc, player, plan)
+	}
+}
+
+// logPlanLine records a line about a standing plan: openly once the plan
+// has leaked, otherwise withheld from the other side.
+func logPlanLine(transcript *GameTranscript, player string, revealed bool, text string) {
+	if transcript == nil {
+		return
+	}
+	if revealed {
+		transcript.LogAction(player, text)
+	} else {
+		transcript.LogSecretAction(player, text)
 	}
 }
 

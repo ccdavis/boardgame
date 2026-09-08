@@ -28,6 +28,25 @@ type GameController struct {
 	// sweep runs inside AdvanceTurn, which has no transcript to write to;
 	// front ends and observers read (and may clear) this instead.
 	CrashLog []string
+
+	// LiveBattles are battles being fought round by round for a human
+	// attacker; see battle_live.go. A live battle stays in PendingBattles
+	// until it concludes, so the phase cannot end with a fight half-fought.
+	LiveBattles map[string]*LiveBattle
+
+	// Dice is the roller live battles use, so a seeded game replays. Nil
+	// means "fresh randomness on first use".
+	Dice *DiceRoller
+
+	// PendingRaids are strategic bombing raids booked this combat phase,
+	// by target; see bombing.go.
+	PendingRaids map[string]*Raid
+
+	// Mobilized counts the units placed at each industrial complex this
+	// turn. A complex builds at most its territory's production value per
+	// turn (rulebook), which nothing enforced: the browser's own guidance
+	// promised the cap while the engine placed any number.
+	Mobilized map[string]int
 }
 
 // NewGameController creates a new controller for a game
@@ -45,6 +64,7 @@ func NewGameController(game *models.Game) *GameController {
 		MoveTracker:    NewMovementTracker(),
 		PendingBattles: make(map[string]*Battle),
 		Plans:          plans,
+		Mobilized:      make(map[string]int),
 	}
 }
 
@@ -135,8 +155,10 @@ func (gc *GameController) AdvanceTurn() error {
 	gc.Game.CurrentPower = gc.Game.PlayerOrder[nextIndex]
 	gc.Game.CurrentPhase = models.PurchasePhase
 
-	// Movement allowances are per turn, so the incoming power starts fresh.
+	// Movement allowances and factory output are per turn, so the incoming
+	// power starts fresh.
 	gc.MoveTracker.ResetTurn()
+	gc.Mobilized = make(map[string]int)
 
 	return nil
 }
@@ -296,8 +318,15 @@ func (gc *GameController) GetVictoryCityCounts() (axis int, allies int) {
 	return gc.Game.CountVictoryCities()
 }
 
-// PurchaseUnit allows the current player to purchase a unit
+// PurchaseUnit handles unit purchases during the purchase phase.
 func (gc *GameController) PurchaseUnit(unitType string, quantity int) error {
+	return gc.PurchaseUnitAt(unitType, quantity, "")
+}
+
+// PurchaseUnitAt buys units earmarked for a particular industrial complex.
+// The earmark is advisory -- Mobilize still checks legality -- but it lets
+// a purchase made at one factory be placed there without re-choosing.
+func (gc *GameController) PurchaseUnitAt(unitType string, quantity int, earmark string) error {
 	if gc.Game.CurrentPhase != models.PurchasePhase {
 		return fmt.Errorf("can only purchase units during Purchase phase")
 	}
@@ -331,8 +360,9 @@ func (gc *GameController) PurchaseUnit(unitType string, quantity int) error {
 		gc.Game.PurchasedUnits[player.Name] = append(
 			gc.Game.PurchasedUnits[player.Name],
 			&models.PendingUnit{
-				Type: unitType,
-				Cost: int(template.Cost),
+				Type:    unitType,
+				Cost:    int(template.Cost),
+				Earmark: earmark,
 			},
 		)
 	}
@@ -363,6 +393,10 @@ func (gc *GameController) MobilizeUnit(territoryName string, unitType string) er
 		return fmt.Errorf("unit type %s not found", unitType)
 	}
 
+	// The complex whose output this unit counts against: the territory itself
+	// for a land unit, the yard beside the sea zone for a ship. A new complex
+	// is built, not produced, and counts against nothing.
+	var yard *models.Territory
 	if template.Terrain == models.Water {
 		// A ship is launched into a sea zone beside the yard that built it,
 		// not parked in the factory's home province. Sea zones have nominal
@@ -375,6 +409,10 @@ func (gc *GameController) MobilizeUnit(territoryName string, unitType string) er
 		}
 		if !gc.adjacentToOwnProduction(territory, player) {
 			return fmt.Errorf("%s does not border one of your industrial complexes", territoryName)
+		}
+		yard = gc.YardWithCapacity(territory, player)
+		if yard == nil {
+			return fmt.Errorf("every industrial complex beside %s has built its limit this turn", territoryName)
 		}
 	} else {
 		if territory.Owner != player {
@@ -395,15 +433,41 @@ func (gc *GameController) MobilizeUnit(territoryName string, unitType string) er
 		if !hasProduction && !units.Of(unitType).IsStructure {
 			return fmt.Errorf("%s has no industrial complex to build in", territoryName)
 		}
+		if !units.Of(unitType).IsStructure {
+			yard = territory
+			if gc.FactoryCapacity(territory) <= 0 {
+				return fmt.Errorf("%s can build %d unit(s) a turn and has built them",
+					territoryName, GetEffectiveProduction(territory))
+			}
+		}
 	}
 
-	// Check if player has purchased this unit type
+	// Check if player has purchased this unit type. Prefer the unit bought
+	// for this complex, then one bought nowhere in particular, then any: a
+	// stack earmarked for another factory is used last, so it stays available
+	// where it was meant to go.
+	prefer := territoryName
+	if yard != nil {
+		prefer = yard.Name
+	}
 	pending := gc.Game.PurchasedUnits[player.Name]
 	unitIndex := -1
+	rank := func(unit *models.PendingUnit) int {
+		switch unit.Earmark {
+		case prefer:
+			return 0
+		case "":
+			return 1
+		default:
+			return 2
+		}
+	}
 	for i, unit := range pending {
-		if unit.Type == unitType {
+		if unit.Type != unitType {
+			continue
+		}
+		if unitIndex == -1 || rank(unit) < rank(pending[unitIndex]) {
 			unitIndex = i
-			break
 		}
 	}
 
@@ -429,7 +493,41 @@ func (gc *GameController) MobilizeUnit(territoryName string, unitType string) er
 	if newPiece := gc.Game.Pieces[gc.Game.NextPieceID-1]; newPiece != nil {
 		newPiece.Owner = player
 	}
+	if yard != nil {
+		gc.Mobilized[yard.Name]++
+	}
 
+	return nil
+}
+
+// FactoryCapacity is how many more units a territory's industrial complex can
+// turn out this turn: its production value, less bombing damage, less what it
+// has already built.
+func (gc *GameController) FactoryCapacity(territory *models.Territory) int {
+	if territory == nil {
+		return 0
+	}
+	left := GetEffectiveProduction(territory) - gc.Mobilized[territory.Name]
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
+// YardWithCapacity finds an industrial complex of the player's beside a sea
+// zone that can still launch a ship this turn.
+func (gc *GameController) YardWithCapacity(seaZone *models.Territory, player *models.Player) *models.Territory {
+	units := gc.Game.Units()
+	for _, neighbour := range seaZone.ConnectedTo {
+		if neighbour.Owner != player {
+			continue
+		}
+		for _, pieceID := range neighbour.Pieces {
+			if units.For(gc.Game.Pieces[pieceID]).IsStructure && gc.FactoryCapacity(neighbour) > 0 {
+				return neighbour
+			}
+		}
+	}
 	return nil
 }
 
@@ -476,12 +574,14 @@ func (gc *GameController) PlacementTargets(player *models.Player, unitType strin
 	for name, territory := range gc.Game.Board {
 		switch {
 		case template.Terrain == models.Water:
-			if territory.Terrain == models.Water && gc.adjacentToOwnProduction(territory, player) {
+			if territory.Terrain == models.Water && gc.YardWithCapacity(territory, player) != nil {
 				targets = append(targets, name)
 			}
 		case territory.Owner != player || territory.Terrain == models.Water:
 			// Land units only appear on land the player holds.
-		case units.Of(unitType).IsStructure || hasComplex(territory):
+		case units.Of(unitType).IsStructure:
+			targets = append(targets, name)
+		case hasComplex(territory) && gc.FactoryCapacity(territory) > 0:
 			targets = append(targets, name)
 		}
 	}
@@ -550,8 +650,14 @@ func (gc *GameController) PlanMove(pieceID int, from, to string) error {
 		return err
 	}
 
-	// Check if piece can reach territory using pathfinding that considers enemy units
+	// An AA gun is towed, not marched into battle: it moves in the noncombat
+	// phase only (Classic rules), and never attacks.
 	piece := gc.Game.Pieces[pieceID]
+	if moveType == CombatMove && gc.Game.Units().For(piece).IsAA {
+		return fmt.Errorf("%s moves only in the Noncombat Move phase", piece.Name)
+	}
+
+	// Check if piece can reach territory using pathfinding that considers enemy units
 	distance, path, err := CalculateMovementPathForPiece(gc.Game, piece, from, to, player, moveType)
 	if err != nil {
 		return fmt.Errorf("cannot move %s from %s to %s: %v", piece.Name, from, to, err)
@@ -704,6 +810,13 @@ func (gc *GameController) ExecuteCombatMoves() error {
 			return fmt.Errorf("failed to execute move: %v", err)
 		}
 
+		// A bombing raid is not an attack on the garrison: the bomber is
+		// over the target, and the raid resolves in the combat phase.
+		if move.Bombing {
+			gc.bookRaid(move, player)
+			continue
+		}
+
 		// Undefended enemy territory driven through is taken on the way past.
 		for _, name := range move.Blitzed {
 			if blitzed := gc.Game.Board[name]; blitzed != nil && blitzed.Owner != player {
@@ -713,9 +826,15 @@ func (gc *GameController) ExecuteCombatMoves() error {
 			}
 		}
 
-		// Check if move creates a battle
+		// Check if move creates a battle. Allied ground is friendly: a unit
+		// that ends its combat move there is simply parked, never an attacker
+		// and never a captor. (Sea zones are judged by who is IN them, not by
+		// their nominal owner, so an ally's zone with an enemy fleet in it is
+		// still a fight.)
 		toTerritory := gc.Game.Board[move.To]
-		if toTerritory.Owner.Name != player.Name {
+		alliedGround := toTerritory.Terrain != models.Water &&
+			areAllies(toTerritory.Owner, player)
+		if toTerritory.Owner.Name != player.Name && !alliedGround {
 			// A neutral under attack defends itself, and violating a strict
 			// one levies the toll and rouses the rest. violateNeutral is
 			// idempotent -- a mobilised country is not violated twice -- so a
@@ -846,9 +965,21 @@ func (gc *GameController) GetPlannedAttacks() []string {
 	attacks := make(map[string]bool)
 	combatMoves := gc.MoveTracker.GetMovesByType(CombatMove)
 
+	// An attack is a move that will be resisted: enemy units in the way, or
+	// enemy (or attackable neutral) ground to take. A move onto an ally's
+	// land, or into a sea zone that merely carries an ally's name, is not.
 	for _, move := range combatMoves {
 		toTerritory := gc.Game.Board[move.To]
-		if toTerritory.Owner.Name != player.Name {
+		if toTerritory == nil || toTerritory.Owner == nil {
+			continue
+		}
+		switch {
+		case move.Bombing:
+			attacks[move.To] = true
+		case gc.hasHostileDefenders(toTerritory, player):
+			attacks[move.To] = true
+		case toTerritory.Terrain != models.Water &&
+			toTerritory.Owner != player && !areAllies(toTerritory.Owner, player):
 			attacks[move.To] = true
 		}
 	}
@@ -868,6 +999,16 @@ func (gc *GameController) ResolveBattle(territoryName string, diceRoller *DiceRo
 
 // ResolveBattleWithRetreat resolves a battle with optional retreat decision callback
 func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRoller *DiceRoller, retreatDecider RetreatDecider) (*BattleResult, error) {
+	// A battle already being fought round by round is finished from where it
+	// stands, the engine choosing what remains to be chosen.
+	if _, live := gc.LiveBattles[territoryName]; live {
+		finished, err := gc.FinishBattle(territoryName)
+		if err != nil {
+			return nil, err
+		}
+		return finished.Result, nil
+	}
+
 	battle, exists := gc.PendingBattles[territoryName]
 	if !exists {
 		return nil, fmt.Errorf("no battle pending in %s", territoryName)
@@ -1106,26 +1247,66 @@ func (gc *GameController) withdrawAttackers(battle *Battle, territoryName string
 	}
 }
 
-// CaptureTerritory transfers ownership of a territory
-func (gc *GameController) CaptureTerritory(territoryName, newOwnerName string) error {
+// CaptureTerritory transfers control of a territory to the power that took it
+// -- or, when that power is liberating an ally's ground, back to the ally.
+//
+// Liberation (Classic rules): a territory retaken from the enemy returns to
+// its original owner, provided that owner's capital is free. While the capital
+// is enemy-held the liberator keeps what it takes; freeing the capital itself
+// returns it to its owner, and with it every province of theirs that allies
+// have been holding in trust. Without this an NPC ally that retook a human
+// player's province kept it -- and its income -- for the rest of the war.
+func (gc *GameController) CaptureTerritory(territoryName, captorName string) error {
 	territory, exists := gc.Game.Board[territoryName]
 	if !exists {
 		return fmt.Errorf("territory %s not found", territoryName)
 	}
 
-	newOwner, exists := gc.Game.Players[newOwnerName]
+	captor, exists := gc.Game.Players[captorName]
 	if !exists {
-		return fmt.Errorf("player %s not found", newOwnerName)
+		return fmt.Errorf("player %s not found", captorName)
 	}
 
-	// Use the existing ChangeOwnership function from models
+	newOwner := captor
+	original := territory.OriginalOwner
+	if original != nil && original != captor && areAllies(original, captor) {
+		if territoryName == original.Capital || !gc.capitalHeldByEnemy(original) {
+			newOwner = original
+		}
+	}
+
+	// A neutral country's first conqueror becomes the power it belongs to;
+	// a later liberation returns it there.
+	if original == nil || original.Side == "" {
+		territory.OriginalOwner = newOwner
+	}
+
 	models.ChangeOwnership(territory, newOwner)
 
-	// Everything left standing in the territory changes hands with it. That is
-	// how a captured factory ends up building for its new owner.
+	// What the enemy left standing changes hands with the ground -- that is
+	// how a captured factory ends up building for its new owner, and how an
+	// AA gun is taken. The captor's own troops stay the captor's: an American
+	// army that frees a British town does not become British.
 	for _, pieceID := range territory.Pieces {
-		if piece := gc.Game.Pieces[pieceID]; piece != nil {
+		piece := gc.Game.Pieces[pieceID]
+		if piece == nil || piece.Owner == nil {
+			continue
+		}
+		if piece.Owner != newOwner && !areAllies(piece.Owner, newOwner) {
 			piece.Owner = newOwner
+		}
+	}
+
+	// A capital freed brings its provinces home.
+	if newOwner == original && territoryName == original.Capital {
+		for _, name := range sortedTerritoryNames(gc.Game) {
+			held := gc.Game.Board[name]
+			if held.OriginalOwner != original || held.Owner == original || held.Owner == nil {
+				continue
+			}
+			if areAllies(held.Owner, original) {
+				models.ChangeOwnership(held, original)
+			}
 		}
 	}
 
@@ -1253,6 +1434,16 @@ func (gc *GameController) UnloadUnit(transportID, pieceID int, destinationName s
 	// Validate the unload operation
 	if err := ValidateUnload(gc.Game, transportID, pieceID, destinationName); err != nil {
 		return err
+	}
+
+	// Unloading onto friendly ground is noncombat movement. In the combat
+	// phase troops leave a transport only to assault a hostile shore -- and
+	// that path is PlanLanding, not this one.
+	if gc.Game.CurrentPhase == models.CombatMovePhase {
+		if shore := gc.Game.Board[destinationName]; shore != nil && shore.Owner != nil &&
+			(shore.Owner == player || areAllies(shore.Owner, player)) {
+			return fmt.Errorf("%s is friendly ground: unload there in the Noncombat Move phase", destinationName)
+		}
 	}
 
 	// Execute the unload

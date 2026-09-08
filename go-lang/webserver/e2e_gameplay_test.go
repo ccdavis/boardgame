@@ -395,7 +395,7 @@ func TestE2E_PurchaseFlow(t *testing.T) {
 
 	// The infantry were bought at the German factory, so the one-click path
 	// puts them exactly there.
-	clickAction(t, page, "Place All As Bought")
+	clickAction(t, page, "As Bought")
 	time.Sleep(500 * time.Millisecond)
 
 	// With the backlog cleared, the phase ends normally.
