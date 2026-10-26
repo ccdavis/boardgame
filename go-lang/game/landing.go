@@ -73,6 +73,16 @@ func (gc *GameController) PlanLanding(cargoIDs []int, targetName string) error {
 		if transportID == -1 {
 			return fmt.Errorf("%s %d is not aboard a transport", piece.Name, cargoID)
 		}
+		if shore := gc.TransportUnloaded[transportID]; shore != "" && shore != targetName {
+			return fmt.Errorf("transport %d has already unloaded at %s this turn", transportID, shore)
+		}
+		for _, landing := range gc.PlannedLandings {
+			for _, bookedID := range landing.CargoIDs {
+				if gc.Game.GetTransportForPiece(bookedID) == transportID && landing.Target != targetName {
+					return fmt.Errorf("transport %d is already booked to unload at %s", transportID, landing.Target)
+				}
+			}
+		}
 		if gc.landingBooked(cargoID) {
 			return fmt.Errorf("%s %d is already booked for a landing", piece.Name, cargoID)
 		}
@@ -171,10 +181,10 @@ func (gc *GameController) executePlannedLandings(player *models.Player) {
 			if zone == nil || !areConnected(zone, target) {
 				continue // the transport never arrived; the cargo stays aboard
 			}
-			if err := gc.Game.UnloadPiece(transportID, cargoID, landing.Target); err != nil {
+			if err := gc.unloadCargo(transportID, cargoID, landing.Target); err != nil {
 				continue
 			}
-			gc.registerLandedAttacker(landing.Target, cargoID, player.Name, "", zone.Name)
+			gc.registerLandedAttacker(landing.Target, cargoID, player.Name, "", zone.Name, transportID)
 			if landedFrom[landing.Target] == nil {
 				landedFrom[landing.Target] = make(map[string]bool)
 			}

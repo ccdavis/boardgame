@@ -385,7 +385,7 @@ func (gc *GameController) LandAssaultTroops(power string, transcript *GameTransc
 				if err := gc.UnloadUnit(shipID, troopID, plan.Target); err != nil {
 					continue
 				}
-				gc.registerAmphibiousAttacker(plan, troopID, power)
+				gc.registerAmphibiousAttacker(plan, troopID, power, shipID)
 				landedHere++
 			}
 		}
@@ -455,12 +455,12 @@ func (gc *GameController) attachShoreBombardmentAt(targetName, dropZone, power s
 
 // registerAmphibiousAttacker enrols a landed unit in the battle for the target,
 // creating the battle if this is the first attacker to arrive.
-func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, pieceID int, power string) {
+func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, pieceID int, power string, transportID int) {
 	// No retreat origin: troops landed from the sea have no line of retreat
 	// (recording the staging port here let a broken-off NPC landing teleport
 	// its survivors back across the water). The drop zone is recorded so the
 	// sea fight there gates this landing.
-	gc.registerLandedAttacker(plan.Target, pieceID, power, "", plan.DropZone)
+	gc.registerLandedAttacker(plan.Target, pieceID, power, "", plan.DropZone, transportID)
 }
 
 // registerLandedAttacker is the plan-free core, shared with human landings.
@@ -468,12 +468,16 @@ func (gc *GameController) registerAmphibiousAttacker(plan *AmphibiousPlan, piece
 // attackers -- and withdrawAttackers already leaves such pieces in place.
 // dropZone names the sea zone the unit came ashore from; the battle there,
 // if any, must be won before this landing is fought.
-func (gc *GameController) registerLandedAttacker(targetName string, pieceID int, power string, origin string, dropZone string) {
+func (gc *GameController) registerLandedAttacker(targetName string, pieceID int, power string, origin string, dropZone string, transportID int) {
 	target := gc.Game.Board[targetName]
 	if target == nil {
 		return
 	}
-	if target.Owner != nil && (target.Owner.Name == power ||
+	_, contested := gc.PendingBattles[dropZone]
+	if zone := gc.Game.Board[dropZone]; zone != nil && gc.hasHostileDefenders(zone, gc.Game.Players[power]) {
+		contested = true
+	}
+	if !contested && target.Owner != nil && (target.Owner.Name == power ||
 		areAllies(target.Owner, gc.Game.Players[power])) {
 		return // undefended and already ours (or an ally's); nothing to fight
 	}
@@ -494,7 +498,7 @@ func (gc *GameController) registerLandedAttacker(targetName string, pieceID int,
 		// the territory on the spot and no battle is staged. The garrison a
 		// violated neutral just raised counts as a defence, so this applies
 		// only to genuinely empty ground.
-		if !gc.hasHostileDefenders(target, gc.Game.Players[power]) {
+		if !contested && !gc.hasHostileDefenders(target, gc.Game.Players[power]) {
 			if target.Terrain != models.Water {
 				gc.CaptureTerritory(targetName, power)
 			}
@@ -527,6 +531,10 @@ func (gc *GameController) registerLandedAttacker(targetName string, pieceID int,
 			battle.AmphibiousFrom = make(map[int]string)
 		}
 		battle.AmphibiousFrom[pieceID] = dropZone
+		if battle.AmphibiousTransports == nil {
+			battle.AmphibiousTransports = make(map[int]int)
+		}
+		battle.AmphibiousTransports[pieceID] = transportID
 	}
 }
 
@@ -626,7 +634,6 @@ func nextStepTowards(g *models.Game, piece *models.Piece, from, goal string, pla
 	}
 	return route[step-1]
 }
-
 
 // landReinforcements puts ashore the troops of an operation whose target an
 // ally took while they were still afloat beside it. Friendly ground now, so

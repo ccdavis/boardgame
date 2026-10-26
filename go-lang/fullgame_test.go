@@ -170,7 +170,8 @@ func checkTurnInvariants(t *testing.T, g *models.Game, before turnSnapshot, powe
 	// Only the power that just played may gain or lose territory -- or, by
 	// liberation, an ally of it: a province retaken from the enemy returns
 	// to its original owner. If anyone else's holdings changed, ownership
-	// was written by the wrong actor.
+	// was written by the wrong actor. A strict-neutral violation can also
+	// hand the other strict neutrals to the first opposing power.
 	sameSide := func(a, b string) bool {
 		pa, pb := g.Players[a], g.Players[b]
 		return pa != nil && pb != nil && pa.Side != "" && pa.Side == pb.Side
@@ -179,6 +180,19 @@ func checkTurnInvariants(t *testing.T, g *models.Game, before turnSnapshot, powe
 		was := before.territory[territory]
 		if was == owner {
 			continue
+		}
+		if was == "Neutral" && g.Board[territory].NeutralType == models.StrictNeutral {
+			custodian := ""
+			for _, name := range g.PlayerOrder {
+				candidate := g.Players[name]
+				if candidate.TakesTurns && candidate.Side != "" && candidate.Side != g.Players[power].Side {
+					custodian = name
+					break
+				}
+			}
+			if owner == custodian {
+				continue
+			}
 		}
 		if owner != power && was != power && !(sameSide(owner, power) && !sameSide(was, power)) {
 			t.Errorf("turn %d: %s changed hands from %s to %s while %s was playing",

@@ -47,6 +47,10 @@ type GameController struct {
 	// turn (rulebook), which nothing enforced: the browser's own guidance
 	// promised the cap while the engine placed any number.
 	Mobilized map[string]int
+
+	// Transports that have begun unloading may finish their cargo at this
+	// shore, but cannot load again, sail, or unload at another shore this turn.
+	TransportUnloaded map[int]string
 }
 
 // NewGameController creates a new controller for a game
@@ -94,6 +98,11 @@ func (gc *GameController) AdvancePhase() error {
 	case models.NoncombatMovePhase:
 		gc.Game.CurrentPhase = models.MobilizePhase
 	case models.MobilizePhase:
+		player, err := gc.GetCurrentPlayer()
+		if err != nil {
+			return err
+		}
+		gc.RefundUnplaceableUnits(player)
 		gc.Game.CurrentPhase = models.CollectIncomePhase
 	case models.CollectIncomePhase:
 		// End of turn, advance to next player
@@ -159,6 +168,7 @@ func (gc *GameController) AdvanceTurn() error {
 	// power starts fresh.
 	gc.MoveTracker.ResetTurn()
 	gc.Mobilized = make(map[string]int)
+	gc.TransportUnloaded = nil
 
 	return nil
 }
@@ -330,6 +340,9 @@ func (gc *GameController) PurchaseUnitAt(unitType string, quantity int, earmark 
 	if gc.Game.CurrentPhase != models.PurchasePhase {
 		return fmt.Errorf("can only purchase units during Purchase phase")
 	}
+	if quantity <= 0 {
+		return fmt.Errorf("quantity must be positive")
+	}
 
 	player, err := gc.GetCurrentPlayer()
 	if err != nil {
@@ -343,10 +356,14 @@ func (gc *GameController) PurchaseUnitAt(unitType string, quantity int, earmark 
 	}
 
 	// Calculate total cost
-	totalCost := int(template.Cost) * quantity
-	if player.IPCs < totalCost {
-		return fmt.Errorf("insufficient IPCs: need %d, have %d", totalCost, player.IPCs)
+	unitCost := int(template.Cost)
+	if unitCost < 0 {
+		return fmt.Errorf("unit type %s has an invalid cost", unitType)
 	}
+	if unitCost > 0 && quantity > player.IPCs/unitCost {
+		return fmt.Errorf("insufficient IPCs to buy %d %s", quantity, unitType)
+	}
+	totalCost := unitCost * quantity
 
 	// Deduct cost
 	player.IPCs -= totalCost
@@ -589,6 +606,37 @@ func (gc *GameController) PlacementTargets(player *models.Player, unitType strin
 	return targets
 }
 
+// PlaceablePurchases counts pending units with a legal placement right now.
+// Capacity is checked again after each placement; excess purchases must not
+// trap the player once every factory has reached its limit.
+func (gc *GameController) PlaceablePurchases(player *models.Player) int {
+	n := 0
+	for _, unit := range gc.Game.PurchasedUnits[player.Name] {
+		if len(gc.PlacementTargets(player, unit.Type)) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// RefundUnplaceableUnits returns purchases that cannot be placed to the bank
+// for their original price. This also handles factories lost or bombed after
+// the purchase phase, when production capacity could not have been predicted.
+func (gc *GameController) RefundUnplaceableUnits(player *models.Player) int {
+	refund := 0
+	var pending []*models.PendingUnit
+	for _, unit := range gc.Game.PurchasedUnits[player.Name] {
+		if len(gc.PlacementTargets(player, unit.Type)) == 0 {
+			refund += unit.Cost
+		} else {
+			pending = append(pending, unit)
+		}
+	}
+	gc.Game.PurchasedUnits[player.Name] = pending
+	player.IPCs += refund
+	return refund
+}
+
 // RepairIndustrialComplex repairs damage to an IC
 func (gc *GameController) RepairIndustrialComplex(territoryName string, amount int) error {
 	if gc.Game.CurrentPhase != models.PurchasePhase {
@@ -653,6 +701,9 @@ func (gc *GameController) PlanMove(pieceID int, from, to string) error {
 	// An AA gun is towed, not marched into battle: it moves in the noncombat
 	// phase only (Classic rules), and never attacks.
 	piece := gc.Game.Pieces[pieceID]
+	if shore := gc.TransportUnloaded[pieceID]; shore != "" {
+		return fmt.Errorf("%s has unloaded at %s and cannot move again this turn", piece.Name, shore)
+	}
 	if moveType == CombatMove && gc.Game.Units().For(piece).IsAA {
 		return fmt.Errorf("%s moves only in the Noncombat Move phase", piece.Name)
 	}
@@ -736,11 +787,11 @@ func (gc *GameController) CarrierSeatsFree(aircraft *models.Piece, zone *models.
 			continue
 		}
 		switch {
-		case mover.Terrain == models.Water && move.From == zone.Name:
+		case move.From == zone.Name && move.To != zone.Name:
 			leaving[move.PieceID] = true
 		case mover.Terrain == models.Water && move.To == zone.Name:
 			arriving[move.PieceID] = true
-		case mover.Terrain == models.Air && move.To == zone.Name:
+		case mover.Terrain == models.Air && move.To == zone.Name && move.From != zone.Name:
 			bookings++
 		}
 	}
@@ -771,7 +822,7 @@ func (gc *GameController) CarrierSeatsFree(aircraft *models.Piece, zone *models.
 			slots += slotsOn(occupant)
 		}
 		// Friendly aircraft already in the zone are parked on those carriers.
-		if occupant.Terrain == models.Air && occupant.Owner != nil &&
+		if occupant.Terrain == models.Air && !leaving[id] && occupant.Owner != nil &&
 			(occupant.Owner == player || areAllies(occupant.Owner, player)) {
 			occupants++
 		}
@@ -834,7 +885,7 @@ func (gc *GameController) ExecuteCombatMoves() error {
 		toTerritory := gc.Game.Board[move.To]
 		alliedGround := toTerritory.Terrain != models.Water &&
 			areAllies(toTerritory.Owner, player)
-		if toTerritory.Owner.Name != player.Name && !alliedGround {
+		if toTerritory.Terrain == models.Water || (toTerritory.Owner.Name != player.Name && !alliedGround) {
 			// A neutral under attack defends itself, and violating a strict
 			// one levies the toll and rouses the rest. violateNeutral is
 			// idempotent -- a mobilised country is not violated twice -- so a
@@ -872,10 +923,18 @@ func (gc *GameController) ExecuteCombatMoves() error {
 				// on SeaBattle -- so in a real game submarines never rolled a
 				// single die, attacking or defending.
 				battleType := LandBattle
+				defenderName := toTerritory.Owner.Name
 				if toTerritory.Terrain == models.Water {
 					battleType = SeaBattle
+					for _, id := range toTerritory.Pieces {
+						occupant := gc.Game.Pieces[id]
+						if occupant != nil && occupant.Owner != nil && occupant.Owner != player && !areAllies(occupant.Owner, player) {
+							defenderName = occupant.Owner.Name
+							break
+						}
+					}
 				}
-				battle := NewBattle(move.To, battleType, player.Name, toTerritory.Owner.Name)
+				battle := NewBattle(move.To, battleType, player.Name, defenderName)
 				gc.PendingBattles[move.To] = battle
 			}
 			// Track this piece as an attacker, and where it came from.
@@ -1060,8 +1119,12 @@ func (gc *GameController) ResolveBattleWithRetreat(territoryName string, diceRol
 	for _, pieceID := range territory.Pieces {
 		piece := gc.Game.Pieces[pieceID]
 		switch {
+		case piece == nil:
 		case attackingIDs[pieceID]:
 			attackerPieces = append(attackerPieces, piece)
+		case piece.Owner == attacker || areAllies(piece.Owner, attacker):
+			// Raiding bombers and other friendly bystanders do not defend
+			// against their own side's attack.
 		case units.For(piece).IsStructure:
 			capturedStructures = append(capturedStructures, piece)
 		default:
@@ -1152,7 +1215,9 @@ func (gc *GameController) drownCutOffAttackers(battle *Battle, territoryName str
 		zoneName, amphibious := battle.AmphibiousFrom[pieceID]
 		if amphibious {
 			zone := gc.Game.Board[zoneName]
-			if zone != nil && gc.hasHostileDefenders(zone, attacker) {
+			transportID := battle.AmphibiousTransports[pieceID]
+			transportLost := transportID != 0 && gc.Game.Pieces[transportID] == nil
+			if transportLost || (zone != nil && gc.hasHostileDefenders(zone, attacker)) {
 				if piece := gc.Game.Pieces[pieceID]; piece != nil {
 					gc.removePieceFromBoard(piece, territoryName)
 					drowned = append(drowned, piece)
@@ -1388,6 +1453,12 @@ func (gc *GameController) LoadUnit(transportID, pieceID int) error {
 	if !gc.inMovementPhase() {
 		return fmt.Errorf("can only load units during a movement phase")
 	}
+	if shore := gc.TransportUnloaded[transportID]; shore != "" {
+		return fmt.Errorf("transport %d has unloaded at %s and cannot load again this turn", transportID, shore)
+	}
+	if gc.MoveTracker.MovementSpent[pieceID] > 0 {
+		return fmt.Errorf("piece %d has already moved this turn", pieceID)
+	}
 
 	player, err := gc.GetCurrentPlayer()
 	if err != nil {
@@ -1441,18 +1512,46 @@ func (gc *GameController) UnloadUnit(transportID, pieceID int, destinationName s
 	// that path is PlanLanding, not this one.
 	if gc.Game.CurrentPhase == models.CombatMovePhase {
 		if shore := gc.Game.Board[destinationName]; shore != nil && shore.Owner != nil &&
-			(shore.Owner == player || areAllies(shore.Owner, player)) {
+			(shore.Owner == player || areAllies(shore.Owner, player)) && gc.TransportUnloaded[transportID] != destinationName {
 			return fmt.Errorf("%s is friendly ground: unload there in the Noncombat Move phase", destinationName)
 		}
 	}
 
 	// Execute the unload
-	err = gc.Game.UnloadPiece(transportID, pieceID, destinationName)
-	if err != nil {
+	return gc.unloadCargo(transportID, pieceID, destinationName)
+}
+
+// unloadCargo is shared by immediate unloads and booked amphibious landings.
+func (gc *GameController) unloadCargo(transportID, pieceID int, destinationName string) error {
+	if err := gc.ValidateCargoUnload(transportID, pieceID, destinationName); err != nil {
+		return err
+	}
+	if err := gc.Game.UnloadPiece(transportID, pieceID, destinationName); err != nil {
 		return fmt.Errorf("failed to unload piece: %v", err)
 	}
-
+	if gc.TransportUnloaded == nil {
+		gc.TransportUnloaded = make(map[int]string)
+	}
+	gc.TransportUnloaded[transportID] = destinationName
+	gc.MoveTracker.MovementSpent[transportID] = int(gc.Game.Pieces[transportID].Movement)
+	if piece := gc.Game.Pieces[pieceID]; piece != nil {
+		gc.MoveTracker.MovementSpent[pieceID] = int(piece.Movement)
+	}
 	return nil
+}
+
+// ValidateCargoUnload includes this turn's transport commitments, so the
+// browser offers the same unloads that the controller will execute.
+func (gc *GameController) ValidateCargoUnload(transportID, pieceID int, destinationName string) error {
+	if shore := gc.TransportUnloaded[transportID]; shore != "" && shore != destinationName {
+		return fmt.Errorf("transport %d has already unloaded at %s this turn", transportID, shore)
+	}
+	for _, move := range gc.MoveTracker.Moves {
+		if move.PieceID == transportID && territoryOf(gc.Game, transportID) != gc.Game.Board[move.To] {
+			return fmt.Errorf("cancel the transport's planned move before unloading here")
+		}
+	}
+	return ValidateUnload(gc.Game, transportID, pieceID, destinationName)
 }
 
 // inMovementPhase reports whether units may currently be moved.
@@ -1479,4 +1578,3 @@ func sortedTerritoryNames(g *models.Game) []string {
 	sort.Strings(names)
 	return names
 }
-

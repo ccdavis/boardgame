@@ -578,6 +578,7 @@ const app = createApp({
                         <li>"Place all as bought" puts everything where you bought it</li>
                         <li>Or click a glowing factory to place units by hand</li>
                         <li>A factory can build up to its territory's production value</li>
+                        <li>When you finish, purchases with no legal placement are refunded</li>
                     </ul>
                 `,
                 'Collect Income': `

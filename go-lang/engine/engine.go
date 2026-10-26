@@ -160,8 +160,11 @@ func (d *Driver) Warnings() []string {
 		}
 	case models.MobilizePhase:
 		if pending := d.Controller.Game.PurchasedUnits[player.Name]; len(pending) > 0 {
-			warnings = append(warnings,
-				fmt.Sprintf("You have %d unit(s) not yet placed", len(pending)))
+			if n := len(pending) - d.Controller.PlaceablePurchases(player); n > 0 {
+				warnings = append(warnings, fmt.Sprintf("%d unit(s) cannot be placed and will be refunded", n))
+			} else {
+				warnings = append(warnings, fmt.Sprintf("You have %d unit(s) not yet placed", len(pending)))
+			}
 		}
 	}
 	return warnings
@@ -191,7 +194,7 @@ func (d *Driver) Blockers() Blockers {
 			})
 		}
 	case models.MobilizePhase:
-		if n := len(d.Controller.Game.PurchasedUnits[player.Name]); n > 0 {
+		if n := d.Controller.PlaceablePurchases(player); n > 0 {
 			blockers = append(blockers, Blocker{
 				Code:   "unplaced_units",
 				Detail: fmt.Sprintf("%d unit(s) still to place", n),

@@ -73,13 +73,18 @@ type Battle struct {
 	// fought, the covering action was lost and those troops drown instead
 	// of fighting.
 	AmphibiousFrom map[int]string
+	// The transport must survive the covering action, even when the last
+	// enemy ship is also sunk and no hostile fleet remains in the drop zone.
+	AmphibiousTransports map[int]int
 }
 
 // Hit represents a successful hit in combat
 type Hit struct {
-	Roll      int
-	Threshold int
-	UnitType  string
+	Roll                int
+	Threshold           int
+	UnitType            string
+	CannotHitAir        bool `json:"cannotHitAir,omitempty"`
+	CannotHitSubmarines bool `json:"cannotHitSubmarines,omitempty"`
 }
 
 // BattleResult contains the outcome of a battle
@@ -148,85 +153,35 @@ func (dr *DiceRoller) RollDice(count int) []int {
 // as well as the victim, and both were then removed from the board.
 func (dr *DiceRoller) CombatRound(battle *Battle) (attackerHits []Hit, defenderHits []Hit, surprise SurpriseLosses) {
 	battle.Round++
-	attackerHits = make([]Hit, 0)
-	defenderHits = make([]Hit, 0)
-	surprise.Attacker = make([]*models.Piece, 0)
-	surprise.Defender = make([]*models.Piece, 0)
+	attackerHasDestroyer := hasDestroyer(battle.Attackers)
+	defenderHasDestroyer := hasDestroyer(battle.Defenders)
 
-	// STEP 2: Submarine Surprise Strike (only in sea battles)
 	if battle.Type == SeaBattle {
-		attackerHasDestroyer := hasDestroyer(battle.Attackers)
-		defenderHasDestroyer := hasDestroyer(battle.Defenders)
-
-		// Attacking submarines fire surprise strike if no defending destroyer
+		// Both sides roll their surprise strikes before either side loses
+		// submarines. Other surprise casualties cannot fire in regular combat.
 		if !defenderHasDestroyer {
-			attackingSubs := getSubmarines(battle.Attackers)
-			for _, sub := range attackingSubs {
-				roll := dr.Roll()
-				if roll <= int(sub.Attack) {
-					surprise.AttackerHits = append(surprise.AttackerHits, Hit{
-						Roll:      roll,
-						Threshold: int(sub.Attack),
-						UnitType:  sub.Name,
-					})
-				}
-			}
-
-			// Select casualties from defender - these units don't get to fire back
-			if len(surprise.AttackerHits) > 0 {
-				// Casualties from surprise strikes cannot hit submarines with air
-				casualties := SelectCasualtiesAvoidingAir(battle.Defenders, len(surprise.AttackerHits), !defenderHasDestroyer)
-				surprise.Defender = append(surprise.Defender, casualties...)
-				battle.Defenders = RemoveCasualties(battle.Defenders, casualties)
-			}
+			surprise.AttackerHits = dr.RollForUnits(getSubmarines(battle.Attackers), true)
 		}
-
-		// Defending submarines fire surprise strike if no attacking destroyer
 		if !attackerHasDestroyer {
-			defendingSubs := getSubmarines(battle.Defenders)
-			for _, sub := range defendingSubs {
-				roll := dr.Roll()
-				if roll <= int(sub.Defend) {
-					surprise.DefenderHits = append(surprise.DefenderHits, Hit{
-						Roll:      roll,
-						Threshold: int(sub.Defend),
-						UnitType:  sub.Name,
-					})
-				}
-			}
-
-			// Select casualties from attacker - these units don't get to fire back
-			if len(surprise.DefenderHits) > 0 {
-				casualties := SelectCasualtiesAvoidingAir(battle.Attackers, len(surprise.DefenderHits), !attackerHasDestroyer)
-				surprise.Attacker = append(surprise.Attacker, casualties...)
-				battle.Attackers = RemoveCasualties(battle.Attackers, casualties)
-			}
+			surprise.DefenderHits = dr.RollForUnits(getSubmarines(battle.Defenders), false)
 		}
+		surprise.Defender = SelectCombatCasualties(battle.Defenders, surprise.AttackerHits)
+		surprise.Attacker = SelectCombatCasualties(battle.Attackers, surprise.DefenderHits)
+		battle.Defenders = RemoveCasualties(battle.Defenders, surprise.Defender)
+		battle.Attackers = RemoveCasualties(battle.Attackers, surprise.Attacker)
 	}
 
-	// STEP 3 & 4: Regular combat (non-submarine units, or submarines if enemy destroyer present)
-	// Attackers roll (excluding submarines that already fired)
-	attackerRegularHits := dr.RollForNonSubmarineUnits(battle.Attackers, true, battle.Type == SeaBattle && !hasDestroyer(battle.Defenders))
-	attackerHits = append(attackerHits, attackerRegularHits...)
-
-	// If defending subs didn't get surprise strike (enemy has destroyer), they fire now
-	if battle.Type == SeaBattle && hasDestroyer(battle.Attackers) {
-		defendingSubs := getSubmarines(battle.Defenders)
-		subHits := dr.RollForUnits(defendingSubs, false)
-		defenderHits = append(defenderHits, subHits...)
+	// A friendly destroyer lets aircraft hit submarines. The round's opening
+	// destroyer presence also determines which submarines already fired, even
+	// if a destroyer was lost to the opposing surprise strike.
+	attackerHits = dr.RollForNonSubmarineUnits(battle.Attackers, true, battle.Type == SeaBattle && !attackerHasDestroyer)
+	if battle.Type == SeaBattle && attackerHasDestroyer {
+		defenderHits = append(defenderHits, dr.RollForUnits(getSubmarines(battle.Defenders), false)...)
 	}
-
-	// Defenders roll (excluding submarines that already fired)
-	defenderRegularHits := dr.RollForNonSubmarineUnits(battle.Defenders, false, battle.Type == SeaBattle && !hasDestroyer(battle.Attackers))
-	defenderHits = append(defenderHits, defenderRegularHits...)
-
-	// If attacking subs didn't get surprise strike (enemy has destroyer), they fire now
-	if battle.Type == SeaBattle && hasDestroyer(battle.Defenders) {
-		attackingSubs := getSubmarines(battle.Attackers)
-		subHits := dr.RollForUnits(attackingSubs, true)
-		attackerHits = append(attackerHits, subHits...)
+	defenderHits = append(defenderHits, dr.RollForNonSubmarineUnits(battle.Defenders, false, battle.Type == SeaBattle && !defenderHasDestroyer)...)
+	if battle.Type == SeaBattle && defenderHasDestroyer {
+		attackerHits = append(attackerHits, dr.RollForUnits(getSubmarines(battle.Attackers), true)...)
 	}
-
 	return attackerHits, defenderHits, surprise
 }
 
@@ -245,9 +200,10 @@ func (dr *DiceRoller) RollForNonSubmarineUnits(units []*models.Piece, isAttackin
 		roll := dr.Roll()
 		if roll <= threshold {
 			hits = append(hits, Hit{
-				Roll:      roll,
-				Threshold: threshold,
-				UnitType:  unit.Name,
+				Roll:                roll,
+				Threshold:           threshold,
+				UnitType:            unit.Name,
+				CannotHitSubmarines: subsCannotBeHit && unit.Terrain == models.Air,
 			})
 		}
 	}
@@ -298,9 +254,10 @@ func (dr *DiceRoller) RollForUnits(units []*models.Piece, isAttacking bool) []Hi
 		roll := dr.Roll()
 		if roll <= threshold {
 			hits = append(hits, Hit{
-				Roll:      roll,
-				Threshold: threshold,
-				UnitType:  unit.Name,
+				Roll:         roll,
+				Threshold:    threshold,
+				UnitType:     unit.Name,
+				CannotHitAir: models.CapabilitiesOf(unit).IsSubmarine,
 			})
 		}
 	}
@@ -624,6 +581,74 @@ func RemoveArtillerySupport(boosted map[*models.Piece]int16) {
 	}
 }
 
+// combatHitAssignments matches each hit to an eligible point of damage.
+// Reassigning earlier hits is necessary in mixed fleets: an unrestricted hit
+// must not consume the only surface ship an aircraft can hit and waste that
+// aircraft's hit while a submarine is still available. Cheapest units remain
+// the default. Optional limits validate a human's chosen allocation.
+func combatHitAssignments(units []*models.Piece, hits []Hit, limits map[*models.Piece]int) map[*models.Piece]int {
+	sortedUnits := append([]*models.Piece{}, units...)
+	sort.SliceStable(sortedUnits, func(i, j int) bool { return sortedUnits[i].Cost < sortedUnits[j].Cost })
+	var slots []*models.Piece
+	for _, unit := range sortedUnits {
+		capacity := models.CapabilitiesOf(unit).MaxHits - unit.Hits
+		if limits != nil && limits[unit] < capacity {
+			capacity = limits[unit]
+		}
+		for i := 0; i < capacity; i++ {
+			slots = append(slots, unit)
+		}
+	}
+	matched := make([]int, len(slots))
+	for i := range matched {
+		matched[i] = -1
+	}
+	var assign func(int, []bool) bool
+	assign = func(hitIndex int, visited []bool) bool {
+		hit := hits[hitIndex]
+		for i, unit := range slots {
+			if visited[i] || (hit.CannotHitAir && unit.Terrain == models.Air) ||
+				(hit.CannotHitSubmarines && models.CapabilitiesOf(unit).IsSubmarine) {
+				continue
+			}
+			visited[i] = true
+			if matched[i] == -1 || assign(matched[i], visited) {
+				matched[i] = hitIndex
+				return true
+			}
+		}
+		return false
+	}
+	for i := range hits {
+		assign(i, make([]bool, len(slots)))
+	}
+	assigned := make(map[*models.Piece]int)
+	for i, hit := range matched {
+		if hit != -1 {
+			assigned[slots[i]]++
+		}
+	}
+	return assigned
+}
+
+func assignedHitCount(assigned map[*models.Piece]int) int {
+	n := 0
+	for _, count := range assigned {
+		n += count
+	}
+	return n
+}
+
+// SelectCombatCasualties applies only hits that can legally damage each unit.
+func SelectCombatCasualties(units []*models.Piece, hits []Hit) []*models.Piece {
+	assigned := combatHitAssignments(units, hits, nil)
+	var casualties []*models.Piece
+	for _, unit := range units {
+		casualties = append(casualties, SelectCasualties([]*models.Piece{unit}, assigned[unit])...)
+	}
+	return casualties
+}
+
 // SelectCasualties selects which units to remove as casualties
 // Handles multi-hit units like battleships (require 2 hits to destroy)
 func SelectCasualties(units []*models.Piece, hitCount int) []*models.Piece {
@@ -910,8 +935,8 @@ func ResolveCombatWithRetreat(battle *Battle, diceRoller *DiceRoller, maxRounds 
 		result.DefenderCasualties = append(result.DefenderCasualties, surprise.Defender...)
 
 		// Select and remove remaining casualties from regular combat
-		defenderCasualties := SelectCasualties(defenders, len(attackerHits))
-		attackerCasualties := SelectCasualties(attackers, len(defenderHits))
+		defenderCasualties := SelectCombatCasualties(defenders, attackerHits)
+		attackerCasualties := SelectCombatCasualties(attackers, defenderHits)
 
 		// Track all casualties
 		result.DefenderCasualties = append(result.DefenderCasualties, defenderCasualties...)

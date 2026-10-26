@@ -45,6 +45,7 @@ type LiveBattle struct {
 	// to their own units before the next round may be fought. Zero when the
 	// engine chooses (AutoCasualties) or nothing is owed.
 	PendingAttackerHits int
+	pendingHits         []Hit
 
 	// AutoCasualties lets the engine pick the attacker's losses, as it does
 	// for the defender's. A front end that offers casualty selection leaves
@@ -122,6 +123,8 @@ func (gc *GameController) BeginBattle(territoryName string) (*LiveBattle, error)
 		case piece == nil:
 		case attackingIDs[pieceID]:
 			live.Attackers = append(live.Attackers, piece)
+		case piece.Owner == attacker || areAllies(piece.Owner, attacker):
+			// Bombing aircraft over the target sit out the ground battle.
 		case units.For(piece).IsStructure:
 			// captured with the ground, not fought over
 		default:
@@ -240,7 +243,7 @@ func (gc *GameController) FightRound(territoryName string) (*LiveBattle, error) 
 	}
 
 	// The defender's losses are always the engine's choice.
-	lost := SelectCasualties(live.Defenders, len(attackerHits))
+	lost := SelectCombatCasualties(live.Defenders, attackerHits)
 	live.DefenderCasualties = append(live.DefenderCasualties, lost...)
 	live.Defenders = RemoveCasualties(live.Defenders, lost)
 	report.DefenderLosses = append(report.DefenderLosses, names(lost)...)
@@ -249,15 +252,16 @@ func (gc *GameController) FightRound(territoryName string) (*LiveBattle, error) 
 	live.Log = append(live.Log, report)
 
 	// The attacker's losses: chosen by the engine, or owed to the player.
-	owed := len(defenderHits)
+	owed := assignedHitCount(combatHitAssignments(live.Attackers, defenderHits, nil))
 	if owed > 0 {
 		if live.AutoCasualties || owed >= absorbable(live.Attackers) {
-			lost := SelectCasualties(live.Attackers, owed)
+			lost := SelectCombatCasualties(live.Attackers, defenderHits)
 			live.AttackerCasualties = append(live.AttackerCasualties, lost...)
 			live.Attackers = RemoveCasualties(live.Attackers, lost)
 			live.Log[len(live.Log)-1].AttackerLosses = append(live.Log[len(live.Log)-1].AttackerLosses, names(lost)...)
 		} else {
 			live.PendingAttackerHits = owed
+			live.pendingHits = defenderHits
 			return live, nil
 		}
 	}
@@ -303,6 +307,13 @@ func (gc *GameController) AssignCasualties(territoryName string, hits map[int]in
 	if total != live.PendingAttackerHits {
 		return live, fmt.Errorf("assign exactly %d hit(s); %d given", live.PendingAttackerHits, total)
 	}
+	limits := make(map[*models.Piece]int, len(hits))
+	for id, n := range hits {
+		limits[byID[id]] = n
+	}
+	if assignedHitCount(combatHitAssignments(live.Attackers, live.pendingHits, limits)) != total {
+		return live, fmt.Errorf("chosen casualties cannot be hit by these units")
+	}
 
 	var lost []*models.Piece
 	ids := make([]int, 0, len(hits))
@@ -328,6 +339,7 @@ func (gc *GameController) AssignCasualties(territoryName string, hits map[int]in
 		last.AttackerLosses = append(last.AttackerLosses, names(lost)...)
 	}
 	live.PendingAttackerHits = 0
+	live.pendingHits = nil
 
 	gc.settleIfDecided(live)
 	return live, nil
@@ -444,7 +456,7 @@ func (gc *GameController) FinishBattle(territoryName string) (*LiveBattle, error
 	}
 	live.AutoCasualties = true
 	if live.PendingAttackerHits > 0 {
-		lost := SelectCasualties(live.Attackers, live.PendingAttackerHits)
+		lost := SelectCombatCasualties(live.Attackers, live.pendingHits)
 		live.AttackerCasualties = append(live.AttackerCasualties, lost...)
 		live.Attackers = RemoveCasualties(live.Attackers, lost)
 		if len(live.Log) > 0 {
@@ -452,6 +464,7 @@ func (gc *GameController) FinishBattle(territoryName string) (*LiveBattle, error
 			last.AttackerLosses = append(last.AttackerLosses, names(lost)...)
 		}
 		live.PendingAttackerHits = 0
+		live.pendingHits = nil
 		gc.settleIfDecided(live)
 	}
 	for !live.Done && live.Round < 100 {

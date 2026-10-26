@@ -629,17 +629,16 @@ func (s *Server) handleExecuteNPCTurn(w http.ResponseWriter, r *http.Request, se
 	lines := transcriptLines(transcript.Entries, sameSide, currentPlayer.Name)
 
 	response := map[string]interface{}{
-		"success":          true,
-		"player":           currentPlayer.Name,
-		"summary":          fmt.Sprintf("%s completed their turn", currentPlayer.Name),
-		"transcript":       lines,
-		"newPhase":         session.Controller.Game.CurrentPhase.String(),
-		"newCurrentPower":  session.Controller.Game.CurrentPower,
+		"success":         true,
+		"player":          currentPlayer.Name,
+		"summary":         fmt.Sprintf("%s completed their turn", currentPlayer.Name),
+		"transcript":      lines,
+		"newPhase":        session.Controller.Game.CurrentPhase.String(),
+		"newCurrentPower": session.Controller.Game.CurrentPower,
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
 }
-
 
 // transportOptions lists the extra destinations a picked group has by way of
 // transports. Both directions are group-level judgements:
@@ -696,7 +695,7 @@ func transportOptions(session *GameSession, pieceIDs []int, from string) ([]Reac
 	case fromTerr.Terrain == models.Water:
 		return nil, nil // ships at sea have no transport business of their own
 	default:
-		return boardOptions(g, player, fromTerr, pieces)
+		return boardOptions(session.Controller, player, fromTerr, pieces)
 	}
 }
 
@@ -780,7 +779,8 @@ func sortedNames(g *models.Game) []string {
 // boardOptions: adjacent sea zones whose friendly transports can take the
 // whole group, plus a plain-English reason for each zone that has transports
 // but was refused.
-func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territory, group []*models.Piece) ([]ReachableTerritoryDTO, []string) {
+func boardOptions(controller *game.GameController, player *models.Player, fromTerr *models.Territory, group []*models.Piece) ([]ReachableTerritoryDTO, []string) {
+	g := controller.Game
 	// Whether to explain anything at all: a group with no sea zone next to it
 	// was never trying to board, and saying so would be noise on every inland
 	// move. Only the coast gets an explanation.
@@ -794,6 +794,9 @@ func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territ
 
 	air := 0
 	for _, piece := range group {
+		if controller.MoveTracker.MovementSpent[piece.ID] > 0 {
+			return nil, []string{"Units that have already moved this turn cannot board transports."}
+		}
 		if piece.Terrain != models.Land {
 			air++
 		}
@@ -828,7 +831,7 @@ func boardOptions(g *models.Game, player *models.Player, fromTerr *models.Territ
 				hostile = true
 				break
 			}
-			if ship.Owner == player && ship.Capacity > 0 {
+			if ship.Owner == player && ship.Capacity > 0 && controller.TransportUnloaded[pieceID] == "" {
 				free := int(ship.Capacity) - len(ship.Holding)
 				freeSlots[ship] = free
 				room += free
@@ -993,7 +996,7 @@ func unloadOptions(session *GameSession, g *models.Game, player *models.Player, 
 				allValid := true
 				for _, cargoID := range cargoIDs {
 					transportID := g.GetTransportForPiece(cargoID)
-					if transportID == -1 || game.ValidateUnload(g, transportID, cargoID, shore.Name) != nil {
+					if transportID == -1 || session.Controller.ValidateCargoUnload(transportID, cargoID, shore.Name) != nil {
 						allValid = false
 						break
 					}
@@ -1323,7 +1326,6 @@ func (s *Server) handleBattleSubmergeAction(w http.ResponseWriter, r *http.Reque
 	s.sendLiveBattle(w, live, err)
 }
 
-
 // groupNotes explains an empty intersection: each unit type's own reach, so
 // the player learns that the armor could go five places and the infantry
 // two, and that the two sets do not overlap.
@@ -1424,7 +1426,6 @@ func blockedNeighbourNotes(session *GameSession, pieceIDs []int, from string, co
 	sort.Strings(notes)
 	return notes
 }
-
 
 // handlePlanBombingAction handles POST .../action/plan-bombing: books a
 // bomber for a strategic raid on the destination's industrial complex.

@@ -184,13 +184,9 @@ func TestAirUnitsInSeaBattle(t *testing.T) {
 		t.Fatalf("Combat failed: %v", err)
 	}
 
-	// Fighter should not be able to hit submarine without a destroyer
-	// Submarine should survive unless removed by other means
-	// Note: Current implementation doesn't fully enforce this yet
-	// This test documents expected behavior
-
-	t.Logf("Result: Attacker casualties: %d, Defender casualties: %d",
-		len(result.AttackerCasualties), len(result.DefenderCasualties))
+	if len(result.AttackerCasualties) != 0 || len(result.DefenderCasualties) != 0 {
+		t.Fatalf("aircraft and an unescorted submarine cannot hit each other: %+v", result)
+	}
 }
 
 // Helper test to verify hasDestroyer function
@@ -253,8 +249,8 @@ func TestGetSubmarines(t *testing.T) {
 // dead ID in the origin territory's list.
 func TestSurpriseStrike_OneHitKillsExactlyOneUnit(t *testing.T) {
 	// Defending sub with defend 6 always hits. The attackers include a
-	// submarine of their own -- the cheapest unit, which the surprise pass
-	// shields and a naive second pass would kill instead.
+	// submarine of their own, the cheapest eligible target. A submarine hit
+	// can hit another submarine; it cannot hit aircraft.
 	defendingSub := &models.Piece{Name: "sub", Attack: 2, Defend: 6, Cost: 8, Terrain: models.Water, ID: 100}
 	attackingSub := &models.Piece{Name: "sub", Attack: 0, Defend: 1, Cost: 6, Terrain: models.Water, ID: 101}
 	battleship := &models.Piece{Name: "cruiserish", Attack: 3, Defend: 6, Cost: 20, Terrain: models.Water, ID: 102}
@@ -272,13 +268,13 @@ func TestSurpriseStrike_OneHitKillsExactlyOneUnit(t *testing.T) {
 	}
 
 	// The always-hitting sub fired once in round one: exactly one attacker is
-	// dead, and it is the shielded-selection victim (the warship, not the sub).
+	// dead, and it is the cheapest eligible target (the attacking submarine).
 	if len(result.AttackerCasualties) != 1 {
 		t.Fatalf("one surprise hit killed %d units, want exactly 1: %v",
 			len(result.AttackerCasualties), result.AttackerCasualties)
 	}
-	if result.AttackerCasualties[0].ID != battleship.ID {
-		t.Errorf("the surprise killed piece %d; air-shielded selection should spare the submarine",
+	if result.AttackerCasualties[0].ID != attackingSub.ID {
+		t.Errorf("the surprise killed piece %d; expected the cheapest eligible submarine",
 			result.AttackerCasualties[0].ID)
 	}
 

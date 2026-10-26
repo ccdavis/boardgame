@@ -301,11 +301,14 @@ func (t *Terminal) advancePhase() error {
 
 	case models.MobilizePhase:
 		// Check if units still need to be placed
-		purchased := t.Controller.Game.PurchasedUnits[player.Name]
-		if len(purchased) > 0 {
-			return fmt.Errorf("you still have %d unit(s) to place - use 'place <unit> <territory> <qty>'", len(purchased))
+		if n := t.Controller.PlaceablePurchases(player); n > 0 {
+			return fmt.Errorf("you still have %d unit(s) to place - use 'place <unit> <territory> <qty>'", n)
 		}
-		fmt.Println("\n✓ All units placed")
+		if refund := t.Controller.RefundUnplaceableUnits(player); refund > 0 {
+			fmt.Printf("\n✓ Refunded %d IPCs for units with no legal placement\n", refund)
+		} else {
+			fmt.Println("\n✓ All units placed")
+		}
 
 	case models.CollectIncomePhase:
 		// Collect income before advancing
@@ -1306,9 +1309,9 @@ func (t *Terminal) displayAvailableUnits() {
 
 	// Get unit types from the game's unit definitions
 	unitTypes := []struct {
-		name   string
-		cost   int
-		desc   string
+		name string
+		cost int
+		desc string
 	}{
 		{"infantry", 3, "Basic ground unit (Atk:1 Def:2)"},
 		{"artillery", 4, "Boosts infantry (Atk:2 Def:2)"},
@@ -1985,7 +1988,6 @@ func (t *Terminal) showPlannedAttack(territoryName string) {
 		fmt.Println("Assessment: Weak attack (may fail)")
 	}
 }
-
 
 // displayNPCTranscript prints what a computer power did this turn, as the
 // human is entitled to see it: everything for an ally, the public entries and

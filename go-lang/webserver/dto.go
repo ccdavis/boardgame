@@ -38,8 +38,8 @@ type TerritoryDTO struct {
 // TerritoryDetailDTO includes unit information
 type TerritoryDetailDTO struct {
 	TerritoryDTO
-	Units                []UnitDTO                     `json:"units"`
-	ConnectedTerritories []ConnectedTerritoryDTO       `json:"connectedTerritories"`
+	Units                []UnitDTO               `json:"units"`
+	ConnectedTerritories []ConnectedTerritoryDTO `json:"connectedTerritories"`
 }
 
 // ConnectedTerritoryDTO represents a connected territory with context
@@ -87,13 +87,13 @@ type PlayerDTO struct {
 
 // GameStateDTO represents the overall game state
 type GameStateDTO struct {
-	Turn         int                  `json:"turn"`
-	CurrentPower string               `json:"currentPower"`
-	CurrentPhase string               `json:"currentPhase"`
-	HumanPlayer  string               `json:"humanPlayer"`
-	IsHumanTurn  bool                 `json:"isHumanTurn"`
-	Players      []PlayerDTO          `json:"players"`
-	VictoryCities VictoryCityCount    `json:"victoryCities"`
+	Turn          int              `json:"turn"`
+	CurrentPower  string           `json:"currentPower"`
+	CurrentPhase  string           `json:"currentPhase"`
+	HumanPlayer   string           `json:"humanPlayer"`
+	IsHumanTurn   bool             `json:"isHumanTurn"`
+	Players       []PlayerDTO      `json:"players"`
+	VictoryCities VictoryCityCount `json:"victoryCities"`
 	// GameOver and Winner report the victory check, so the browser learns the
 	// war has been decided from the same poll that carries everything else.
 	GameOver bool   `json:"gameOver"`
@@ -141,14 +141,14 @@ func ToRaidResultDTO(result *game.RaidResult) RaidResultDTO {
 
 // BattleResultDTO represents the result of a battle
 type BattleResultDTO struct {
-	Territory           string   `json:"territory"`
-	AttackerWins        bool     `json:"attackerWins"`
-	DefenderWins        bool     `json:"defenderWins"`
-	AttackerRetreated   bool     `json:"attackerRetreated"`
-	Rounds              int      `json:"rounds"`
-	AttackerCasualties  []string `json:"attackerCasualties"`
-	DefenderCasualties  []string `json:"defenderCasualties"`
-	TerritoryCaptured   bool     `json:"territoryCaptured"`
+	Territory          string   `json:"territory"`
+	AttackerWins       bool     `json:"attackerWins"`
+	DefenderWins       bool     `json:"defenderWins"`
+	AttackerRetreated  bool     `json:"attackerRetreated"`
+	Rounds             int      `json:"rounds"`
+	AttackerCasualties []string `json:"attackerCasualties"`
+	DefenderCasualties []string `json:"defenderCasualties"`
+	TerritoryCaptured  bool     `json:"territoryCaptured"`
 }
 
 // UnitGroupDTO is a stack of identical units, as shown on a battle screen.
@@ -382,6 +382,9 @@ func ToPendingBattleDTO(g *models.Game, b *game.Battle) PendingBattleDTO {
 				continue
 			case attackingIDs[pieceID]:
 				attackers = append(attackers, piece)
+			case piece.Owner != nil && (piece.Owner.Name == b.AttackerID ||
+				(g.Players[b.AttackerID] != nil && piece.Owner.Side != "" && piece.Owner.Side == g.Players[b.AttackerID].Side)):
+				// Raiding aircraft and friendly bystanders sit this battle out.
 			case units.For(piece).IsStructure:
 				// captured with the territory, not fought over
 			default:
@@ -548,14 +551,14 @@ type LiveUnitDTO struct {
 
 // LiveBattleDTO is the state of a battle between rounds.
 type LiveBattleDTO struct {
-	Territory  string                   `json:"territory"`
-	Attacker   string                   `json:"attacker"`
-	Defender   string                   `json:"defender"`
-	Round      int                      `json:"round"`
-	Attackers  []UnitGroupDTO           `json:"attackers"`
-	Defenders  []UnitGroupDTO           `json:"defenders"`
-	Bombarding []UnitGroupDTO           `json:"bombarding,omitempty"`
-	Units      []LiveUnitDTO            `json:"units"`
+	Territory  string         `json:"territory"`
+	Attacker   string         `json:"attacker"`
+	Defender   string         `json:"defender"`
+	Round      int            `json:"round"`
+	Attackers  []UnitGroupDTO `json:"attackers"`
+	Defenders  []UnitGroupDTO `json:"defenders"`
+	Bombarding []UnitGroupDTO `json:"bombarding,omitempty"`
+	Units      []LiveUnitDTO  `json:"units"`
 	// PendingHits is how many hits the player must assign to their own
 	// units before the next round.
 	PendingHits int                      `json:"pendingHits"`
